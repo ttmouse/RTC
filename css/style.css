@@ -38,8 +38,8 @@
         padding:4px 22px 4px 8px; border:1px solid var(--rule); border-radius:var(--radius-sm);
         letter-spacing:.02em; cursor:pointer; appearance:none; -webkit-appearance:none;
         background:transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M0 0l4 6 4-6z' fill='%238f8572'/%3E%3C/svg%3E") no-repeat right 7px center; }
-  #engineBadge:hover{ border-color:var(--ink); color:var(--ink);
-        background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M0 0l4 6 4-6z' fill='%231a1611'/%3E%3C/svg%3E"); }
+  #engineBadge:hover{ border-color:#b7ab92; color:var(--paper);
+        background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M0 0l4 6 4-6z' fill='%23b7ab92'/%3E%3C/svg%3E"); }
   #engineBadge.bailian{ border-color:var(--seal); color:var(--seal-deep);
         background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M0 0l4 6 4-6z' fill='%238f2a14'/%3E%3C/svg%3E"); }
   #engineBadge.bailian:hover{ border-color:var(--seal-deep); color:var(--seal);

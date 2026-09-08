@@ -1,11 +1,11 @@
 import { $, setStatus, toast } from './ui.js';
-import { state, engineLabel } from './state.js';
+import { state, engineLabel, VAD_METER_FULL_SCALE } from './state.js';
 import { DEFAULT_RULES, flushCorrectionRules, loadCorrectionRules, saveCorrectionRules } from './correction.js';
 import { ensurePastePermission } from './clipboard.js';
 import { connectASR, setAsrStopHandler } from './asr.js';
 import { getAudioConstraints, startAudio, stopRec } from './audio.js';
 import { clearHistory, renderHistory, startHistPoll } from './history.js';
-import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration } from './settings.js';
+import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker } from './settings.js';
 import { migrateLegacyLocalConfig } from './config-migration.js';
 
 setAsrStopHandler(stopRec);
@@ -91,6 +91,7 @@ $('settingsSaveBtn').onclick = async () => {
   saveCorrectionRules($('correctionRules').value);
   await flushASRSettings();
   await flushCorrectionRules();
+  renderVADThresholdMarker();
   showSettings(false);
 };
 $('settingsCancelBtn').onclick = () => showSettings(false);
@@ -119,6 +120,7 @@ $('settingsResetBtn').onclick = async () => {
   saveASRSettings();
   await flushCorrectionRules();
   await flushASRSettings();
+  renderVADThresholdMarker();
 };
 
 document.addEventListener('mouseup', () => {
@@ -168,7 +170,37 @@ $('vadThreshold').oninput = function () {
   state.vadThreshold = parseFloat(this.value);
   $('vadThresholdLabel').textContent = state.vadThreshold.toFixed(3);
   saveASRSettings();
+  renderVADThresholdMarker();
 };
+
+// 主界面 VAD 阈值 tick 可拖拽调整灵敏度
+(function initVADTickDrag() {
+  const bg = $('levelMeterBg');
+  if (!bg) return;
+
+  function setThresholdFromClientX(clientX) {
+    const r = bg.getBoundingClientRect();
+    const ratio = (clientX - r.left) / r.width;
+    const clamped = Math.max(0.001, Math.min(0.05, ratio * VAD_METER_FULL_SCALE));
+    state.vadThreshold = Math.round(clamped * 1000) / 1000;
+    renderVADThresholdMarker();
+    if ($('vadThreshold')) {
+      $('vadThreshold').value = state.vadThreshold;
+      $('vadThresholdLabel').textContent = state.vadThreshold.toFixed(3);
+    }
+    saveASRSettings();
+  }
+
+  bg.style.cursor = 'ew-resize';
+  bg.addEventListener('pointerdown', e => {
+    bg.setPointerCapture(e.pointerId);
+    e.preventDefault();
+    setThresholdFromClientX(e.clientX);
+  });
+  bg.addEventListener('pointermove', e => {
+    if (e.buttons & 1) setThresholdFromClientX(e.clientX);
+  });
+})();
 
 $('apiKey').onchange = () => {
   state.apiKey = $('apiKey').value.trim();

@@ -5,7 +5,7 @@ import { fetchLocalConfig, saveLocalConfig } from './storage.js';
 let costWriteTimer = null;
 let settingsWriteTimer = null;
 
-function renderVADThresholdMarker() {
+export function renderVADThresholdMarker() {
   const tick = $('levelMeterTick');
   const text = $('levelMeterText');
   const threshold = state.vadThreshold || 0.006;
