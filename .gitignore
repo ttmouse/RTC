@@ -1,0 +1,28 @@
+# ── 依赖与构建产物 ─────────────────────────────
+node_modules/
+src-tauri/target/
+dist/
+
+# ── 日志 / 临时文件 ────────────────────────────
+*.log
+*.tmp
+.DS_Store
+__pycache__/
+*.pyc
+
+# ── 本地模型文件（外置，不入库）─────────────────
+# SenseVoice 模型（~228MB，用户自行下载到 models/ 下）
+asr_local/official_sensevoice/
+asr_local/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/
+asr_local/*.tar.bz2
+asr_local/qwen3_asr_tokenizer/
+
+# ── 本地 AI/工具配置（不入库）───────────────────
+.reasonix/
+.alma-snapshots/
+reasonix.toml
+settings.json
+CAPABILITY_DOC.md
+
+# ── 本地数据（运行时写入）───────────────────────
+events/

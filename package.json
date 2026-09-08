@@ -1,0 +1,17 @@
+{
+    "name": "rtc-transcriber",
+    "version": "1.0.15",
+    "description": "实时语音转文字工具：本地 SenseVoice 引擎（完全离线）/ 阿里云百炼 ASR / 浏览器 Web Speech，支持网页与 Tauri 桌面端。",
+    "main": "index.js",
+    "scripts": {
+        "build": "mkdir -p dist/css dist/js && cp index.html dist/index.html && cp -R css/. dist/css/ && cp -R js/. dist/js/",
+        "test": "node scripts/check-static.mjs"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "vercel": "^59.11.2",
+        "ws": "^8.21.3"
+    }
+}

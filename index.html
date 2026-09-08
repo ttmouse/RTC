@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>实时逐字稿</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header>
+  <h1>实时逐字稿<span class="zh">语音转文字</span></h1>
+  <div class="header-actions">
+    <div id="status"><span id="dot"></span><span id="statusText">就绪</span></div>
+    <span id="asrStatus"></span>
+    <select id="engineBadge" title="选择语音识别引擎">
+      <option value="bailian">百炼</option>
+      <option value="sensevoice">本地 · SenseVoice</option>
+      <option value="qwen3">千问 · Qwen3-ASR</option>
+    </select>
+    <button id="settingsBtn">设置</button>
+  </div>
+</header>
+<div id="err"></div>
+
+<div id="queryBar">
+  <button class="qbtn on" data-min="30">30分钟</button>
+  <button class="qbtn" data-min="60">1小时</button>
+  <button class="qbtn" data-min="180">3小时</button>
+  <button class="qbtn" data-min="720">12小时</button>
+  <button class="qbtn" data-min="0">今天</button>
+  <button class="qbtn" id="clearBtn">清空历史</button>
+</div>
+
+<main id="list">
+  <div class="empty">点击下方按钮开始录音</div>
+</main>
+
+<footer>
+  <div class="meterRow">
+    <div id="levelMeterBlock" title="麦克风音量 / VAD 阈值">
+      <div id="levelMeter">
+        <div id="levelMeterBg">
+          <div id="levelMeterBar"></div>
+          <div id="levelMeterTick" style="left:60%"></div>
+        </div>
+      </div>
+    </div>
+    <span id="levelMeterText">0.0000 / 0.0060</span>
+  </div>
+  <div class="actionRow">
+    <button id="btn">▶ 开始录音</button>
+    <div class="footerToggles">
+    <button id="ftPaste" class="footerToggle" title="自动粘贴（Cmd+Shift+V）">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+      <span>自动粘贴</span>
+    </button>
+    <button id="ftEnter" class="footerToggle" title="自动发送（Cmd+Shift+E）">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>
+      <span>自动发送</span>
+    </button>
+    </div>
+    <span id="versionBadge">v1.0.15</span>
+  </div>
+</footer>
+
+<!-- 设置页面（全页） -->
+<div id="settingsPage" class="hidden">
+  <div class="settingsPageHeader">
+    <span>设 置</span>
+    <button id="settingsClose">&times;</button>
+  </div>
+  <div class="settingsPageBody">
+
+    <div class="s-group">
+      <div class="sg-title">API 配置</div>
+      <div class="s-field">
+        <div class="fl">百炼 API Key</div>
+        <div class="fd">用于百炼语音引擎</div>
+        <input type="password" id="apiKey" placeholder="阿里云百炼 API Key">
+      </div>
+    </div>
+
+    <div class="s-group">
+      <div class="sg-title">本地模型</div>
+      <div class="s-field">
+        <div class="fl">Qwen3 模型目录</div>
+        <div class="fd">Qwen3-ASR 模型存放位置。桌面版未内置此模型，留空使用默认路径（模型缺失时切到 Qwen3 会提示）</div>
+        <input type="text" id="qwen3ModelDir" placeholder="默认：~/Library/Application Support/rtc-transcriber/models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25">
+      </div>
+    </div>
+
+    <div class="s-group">
+      <div class="sg-title">降噪与回声</div>
+      <div class="s-field">
+        <div class="toggle-row">
+          <div class="ti">
+            <div class="tt">降噪 / 回声消除</div>
+            <div class="ts">启用浏览器内置降噪和回声消除处理</div>
+          </div>
+          <div class="toggle on" id="filterToggle"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-group">
+      <div class="sg-title">纠错规则</div>
+      <div class="s-field">
+        <div class="toggle-row" style="padding:0">
+          <div class="ti">
+            <div class="tt">关键词替换</div>
+            <div class="ts">ASR 识别结果中的关键词自动替换为指定词，点击「管理」进入</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="corrCount" style="font-size:11px;color:var(--ink-faint);font-family:var(--mono);">0 条规则</span>
+            <button class="sbtn" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;font-family:var(--serif);color:var(--ink-soft);" onclick="correctionOpenEditor()">管理</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-group">
+      <div class="sg-title">语音检测（本地引擎）</div>
+      <div class="s-field">
+        <div class="fl">VAD 灵敏度</div>
+        <div class="fd">值越大越不敏感（噪音不触发），越小越灵敏（轻声也识别）</div>
+        <div class="range-row">
+          <input type="range" id="vadThreshold" min="0.001" max="0.050" step="0.001" value="0.006">
+          <span class="rv" id="vadThresholdLabel">0.006</span>
+        </div>
+      </div>
+      <div class="s-field">
+        <div class="fl">静音超时</div>
+        <div class="fd">一句话被中途截断调高此值，说完后等太久才出字调低此值</div>
+        <div class="range-row">
+          <input type="range" id="silenceTimeout" min="500" max="5000" step="100" value="2000">
+          <span class="rv" id="silenceTimeoutLabel">2000ms</span>
+        </div>
+      </div>
+      <div class="s-field">
+        <div class="fl">麦克风增益</div>
+        <div class="fd">信号偏弱导致识别不准调高此值（2x~3x 起步）</div>
+        <div class="range-row">
+          <input type="range" id="gainMultiplier" min="1" max="5" step="0.5" value="1">
+          <span class="rv" id="gainMultiplierLabel">1x</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-group">
+      <div class="sg-title">输出（本地引擎）</div>
+      <div class="s-field">
+        <div class="toggle-row">
+          <div class="ti">
+            <div class="tt">自动粘贴</div>
+            <div class="ts">final 结果自动复制并粘贴到光标位置（需辅助功能权限）</div>
+          </div>
+          <div class="toggle" id="autoPasteBtn"></div>
+        </div>
+      </div>
+      <div class="s-field">
+        <div class="toggle-row">
+          <div class="ti">
+            <div class="tt">自动回车发送</div>
+            <div class="ts">粘贴后自动按回车发送（适用于聊天软件）</div>
+          </div>
+          <div class="toggle" id="autoEnterBtn"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-page-foot">
+      <button class="sbtn primary" id="settingsSaveBtn">保 存</button>
+      <button class="sbtn" id="settingsCancelBtn">取 消</button>
+      <button class="sbtn danger" id="settingsResetBtn">恢复默认</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- 纠错规则管理模态框 -->
+<div id="correctionModal" class="modal-overlay">
+  <div class="modal-box" style="background:var(--paper);border-radius:8px;width:520px;max-width:92vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.2);">
+    <div class="modal-head" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px 10px;border-bottom:2px solid var(--ink);">
+      <h3 style="font-size:15px;font-weight:700;letter-spacing:.12em;">纠错规则管理</h3>
+      <button class="modal-close" onclick="correctionCloseEditor()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--ink-faint);padding:2px 6px;border-radius:3px;line-height:1;">&times;</button>
+    </div>
+    <div class="modal-body" style="flex:1;overflow-y:auto;padding:14px 20px;">
+      <p style="font-size:12px;color:var(--ink-faint);margin-bottom:10px;line-height:1.5;">
+        ASR 识别结果中的关键词自动替换为指定词。每行一条规则，使用 <code style="font-family:var(--mono);">=></code> 分隔关键词和替换词。
+      </p>
+      <textarea id="correctionRules" rows="12" style="width:100%;padding:8px 10px;border:1px solid var(--rule);border-radius:3px;background:var(--paper);font-size:12px;font-family:var(--mono);color:var(--ink);resize:vertical;outline:none;line-height:1.6;" placeholder="关键词 => 替换词"></textarea>
+    </div>
+    <div class="modal-foot" style="display:flex;gap:8px;padding:10px 20px 14px;border-top:1px solid var(--rule);">
+      <button class="sbtn" onclick="correctionCloseEditor()">取消</button>
+      <button class="sbtn primary" id="corrSave">保存</button>
+      <button class="sbtn danger" id="corrReset" style="margin-left:auto;">恢复默认</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
