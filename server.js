@@ -24,7 +24,7 @@ const DATA_ROOT = process.env.RTC_DATA_DIR || path.join(
   os.homedir(),
   'Library',
   'Application Support',
-  'com.rtc.transcriber'
+  'rtc-transcriber'
 );
 const EVENTS_DIR = path.join(DATA_ROOT, 'events');
 const CONFIG_PATH = path.join(DATA_ROOT, 'config.json');

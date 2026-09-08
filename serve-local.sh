@@ -1,5 +1,5 @@
 #!/bin/bash
-# 启动 rtc-transcriber 完整链路（本地 SenseVoice 引擎）
+# 启动 RTC 完整链路（本地 SenseVoice 引擎）
 # 先起 asr_local（ws://127.0.0.1:8932），再起 node server.js（HTTP + WS 代理 :8931）
 
 cd "$(dirname "$0")"

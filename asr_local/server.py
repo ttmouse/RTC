@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-本地 SenseVoice ASR 服务 — rtc-transcriber 第三种引擎
+本地 SenseVoice ASR 服务 — RTC 第三种引擎
 能量 VAD + 一次 final 推理（无 interim 中间态）
 """
 

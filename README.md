@@ -1,4 +1,4 @@
-# rtc-transcriber
+# RTC
 
 实时语音转文字工具，支持**本地 SenseVoice 引擎**（完全离线）和**阿里云百炼 ASR**。可作为网页运行，也可打包为 macOS 桌面应用（Tauri）。
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# 启动 rtc-transcriber Qwen3-ASR 对比链路（不影响现有 SenseVoice 使用）
+# 启动 RTC Qwen3-ASR 对比链路（不影响现有 SenseVoice 使用）
 # 独立端口：
 #   asr_local (Qwen3-ASR): ws://127.0.0.1:8933
 #   node server.js       : http://localhost:8934 (engine=local → 8933)
