@@ -1,7 +1,7 @@
 {
     "$schema": "https://schema.tauri.app/config/2",
     "productName": "实时逐字稿",
-    "version": "1.0.15",
+    "version": "1.0.17",
     "identifier": "io.rtc.transcriber",
     "build": {
         "frontendDist": "../dist",
@@ -26,9 +26,18 @@
             "csp": null
         }
     },
+    "plugins": {
+        "updater": {
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ4NzIzQkU1QjM1QzFCOTcKUldTWEcxeXo1VHR5Mkh6Z0hRbVBTcWFBdVp5N0hDaFdEbjVLUCt1RXBDRWVMNFBoSTFVcjZQc1UK",
+            "endpoints": [
+                "https://github.com/ttmouse/RTC/releases/latest/download/latest-macos-aarch64.json"
+            ]
+        }
+    },
     "bundle": {
         "active": true,
         "targets": "app",
+        "createUpdaterArtifacts": true,
         "icon": [
             "icons/32x32.png",
             "icons/128x128.png",
@@ -44,7 +53,7 @@
         "resources": {
             "../server.js": "server.js",
             "../node_modules": "node_modules",
-            "../asr_local": "asr_local"
+            "../asr_local/server.py": "asr_local/server.py"
         }
     }
 }

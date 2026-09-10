@@ -1,5 +1,5 @@
 import { $, setStatus, toast } from './ui.js';
-import { state, engineLabel, VAD_METER_FULL_SCALE } from './state.js';
+import { state, VAD_METER_FULL_SCALE } from './state.js';
 import { DEFAULT_RULES, flushCorrectionRules, loadCorrectionRules, saveCorrectionRules } from './correction.js';
 import { ensurePastePermission } from './clipboard.js';
 import { connectASR, setAsrStopHandler } from './asr.js';
@@ -7,6 +7,7 @@ import { getAudioConstraints, startAudio, stopRec } from './audio.js';
 import { clearHistory, renderHistory, startHistPoll } from './history.js';
 import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker } from './settings.js';
 import { migrateLegacyLocalConfig } from './config-migration.js';
+import { checkForUpdates, setupUpdateUI, updateVersionBadge } from './updater.js';
 
 setAsrStopHandler(stopRec);
 
@@ -85,7 +86,6 @@ $('settingsSaveBtn').onclick = async () => {
   if (state.asrEngine === 'bailian' && !state.apiKey) {
     state.asrEngine = 'sensevoice';
     updateEngineBadge();
-    $('asrStatus').textContent = engineLabel(state.asrEngine) + ' 引擎';
   }
   saveASRSettings();
   saveCorrectionRules($('correctionRules').value);
@@ -156,7 +156,6 @@ function changeEngine(sel) {
   state.asrEngine = next;
   saveASRSettings();
   updateEngineBadge();
-  $('asrStatus').textContent = engineLabel(state.asrEngine) + ' 引擎';
   if (state.recording) {
     stopRec();
     state.stream = null;
@@ -207,7 +206,6 @@ $('apiKey').onchange = () => {
   if (state.asrEngine === 'bailian' && !state.apiKey) {
     state.asrEngine = 'sensevoice';
     updateEngineBadge();
-    $('asrStatus').textContent = engineLabel(state.asrEngine) + ' 引擎';
   }
   saveASRSettings();
 };
@@ -315,9 +313,13 @@ document.addEventListener('keydown', (e) => {
   ]);
   if (state.autoPaste) ensurePastePermission();
   updateEngineBadge();
+  setupUpdateUI();
+  updateVersionBadge();
   await renderHistory(true);
   startHistPoll();
   $('btn').click();
+  // 启动 6 秒后静默检查更新；发现新版本时显示顶部横幅提醒
+  setTimeout(() => checkForUpdates(false), 6000);
 })().catch(e => {
   console.error('[app] startup failed:', e.message || e);
 });

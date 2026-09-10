@@ -1,9 +1,9 @@
-import { state, isLocalEngine, normalizeEngine, engineLabel, engineStatusText } from './state.js';
+import { state, isLocalEngine, normalizeEngine, engineStatusText } from './state.js';
 import { $, esc, toast, addLine } from './ui.js';
 import { applyCorrection } from './correction.js';
-import { pasteToCursor, copyToSystemClipboard } from './clipboard.js';
+import { pasteToCursor } from './clipboard.js';
 import { saveEntry } from './history.js';
-import { saveTotalDuration, updateEngineBadge, formatCost } from './settings.js';
+import { saveTotalDuration, updateEngineBadge } from './settings.js';
 
 const VAD_RMS = 0.012;
 const VAD_SILENCE_BLOCKS = 10;
@@ -37,12 +37,9 @@ export function connectASR() {
     connectMsg.url = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/?api_key=' + encodeURIComponent(state.apiKey);
   }
 
-  $('asrStatus').textContent = isLocal ? '正在连接本地 ' + engineStatusText(eng) + '...' : '正在连接百炼 ASR...';
-
   const connectTimeout = setTimeout(() => {
     if (!state.asrReady && state.recording) {
       connectionTimedOut = true;
-      $('asrStatus').textContent = isLocal ? engineStatusText(eng) + ' 连接超时' : '百炼 ASR 连接超时';
       const msg = isLocal
         ? engineStatusText(eng) + ' 服务未运行：请先执行 ./serve-local.sh 启动本地 ASR 服务，或切换至百炼引擎'
         : '百炼 ASR 连接超时，请检查 API Key 和网络连接';
@@ -58,7 +55,6 @@ export function connectASR() {
   } catch (e) {
     clearTimeout(connectTimeout);
     toast('连接失败: ' + e.message);
-    $('asrStatus').textContent = '连接失败';
     return;
   }
 
@@ -107,7 +103,6 @@ export function connectASR() {
         clearTimeout(connectTimeout);
         state.asrReady = true;
         state.pcmBufferStartTime = 0;
-        $('asrStatus').textContent = isLocal ? engineStatusText(eng) + ' 已就绪' : '百炼 ASR 已就绪';
       } else if (event === 'task-failed') {
         const msg = (data.payload && data.payload.message) ||
           (data.header && data.header.message) ||
@@ -115,7 +110,6 @@ export function connectASR() {
           (data.header && data.header.error_code) ||
           '未知错误';
         toast((isLocal ? engineStatusText(eng) + ' 识别失败: ' : '百炼任务失败: ') + msg);
-        $('asrStatus').textContent = isLocal ? engineStatusText(eng) + ' 失败' : '百炼失败';
         state.asrReady = false;
         if (state.recording && !isLocal) {
           setTimeout(() => {
@@ -140,7 +134,6 @@ export function connectASR() {
     clearTimeout(connectTimeout);
     if (connectionTimedOut) return;
     toast('连接异常：无法连接到本地代理服务 (ws://127.0.0.1:8931)，请确认服务已启动');
-    $('asrStatus').textContent = '连接异常';
     state.asrReady = false;
   };
   state.asrWs.onclose = () => {
@@ -235,12 +228,6 @@ export function sendPCM(pcm) {
     saveTotalDuration();
   }
   updateEngineBadge();
-  if (isLocalEngine(normalizeEngine(state.asrEngine))) {
-    $('asrStatus').textContent = engineStatusText(state.asrEngine) + ' 已就绪 · 本会话 ' + state.audioDuration.toFixed(1) + 's';
-  } else if (state.asrEngine === 'bailian') {
-    $('asrStatus').textContent = '百炼 ASR 已就绪 · 本会话 ' + state.audioDuration.toFixed(1) + 's' +
-      ' · 累计 ' + formatCost(state.totalDuration);
-  }
 }
 
 export function disconnectBailian() {
@@ -340,8 +327,6 @@ function handleASRResult(sentence, browserReceivedAt) {
       saveEntry(corrected);
       if (state.autoPaste) {
         pasteToCursor(corrected, state.autoEnter);
-      } else {
-        copyToSystemClipboard(corrected);
       }
     } else {
       if (lastIsInterim) {
@@ -411,8 +396,6 @@ function handleASRResult(sentence, browserReceivedAt) {
     state.finalizedText = corrected;
     if (state.autoPaste) {
       pasteToCursor(corrected.replace(/[。！？；，、\s]+$/, ''), state.autoEnter);
-    } else {
-      copyToSystemClipboard(corrected);
     }
   }
   state.asrLastText = corrected;

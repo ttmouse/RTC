@@ -20,18 +20,20 @@ import sherpa_onnx as _sherpa_onnx
 # ---------- 配置 ----------
 PORT = int(os.environ.get("ASR_PORT", "8932"))
 ENGINE = os.environ.get("ASR_ENGINE", "sensevoice")   # sensevoice | qwen3
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "official_sensevoice")
-MODEL_PATH = os.path.join(MODEL_DIR, "model.int8.onnx")
-TOKENS_PATH = os.path.join(MODEL_DIR, "tokens.txt")
 QWEN3_DIR = os.environ.get("ASR_QWEN3_DIR") or os.path.join(os.path.dirname(__file__), "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25")
 NUM_THREADS = int(os.environ.get("ASR_NUM_THREADS", "4"))
+# 首次使用时的模型下载地址（GitHub Releases 资产；发布时随版本上传）
+MODEL_DOWNLOAD_URL = os.environ.get(
+    "ASR_MODEL_DOWNLOAD_URL",
+    "https://github.com/ttmouse/RTC/releases/latest/download/official_sensevoice.zip",
+)
 
 
 def default_qwen3_dir() -> str:
     """Qwen3 模型目录探测顺序：环境变量 > server.py 同目录（dev 模式）> 约定目录（.app 外置模型）。
 
     .app 内置版不带 Qwen3 模型，约定目录为
-    ~/Library/Application Support/rtc-transcriber/models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
+    ~/Library/Application Support/com.rtc.transcriber/models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
     """
     if os.environ.get("ASR_QWEN3_DIR"):
         return os.environ["ASR_QWEN3_DIR"]
@@ -40,11 +42,75 @@ def default_qwen3_dir() -> str:
         return same_dir
     convention = os.path.join(
         os.path.expanduser("~"), "Library", "Application Support",
-        "rtc-transcriber", "models", "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+        "com.rtc.transcriber", "models", "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
     )
     if os.path.isdir(convention):
         return convention
     return same_dir
+
+
+def default_sensevoice_dir() -> str:
+    """SenseVoice 模型目录探测顺序：环境变量 > server.py 同目录（dev/旧版内置）> 数据目录约定位置。
+
+    新版 .app 不再内置 228MB 模型（热更新包不能太大），约定目录为
+    ~/Library/Application Support/com.rtc.transcriber/models/official_sensevoice
+    """
+    if os.environ.get("ASR_SENSEVOICE_DIR"):
+        return os.environ["ASR_SENSEVOICE_DIR"]
+    same_dir = os.path.join(os.path.dirname(__file__), "official_sensevoice")
+    if os.path.isfile(os.path.join(same_dir, "model.int8.onnx")):
+        return same_dir
+    return os.path.join(
+        os.path.expanduser("~"), "Library", "Application Support",
+        "com.rtc.transcriber", "models", "official_sensevoice",
+    )
+
+
+def ensure_sensevoice_model() -> str:
+    """确保 SenseVoice 模型可用并返回模型目录；缺失时自动从 GitHub Releases 下载到约定目录。
+
+    返回 (model_dir, downloaded)。下载约 228MB，仅首次使用触发。
+    """
+    model_dir = default_sensevoice_dir()
+    model_path = os.path.join(model_dir, "model.int8.onnx")
+    tokens_path = os.path.join(model_dir, "tokens.txt")
+    if os.path.isfile(model_path) and os.path.isfile(tokens_path):
+        return model_dir, False
+
+    import urllib.request
+    import zipfile
+
+    os.makedirs(model_dir, exist_ok=True)
+    tmp_zip = os.path.join(model_dir, "official_sensevoice.zip.tmp")
+    print(f"[asr_local] 首次使用：未找到 SenseVoice 模型，从 {MODEL_DOWNLOAD_URL} 下载（约 228MB）...")
+    try:
+        req = urllib.request.Request(MODEL_DOWNLOAD_URL, headers={"User-Agent": "rtc-transcriber"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            got = 0
+            with open(tmp_zip, "wb") as f:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+                    if total:
+                        print(f"[asr_local] 模型下载中 {got // (1 << 20)}/{total // (1 << 20)} MB", end="\r")
+        print(f"\n[asr_local] 模型下载完成（{got // (1 << 20)} MB），解压中...")
+        with zipfile.ZipFile(tmp_zip) as zf:
+            zf.extractall(model_dir)
+        os.remove(tmp_zip)
+        print(f"[asr_local] 模型就绪: {model_dir}")
+        return model_dir, True
+    except Exception as e:
+        print(f"[asr_local] 模型下载失败: {e}（请联网后重启应用，或手动将模型放到 {model_dir}）")
+        raise
+
+
+MODEL_DIR, _MODEL_DOWNLOADED = ensure_sensevoice_model()
+MODEL_PATH = os.path.join(MODEL_DIR, "model.int8.onnx")
+TOKENS_PATH = os.path.join(MODEL_DIR, "tokens.txt")
 
 # VAD 参数
 FRAME_MS = 32                      # 帧长（32ms ≈ 512 样本 @16k）

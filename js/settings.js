@@ -122,7 +122,6 @@ export async function loadASRSettings() {
   syncToggleUI();
   updateEngineBadge();
   renderVADThresholdMarker();
-  $('asrStatus').textContent = '已切换至 ' + engineLabel(state.asrEngine) + ' 引擎';
 }
 
 async function saveASRSettingsNow() {

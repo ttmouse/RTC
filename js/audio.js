@@ -113,5 +113,4 @@ export function stopRec() {
   btn.textContent = '▶ 开始录音';
   btn.className = '';
   setStatus('就绪', false);
-  $('asrStatus').textContent = ({ bailian: '百炼引擎（已停止）', local: '本地引擎（已停止）' })[state.asrEngine] || '';
 }
