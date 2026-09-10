@@ -1,6 +1,6 @@
 [package]
 name = "rtc-transcriber"
-version = "1.0.17"
+version = "1.0.18"
 description = "实时语音转文字"
 authors = ["rtc-transcriber contributors"]
 edition = "2021"
