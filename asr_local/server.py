@@ -24,10 +24,12 @@ PORT = int(os.environ.get("ASR_PORT", "8932"))
 ENGINE = os.environ.get("ASR_ENGINE", "sensevoice")   # sensevoice | qwen3
 QWEN3_DIR = os.environ.get("ASR_QWEN3_DIR") or os.path.join(os.path.dirname(__file__), "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25")
 NUM_THREADS = int(os.environ.get("ASR_NUM_THREADS", "4"))
-# 首次使用时的模型下载地址（GitHub Releases 资产；发布时随版本上传）
+# 首次使用时的模型下载地址（GitHub Releases 资产）。
+# 注意：固定指向 v1.0.18 的资产 URL，不随「最新版」变动——
+# 模型 zip（约 160MB / 987MB）体积大，不随每次版本重传，v1.0.18 的资产长期保留。
 MODEL_DOWNLOAD_URL = os.environ.get(
     "ASR_MODEL_DOWNLOAD_URL",
-    "https://github.com/ttmouse/RTC/releases/latest/download/official_sensevoice.zip",
+    "https://github.com/ttmouse/RTC/releases/download/v1.0.18/official_sensevoice.zip",
 )
 MODEL_HTTP_PORT = int(os.environ.get("ASR_MODEL_HTTP_PORT", "8933"))
 
@@ -136,7 +138,7 @@ TIMING_LOGS = os.environ.get("ASR_TIMING_LOGS") == "1"
 
 QWEN3_DOWNLOAD_URL = os.environ.get(
     "ASR_QWEN3_DOWNLOAD_URL",
-    "https://github.com/ttmouse/RTC/releases/latest/download/qwen3-asr.zip",
+    "https://github.com/ttmouse/RTC/releases/download/v1.0.18/qwen3-asr.zip",
 )
 
 # 每个模型的下载状态（前端 /model/progress 轮询）
