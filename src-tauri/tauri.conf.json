@@ -44,7 +44,7 @@
         "resources": {
             "../server.js": "server.js",
             "../node_modules": "node_modules",
-            "../asr_local/server.py": "asr_local/server.py"
+            "../asr_local": "asr_local"
         }
     }
 }
