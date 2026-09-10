@@ -91,15 +91,17 @@ export function updateEngineBadge() {
   const eng = normalizeEngine(state.asrEngine);
   if (state.asrEngine !== eng) state.asrEngine = eng;  // 一次性迁移旧值
   const isBailian = eng === 'bailian' && state.apiKey;
-  const sel = $('engineBadge');
-  if (!sel) return;
-  sel.value = eng;
-  const optBailian = sel.querySelector('option[value="bailian"]');
-  if (optBailian) {
-    optBailian.textContent = isBailian ? '百炼 · ' + formatCost(state.totalDuration) : '百炼';
-  }
-  sel.className = isBailian ? 'bailian' : '';
-  sel.title = '当前引擎：' + engineLabel(eng);
+  const btn = $('engineBadge');
+  if (!btn) return;
+  const textEl = $('engineBadgeText');
+  if (textEl) textEl.textContent = engineLabel(eng) + (isBailian ? ' · ' + formatCost(state.totalDuration) : '');
+  const optBailian = document.querySelector('.engineOption[data-engine="bailian"] .optLabel');
+  if (optBailian) optBailian.textContent = '百炼' + (isBailian ? ' · ' + formatCost(state.totalDuration) : '');
+  document.querySelectorAll('.engineOption').forEach(o => {
+    o.classList.toggle('on', o.dataset.engine === eng);
+  });
+  btn.classList.toggle('bailian', isBailian);
+  btn.title = '当前引擎：' + engineLabel(eng);
 }
 
 export async function loadASRSettings() {
@@ -170,4 +172,77 @@ export function syncToggleUI() {
   if (se) se.classList.toggle('on', state.autoEnter);
   const ff = $('filterToggle');
   if (ff) ff.classList.toggle('on', state.filterOn);
+}
+
+// ---------- 百炼连接测试 ----------
+
+function prettifyBailianError(raw) {
+  const m = String(raw || '');
+  const code = (m.match(/\b4\d{2}\b/) || [])[0];
+  if (code === '401' || code === '403') return 'API Key 无效（HTTP ' + code + '），请检查 Key 是否正确';
+  return m;
+}
+
+/**
+ * 测试百炼连通性：走与真实录音相同的路径（本地代理 ws://127.0.0.1:8931 → 百炼 WSS），
+ * 只建立连接并等待握手回包即关闭，不发送音频、不启动识别任务，因此不产生费用。
+ */
+export function testBailianConnection() {
+  const btn = $('apiKeyTestBtn');
+  const status = $('apiKeyTestStatus');
+  const key = (($('apiKey') && $('apiKey').value) || '').trim();
+  if (!key) {
+    if (status) { status.textContent = '请先输入 API Key'; status.className = 'key-test-status err'; }
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+  if (status) { status.textContent = '正在连接百炼…'; status.className = 'key-test-status'; }
+
+  const done = (ok, msg) => {
+    if (btn) { btn.disabled = false; btn.textContent = '测试连接'; }
+    if (status) { status.textContent = msg; status.className = 'key-test-status ' + (ok ? 'ok' : 'err'); }
+  };
+
+  let finished = false;
+  const finish = (ok, msg) => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    try { ws.close(); } catch (e) {}
+    done(ok, msg);
+  };
+
+  const timer = setTimeout(() => finish(false, '连接超时：请检查网络后重试'), 10000);
+
+  let ws;
+  try {
+    ws = new WebSocket('ws://127.0.0.1:8931');
+  } catch (e) {
+    clearTimeout(timer);
+    done(false, '无法创建连接：' + (e.message || e));
+    return;
+  }
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({
+      type: 'connect',
+      engine: 'bailian',
+      url: 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/?api_key=' + encodeURIComponent(key),
+    }));
+  };
+  ws.onmessage = ev => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (msg.type === 'connected') {
+      finish(true, '连接成功：百炼服务可正常访问');
+    } else if (msg.type === 'error') {
+      finish(false, prettifyBailianError(msg.message || '连接失败'));
+    }
+  };
+  ws.onerror = () => {
+    finish(false, '无法连接本地代理服务（ws://127.0.0.1:8931），请确认服务已启动');
+  };
+  ws.onclose = () => {
+    finish(false, '连接被关闭：请检查 API Key 或稍后重试');
+  };
 }

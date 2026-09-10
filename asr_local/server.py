@@ -11,6 +11,8 @@ import re
 import uuid
 
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import deque
 
 import numpy as np
@@ -27,6 +29,10 @@ MODEL_DOWNLOAD_URL = os.environ.get(
     "ASR_MODEL_DOWNLOAD_URL",
     "https://github.com/ttmouse/RTC/releases/latest/download/official_sensevoice.zip",
 )
+MODEL_HTTP_PORT = int(os.environ.get("ASR_MODEL_HTTP_PORT", "8933"))
+
+# 模型下载状态在下方 MODEL_DL_STATES 中定义
+_ASYNC_LOOP = None  # main() 中设置，供下载线程回调重载模型
 
 
 def default_qwen3_dir() -> str:
@@ -38,15 +44,12 @@ def default_qwen3_dir() -> str:
     if os.environ.get("ASR_QWEN3_DIR"):
         return os.environ["ASR_QWEN3_DIR"]
     same_dir = os.path.join(os.path.dirname(__file__), "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25")
-    if os.path.isdir(same_dir):
+    if os.path.isdir(same_dir) and os.path.isfile(os.path.join(same_dir, "encoder.int8.onnx")):
         return same_dir
-    convention = os.path.join(
+    return os.path.join(
         os.path.expanduser("~"), "Library", "Application Support",
         "com.rtc.transcriber", "models", "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
     )
-    if os.path.isdir(convention):
-        return convention
-    return same_dir
 
 
 def default_sensevoice_dir() -> str:
@@ -108,7 +111,12 @@ def ensure_sensevoice_model() -> str:
         raise
 
 
-MODEL_DIR, _MODEL_DOWNLOADED = ensure_sensevoice_model()
+try:
+    MODEL_DIR, _MODEL_DOWNLOADED = ensure_sensevoice_model()
+except Exception as _e:
+    print(f"[asr_local] 模型初始化失败: {_e}（可在应用设置面板中下载模型）")
+    MODEL_DIR = default_sensevoice_dir()
+    _MODEL_DOWNLOADED = False
 MODEL_PATH = os.path.join(MODEL_DIR, "model.int8.onnx")
 TOKENS_PATH = os.path.join(MODEL_DIR, "tokens.txt")
 
@@ -123,6 +131,217 @@ PRE_ROLL_MS = 260
 PAD_MS = 200
 VAD_FRAME = int(16000 * FRAME_MS / 1000)  # 512 样本
 TIMING_LOGS = os.environ.get("ASR_TIMING_LOGS") == "1"
+
+# ---------- 模型管理（HTTP，供设置面板调用） ----------
+
+QWEN3_DOWNLOAD_URL = os.environ.get(
+    "ASR_QWEN3_DOWNLOAD_URL",
+    "https://github.com/ttmouse/RTC/releases/latest/download/qwen3-asr.zip",
+)
+
+# 每个模型的下载状态（前端 /model/progress 轮询）
+MODEL_DL_STATES = {
+    "sensevoice": {"status": "idle", "progress": 0, "downloaded": 0, "total": 0, "message": ""},
+    "qwen3": {"status": "idle", "progress": 0, "downloaded": 0, "total": 0, "message": ""},
+}
+
+QWEN3_REQUIRED = ("conv_frontend.onnx", "encoder.int8.onnx", "decoder.int8.onnx")
+
+
+def _dir_size(path: str) -> int:
+    total = 0
+    for root, _, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def _sensevoice_status() -> dict:
+    model_dir = default_sensevoice_dir()
+    model_path = os.path.join(model_dir, "model.int8.onnx")
+    tokens_path = os.path.join(model_dir, "tokens.txt")
+    has_model = os.path.isfile(model_path)
+    has_tokens = os.path.isfile(tokens_path)
+    size = 0
+    if has_model:
+        size += os.path.getsize(model_path)
+    if has_tokens:
+        size += os.path.getsize(tokens_path)
+    return {
+        "type": "sensevoice",
+        "name": "SenseVoice",
+        "exists": has_model and has_tokens,
+        "model_dir": model_dir,
+        "size_bytes": size,
+        "missing": [n for n, ok in [("model.int8.onnx", has_model), ("tokens.txt", has_tokens)] if not ok],
+        "download_url": MODEL_DOWNLOAD_URL,
+    }
+
+
+def _qwen3_status(custom_dir: str = "") -> dict:
+    model_dir = custom_dir.strip() if custom_dir else default_qwen3_dir()
+    missing = []
+    for f in QWEN3_REQUIRED:
+        if not os.path.isfile(os.path.join(model_dir, f)):
+            missing.append(f)
+    if not os.path.isdir(os.path.join(model_dir, "tokenizer")):
+        missing.append("tokenizer/")
+    size = _dir_size(model_dir) if os.path.isdir(model_dir) else 0
+    return {
+        "type": "qwen3",
+        "name": "Qwen3-ASR",
+        "exists": len(missing) == 0,
+        "model_dir": model_dir,
+        "size_bytes": size,
+        "missing": missing,
+        "download_url": QWEN3_DOWNLOAD_URL,
+    }
+
+
+def get_model_status(qwen3_dir: str = "") -> dict:
+    return {
+        "sensevoice": _sensevoice_status(),
+        "qwen3": _qwen3_status(qwen3_dir),
+    }
+
+
+def _download_model_to_dir(url: str, model_dir: str, dl_state: dict) -> bool:
+    import urllib.request
+    import zipfile
+
+    os.makedirs(model_dir, exist_ok=True)
+    tmp_zip = os.path.join(model_dir, "_model_download.zip.tmp")
+    dl_state.update(status="downloading", progress=0, downloaded=0, total=0, message="连接中...")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "rtc-transcriber"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            dl_state["total"] = total
+            got = 0
+            with open(tmp_zip, "wb") as f:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    got += len(chunk)
+                    dl_state["downloaded"] = got
+                    if total:
+                        dl_state["progress"] = round(got / total * 100, 1)
+                        dl_state["message"] = f"下载中 {got // (1 << 20)}/{total // (1 << 20)} MB"
+        dl_state["message"] = "解压中..."
+        with zipfile.ZipFile(tmp_zip) as zf:
+            zf.extractall(model_dir)
+        os.remove(tmp_zip)
+        dl_state.update(status="done", progress=100, message="下载完成")
+        print(f"[asr_local] 模型下载完成: {model_dir}")
+        return True
+    except Exception as e:
+        dl_state.update(status="error", message=str(e))
+        print(f"[asr_local] 模型下载失败: {e}")
+        try:
+            os.remove(tmp_zip)
+        except OSError:
+            pass
+        return False
+
+
+def _download_model_thread(model_type: str, qwen3_dir: str = ""):
+    if model_type == "qwen3":
+        url = QWEN3_DOWNLOAD_URL
+        model_dir = qwen3_dir.strip() if qwen3_dir else default_qwen3_dir()
+    else:
+        url = MODEL_DOWNLOAD_URL
+        model_dir = default_sensevoice_dir()
+    dl_state = MODEL_DL_STATES.get(model_type, MODEL_DL_STATES["sensevoice"])
+    ok = _download_model_to_dir(url, model_dir, dl_state)
+    if ok and _ASYNC_LOOP is not None:
+        engine = "qwen3" if model_type == "qwen3" else "sensevoice"
+        asyncio.run_coroutine_threadsafe(engine_mgr.load(engine), _ASYNC_LOOP)
+
+
+def _parse_query(path: str) -> dict:
+    from urllib.parse import urlparse, parse_qs
+    parsed = urlparse(path)
+    return {k: v[0] for k, v in parse_qs(parsed.query).items()}
+
+
+class ModelHTTPHandler(BaseHTTPRequestHandler):
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def _json(self, obj, code=200):
+        body = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(code)
+        self._cors()
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length == 0:
+            return {}
+        try:
+            return json.loads(self.rfile.read(length))
+        except (json.JSONDecodeError, ValueError):
+            return {}
+
+    def do_GET(self):
+        q = _parse_query(self.path)
+        if self.path.startswith("/model/status"):
+            self._json(get_model_status(q.get("qwen3_dir", "")))
+        elif self.path.startswith("/model/progress"):
+            mtype = q.get("type", "sensevoice")
+            self._json(MODEL_DL_STATES.get(mtype, MODEL_DL_STATES["sensevoice"]))
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        body = self._read_body()
+        if self.path.startswith("/model/download"):
+            mtype = body.get("type", "sensevoice")
+            dl_state = MODEL_DL_STATES.get(mtype)
+            if dl_state and dl_state["status"] == "downloading":
+                self._json({"started": False, "reason": "already_downloading"})
+            else:
+                threading.Thread(
+                    target=_download_model_thread,
+                    args=(mtype, body.get("qwen3_dir", "")),
+                    daemon=True,
+                ).start()
+                self._json({"started": True})
+        elif self.path.startswith("/model/reload"):
+            if _ASYNC_LOOP is not None:
+                mtype = body.get("type", "sensevoice")
+                engine = "qwen3" if mtype == "qwen3" else "sensevoice"
+                asyncio.run_coroutine_threadsafe(engine_mgr.load(engine), _ASYNC_LOOP)
+                self._json({"reloading": True})
+            else:
+                self._json({"reloading": False, "error": "loop not ready"})
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def log_message(self, *args):
+        pass  # 静默 HTTP 日志
+
+
+def start_model_http_server():
+    srv = ThreadingHTTPServer(("127.0.0.1", MODEL_HTTP_PORT), ModelHTTPHandler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print(f"[asr_local] 模型管理 HTTP: http://127.0.0.1:{MODEL_HTTP_PORT}")
+
 
 class EngineManager:
     """单进程多模型热切换管理器。
@@ -177,7 +396,7 @@ class EngineManager:
         if not os.path.isdir(qwen3_dir):
             raise FileNotFoundError(
                 f"Qwen3 模型目录不存在: {qwen3_dir}。\n"
-                "请将模型放到该目录，或在本应用「设置」里指定 Qwen3 模型目录。"
+                "请在本应用「设置」→「本地模型」→「Qwen3-ASR 识别模型」点击「下载模型」安装后重试。"
             )
         missing = []
         for f in ("conv_frontend.onnx", "encoder.int8.onnx", "decoder.int8.onnx"):
@@ -550,8 +769,14 @@ engine_mgr = EngineManager(initial_engine=ENGINE)
 
 
 async def main():
-    # 启动时预热默认引擎（缓存里最后选的那个），端口监听前完成
-    await engine_mgr.load(ENGINE)
+    global _ASYNC_LOOP
+    _ASYNC_LOOP = asyncio.get_running_loop()
+    start_model_http_server()
+    # 启动时预热默认引擎；失败不退出（模型可在设置面板下载后重载）
+    try:
+        await engine_mgr.load(ENGINE)
+    except Exception as e:
+        print(f"[asr_local] 模型预热失败: {e}（ASR 暂不可用，可在设置面板下载模型后点「重载」）")
     async with websockets.serve(handle, "127.0.0.1", PORT, max_size=10 * 1024 * 1024):
         print(f"[asr_local] 监听 ws://127.0.0.1:{PORT} (引擎: {ENGINE}, 支持热切换 sensevoice/qwen3)")
         await asyncio.Future()

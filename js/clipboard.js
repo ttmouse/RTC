@@ -32,7 +32,6 @@ export function pasteToCursor(text, autoEnter) {
         if (status === 'clipboard_only') {
           logTiming('paste.done_clipboard_only');
           console.log('[paste] Tauri paste 完成（仅剪贴板，无自动粘贴）');
-          toast('已复制到剪贴板，请手动 Cmd+V 粘贴');
         } else {
           logTiming('paste.done');
           console.log('[paste] Tauri Cmd+V 已发送');
@@ -56,7 +55,6 @@ export function pasteToCursor(text, autoEnter) {
       if (data.warn === 'auto_paste_disabled') {
         logTiming('paste.done_clipboard_only');
         console.log('[paste] 服务端 paste 完成（仅剪贴板，无自动粘贴）');
-        toast('已复制到剪贴板，请手动 Cmd+V 粘贴');
       } else {
         logTiming('paste.done');
         console.log('[paste] 服务端 paste 成功');

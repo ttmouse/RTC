@@ -1,6 +1,6 @@
 {
     "name": "rtc-transcriber",
-    "version": "1.0.18",
+    "version": "1.0.19",
     "description": "实时语音转文字工具：本地 SenseVoice 引擎（完全离线）/ 阿里云百炼 ASR / 浏览器 Web Speech，支持网页与 Tauri 桌面端。",
     "main": "index.js",
     "scripts": {

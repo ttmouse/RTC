@@ -5,7 +5,8 @@ import { ensurePastePermission } from './clipboard.js';
 import { connectASR, setAsrStopHandler } from './asr.js';
 import { getAudioConstraints, startAudio, stopRec } from './audio.js';
 import { clearHistory, renderHistory, startHistPoll } from './history.js';
-import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker } from './settings.js';
+import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection } from './settings.js';
+import { renderModelStatus, getModelStatus } from './model.js';
 import { migrateLegacyLocalConfig } from './config-migration.js';
 import { checkForUpdates, setupUpdateUI, updateVersionBadge } from './updater.js';
 
@@ -76,13 +77,13 @@ function showSettings(show) {
   $('queryBar').style.display = show ? 'none' : '';
   $('list').style.display = show ? 'none' : '';
   document.querySelector('footer').style.display = show ? 'none' : '';
+  if (show) renderModelStatus();
 }
 
 $('settingsBtn').onclick = () => showSettings(true);
 $('settingsClose').onclick = () => showSettings(false);
 $('settingsSaveBtn').onclick = async () => {
   state.apiKey = $('apiKey').value.trim();
-  state.qwen3ModelDir = $('qwen3ModelDir').value.trim();
   if (state.asrEngine === 'bailian' && !state.apiKey) {
     state.asrEngine = 'sensevoice';
     updateEngineBadge();
@@ -99,8 +100,9 @@ $('settingsResetBtn').onclick = async () => {
   state.asrEngine = 'sensevoice';
   state.apiKey = '';
   $('apiKey').value = '';
-  state.qwen3ModelDir = '';
-  $('qwen3ModelDir').value = '';
+  setKeyVisible(false);
+  const testStatus = $('apiKeyTestStatus');
+  if (testStatus) { testStatus.textContent = ''; testStatus.className = 'key-test-status'; }
   state.vadThreshold = 0.006;
   $('vadThreshold').value = 0.006;
   $('vadThresholdLabel').textContent = '0.006';
@@ -144,8 +146,7 @@ $('list').addEventListener('click', e => {
   }).catch(() => {});
 });
 
-function changeEngine(sel) {
-  const next = sel.value;
+function changeEngine(next) {
   state.apiKey = $('apiKey').value.trim();
   if (next === state.asrEngine) return;
   if (next === 'bailian' && !state.apiKey) {
@@ -163,7 +164,46 @@ function changeEngine(sel) {
   }
 }
 
-$('engineBadge').onchange = () => changeEngine($('engineBadge'));
+// 自定义引擎下拉（不使用浏览器原生 select，避免 WKWebView 弹出层闪烁/抖动）
+function refreshEngineMenuAvailability() {
+  // 百炼：未配置 API Key 则不显示
+  const optB = $('optBailian');
+  if (optB) optB.classList.toggle('hidden', !state.apiKey);
+  // Qwen3：模型未下载则不显示（异步查询本地模型状态）
+  const optQ = $('optQwen3');
+  if (optQ) {
+    getModelStatus()
+      .then(st => {
+        const ok = st && !st.error && st.qwen3 && st.qwen3.exists;
+        optQ.classList.toggle('hidden', !ok);
+      })
+      .catch(() => { /* 模型服务不可达时保持现状 */ });
+  }
+}
+
+(function initEngineMenu() {
+  const btn = $('engineBadge');
+  const menu = $('engineMenu');
+  if (!btn || !menu) return;
+  btn.onclick = e => {
+    e.stopPropagation();
+    const opening = menu.classList.contains('hidden');
+    menu.classList.toggle('hidden');
+    if (opening) refreshEngineMenuAvailability();
+  };
+  document.addEventListener('click', e => {
+    if (!menu.classList.contains('hidden') && !(e.target && e.target.closest && e.target.closest('.engineWrap'))) {
+      menu.classList.add('hidden');
+    }
+  });
+  menu.querySelectorAll('.engineOption').forEach(o => {
+    o.onclick = () => {
+      menu.classList.add('hidden');
+      changeEngine(o.dataset.engine);
+    };
+  });
+})();
+refreshEngineMenuAvailability();
 
 $('vadThreshold').oninput = function () {
   state.vadThreshold = parseFloat(this.value);
@@ -210,13 +250,26 @@ $('apiKey').onchange = () => {
   saveASRSettings();
 };
 
-$('qwen3ModelDir').onchange = () => {
-  state.qwen3ModelDir = $('qwen3ModelDir').value.trim();
-  saveASRSettings();
-  if (state.recording) {
-    toast('Qwen3 模型目录已更新，将在下个识别任务生效');
-  }
+// API Key 明文/密文切换（眼睛图标）
+function setKeyVisible(show) {
+  const input = $('apiKey');
+  const btn = $('apiKeyToggle');
+  input.type = show ? 'text' : 'password';
+  btn.classList.toggle('showing', show);
+  btn.title = show ? '隐藏 API Key' : '显示 API Key';
+  btn.setAttribute('aria-label', btn.title);
+}
+$('apiKeyToggle').onclick = () => {
+  setKeyVisible($('apiKey').type === 'password');
+  $('apiKey').focus();
 };
+// 失焦自动切回密文（点击眼睛按钮本身除外，避免闪烁）
+$('apiKey').addEventListener('blur', () => {
+  if ($('apiKey').type !== 'text') return;
+  if (document.activeElement === $('apiKeyToggle')) return;
+  setKeyVisible(false);
+});
+$('apiKeyTestBtn').onclick = testBailianConnection;
 
 $('silenceTimeout').oninput = function () {
   state.silenceTimeout = parseInt(this.value);
@@ -313,6 +366,7 @@ document.addEventListener('keydown', (e) => {
   ]);
   if (state.autoPaste) ensurePastePermission();
   updateEngineBadge();
+  refreshEngineMenuAvailability();
   setupUpdateUI();
   updateVersionBadge();
   await renderHistory(true);

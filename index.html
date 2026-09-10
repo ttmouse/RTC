@@ -11,12 +11,20 @@
   <h1>实时逐字稿</h1>
   <div class="header-actions">
     <div id="status"><span id="dot"></span><span id="statusText">就绪</span></div>
-    <select id="engineBadge" title="选择语音识别引擎">
-      <option value="bailian">百炼</option>
-      <option value="sensevoice">本地 · SenseVoice</option>
-      <option value="qwen3">千问 · Qwen3-ASR</option>
-    </select>
-    <button id="settingsBtn">设置</button>
+    <div class="engineWrap">
+      <button id="engineBadge" title="当前引擎：本地 · SenseVoice" aria-haspopup="listbox">
+        <span id="engineBadgeText">本地 · SenseVoice</span>
+        <svg class="caret" width="8" height="6" viewBox="0 0 8 6" aria-hidden="true"><path d="M0 0l4 6 4-6z" fill="currentColor"/></svg>
+      </button>
+      <div class="engineMenu hidden" id="engineMenu" role="listbox">
+        <button class="engineOption" id="optBailian" data-engine="bailian" role="option"><span class="optLabel">百炼</span></button>
+        <button class="engineOption" id="optSensevoice" data-engine="sensevoice" role="option"><span class="optLabel">本地 · SenseVoice</span></button>
+        <button class="engineOption" id="optQwen3" data-engine="qwen3" role="option"><span class="optLabel">千问 · Qwen3-ASR</span></button>
+      </div>
+    </div>
+    <button id="settingsBtn" title="设置">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
   </div>
 </header>
 <div id="err"></div>
@@ -81,16 +89,55 @@
       <div class="s-field">
         <div class="fl">百炼 API Key</div>
         <div class="fd">用于百炼语音引擎</div>
-        <input type="password" id="apiKey" placeholder="阿里云百炼 API Key">
+        <div class="key-row">
+          <div class="key-wrap">
+            <input type="password" id="apiKey" placeholder="阿里云百炼 API Key" autocomplete="off" spellcheck="false">
+            <button type="button" id="apiKeyToggle" class="key-eye" title="显示 API Key" aria-label="显示 API Key">
+              <svg class="key-eye-open" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="key-eye-closed" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            </button>
+          </div>
+          <button type="button" class="sbtn key-test-btn" id="apiKeyTestBtn">测试连接</button>
+        </div>
+        <div class="key-test-status" id="apiKeyTestStatus"></div>
       </div>
     </div>
 
     <div class="s-group">
       <div class="sg-title">本地模型</div>
-      <div class="s-field">
-        <div class="fl">Qwen3 模型目录</div>
-        <div class="fd">Qwen3-ASR 模型存放位置。桌面版未内置此模型，留空使用默认路径（模型缺失时切到 Qwen3 会提示）</div>
-        <input type="text" id="qwen3ModelDir" placeholder="默认：~/Library/Application Support/rtc-transcriber/models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25">
+
+      <!-- SenseVoice -->
+      <div class="s-field model-card" data-model="sensevoice">
+        <div class="model-head">
+          <div class="fl">SenseVoice 识别模型</div>
+          <div class="model-btns">
+            <button class="sbtn model-download-btn">下载模型</button>
+            <button class="sbtn model-reload-btn hidden">重载</button>
+            <button class="sbtn model-reveal-btn">在访达中显示</button>
+          </div>
+        </div>
+        <div class="fd model-status">检测中...</div>
+        <div class="model-progress hidden">
+          <div class="model-progress-track"><div class="model-progress-fill"></div></div>
+          <span class="model-progress-text">0%</span>
+        </div>
+      </div>
+
+      <!-- Qwen3-ASR -->
+      <div class="s-field model-card" data-model="qwen3">
+        <div class="model-head">
+          <div class="fl">Qwen3-ASR 识别模型</div>
+          <div class="model-btns">
+            <button class="sbtn model-download-btn">下载模型</button>
+            <button class="sbtn model-reload-btn hidden">重载</button>
+            <button class="sbtn model-reveal-btn">在访达中显示</button>
+          </div>
+        </div>
+        <div class="fd model-status">检测中...</div>
+        <div class="model-progress hidden">
+          <div class="model-progress-track"><div class="model-progress-fill"></div></div>
+          <span class="model-progress-text">0%</span>
+        </div>
       </div>
     </div>
 
@@ -116,8 +163,8 @@
             <div class="ts">ASR 识别结果中的关键词自动替换为指定词，点击「管理」进入</div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
-            <span id="corrCount" style="font-size:11px;color:var(--ink-faint);font-family:var(--mono);">0 条规则</span>
-            <button class="sbtn" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;font-family:var(--serif);color:var(--ink-soft);" onclick="correctionOpenEditor()">管理</button>
+            <span id="corrCount" style="font-size:11px;color:var(--ink-faint);">0 条规则</span>
+            <button class="sbtn" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);" onclick="correctionOpenEditor()">管理</button>
           </div>
         </div>
       </div>
@@ -184,12 +231,13 @@
       </div>
     </div>
 
-    <div class="s-page-foot">
-      <button class="sbtn primary" id="settingsSaveBtn">保 存</button>
-      <button class="sbtn" id="settingsCancelBtn">取 消</button>
-      <button class="sbtn danger" id="settingsResetBtn">恢复默认</button>
-    </div>
+  </div>
 
+  <!-- 固定底栏：保存 / 取消 / 恢复默认，悬浮固定在面板底部，不随内容滚动 -->
+  <div class="s-page-foot">
+    <button class="sbtn primary" id="settingsSaveBtn">保 存</button>
+    <button class="sbtn" id="settingsCancelBtn">取 消</button>
+    <button class="sbtn danger" id="settingsResetBtn">恢复默认</button>
   </div>
 </div>
 
