@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 import uuid
 
 import time
@@ -15,9 +16,27 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from collections import deque
 
-import numpy as np
-import websockets
-import sherpa_onnx as _sherpa_onnx
+# ---------- 依赖容错 ----------
+# 模型管理 HTTP（8933：状态/下载/重载）只用标准库，必须始终可用——否则用户连
+# 「下载模型」这个自救入口都打不开，前端只能显示「无法连接本地模型服务」。
+# 推理依赖缺失时降级为「可管理、不可识别」，缺失项由 /model/status 暴露给前端。
+_MISSING_DEPS = []
+
+
+def _try_import(name):
+    try:
+        return __import__(name), None
+    except Exception as e:  # ModuleNotFoundError / OSError（如架构不匹配）等
+        _MISSING_DEPS.append((name, str(e)))
+        return None, str(e)
+
+
+np, _ERR_NUMPY = _try_import("numpy")
+_sherpa_onnx, _ERR_SHERPA = _try_import("sherpa_onnx")
+websockets, _ERR_WEBSOCKETS = _try_import("websockets")
+
+# import 名 → pip 包名（两者不一致的只有 sherpa_onnx）
+PIP_NAMES = {"sherpa_onnx": "sherpa-onnx", "numpy": "numpy", "websockets": "websockets"}
 
 # ---------- 配置 ----------
 PORT = int(os.environ.get("ASR_PORT", "8932"))
@@ -35,6 +54,43 @@ MODEL_HTTP_PORT = int(os.environ.get("ASR_MODEL_HTTP_PORT", "8933"))
 
 # 模型下载状态在下方 MODEL_DL_STATES 中定义
 _ASYNC_LOOP = None  # main() 中设置，供下载线程回调重载模型
+
+
+# ---------- 环境诊断（供前端展示可操作的修复指引） ----------
+
+def python_path() -> str:
+    """当前解释器绝对路径（前端据此拼出可直接复制执行的安装命令）"""
+    return sys.executable or "python3"
+
+
+def _missing_dep_names() -> list:
+    return sorted({name for name, _ in _MISSING_DEPS})
+
+
+def install_command() -> str:
+    """给出针对当前解释器的依赖安装命令，用户可直接复制执行"""
+    names = _missing_dep_names()
+    if not names:
+        return ""
+    pkgs = " ".join(PIP_NAMES.get(n, n) for n in names)
+    return f"{python_path()} -m pip install {pkgs}"
+
+
+def environment_issue() -> str:
+    """返回环境问题描述；环境正常时返回空串。
+
+    出现原因：Rust 侧 find_binary 只校验 `python3 --version` 能否执行，
+    不校验依赖是否装齐。若命中系统 Python（如 /usr/bin/python3），
+    推理依赖缺失，服务会退化为「可下载模型、不可识别语音」。
+    """
+    names = _missing_dep_names()
+    if not names:
+        return ""
+    detail = "; ".join(f"{n}: {e.splitlines()[0]}" for n, e in sorted(_MISSING_DEPS))
+    return (
+        f"当前 Python 缺少依赖：{', '.join(names)}（{python_path()}）。"
+        f"请在终端执行：{install_command()}，然后重启本应用。原始错误：{detail}"
+    )
 
 
 def default_qwen3_dir() -> str:
@@ -207,6 +263,13 @@ def get_model_status(qwen3_dir: str = "") -> dict:
     return {
         "sensevoice": _sensevoice_status(),
         "qwen3": _qwen3_status(qwen3_dir),
+        "environment": {
+            "python_path": python_path(),
+            "missing_deps": _missing_dep_names(),
+            "issue": environment_issue(),
+            "install_command": install_command(),
+            "ready": not _MISSING_DEPS,
+        },
     }
 
 
@@ -235,6 +298,8 @@ def _download_model_to_dir(url: str, model_dir: str, dl_state: dict) -> bool:
                         dl_state["progress"] = round(got / total * 100, 1)
                         dl_state["message"] = f"下载中 {got // (1 << 20)}/{total // (1 << 20)} MB"
         dl_state["message"] = "解压中..."
+        # 解压阶段总量未知（zip 内文件数不定），标记为 extracting 供前端切不确定态
+        dl_state["status"] = "extracting"
         with zipfile.ZipFile(tmp_zip) as zf:
             zf.extractall(model_dir)
         os.remove(tmp_zip)
@@ -315,7 +380,7 @@ class ModelHTTPHandler(BaseHTTPRequestHandler):
         if self.path.startswith("/model/download"):
             mtype = body.get("type", "sensevoice")
             dl_state = MODEL_DL_STATES.get(mtype)
-            if dl_state and dl_state["status"] == "downloading":
+            if dl_state and dl_state["status"] in ("downloading", "extracting"):
                 self._json({"started": False, "reason": "already_downloading"})
             else:
                 threading.Thread(
@@ -417,6 +482,9 @@ class EngineManager:
         返回 (recognizer, switched)。qwen3_dir 为 None 时自动探测默认目录。
         """
         engine = engine if engine in ("sensevoice", "qwen3") else "sensevoice"
+        # 依赖缺失时给出可操作的错误，而不是底层 AttributeError/ImportError
+        if _sherpa_onnx is None or np is None:
+            raise RuntimeError(environment_issue())
         if engine == "qwen3":
             qwen3_dir = qwen3_dir or default_qwen3_dir()
             self.check_qwen3_dir(qwen3_dir)
@@ -448,7 +516,7 @@ class EngineManager:
         return await loop.run_in_executor(self.executor, self._infer, rec, audio)
 
     @staticmethod
-    def _infer(rec, audio: np.ndarray) -> str:
+    def _infer(rec, audio) -> str:
         stream = rec.create_stream()
         stream.accept_waveform(16000, audio)
         rec.decode_stream(stream)
@@ -773,12 +841,26 @@ engine_mgr = EngineManager(initial_engine=ENGINE)
 async def main():
     global _ASYNC_LOOP
     _ASYNC_LOOP = asyncio.get_running_loop()
+    # 先起模型管理 HTTP（8933）：即使推理依赖缺失，用户仍能下载模型 / 查看状态
     start_model_http_server()
+
+    issue = environment_issue()
+    if issue:
+        print(f"[asr_local] ⚠️ 环境不完整，本地识别不可用：{issue}")
+        print(f"[asr_local] 修复后重启应用即可；模型下载与状态查询仍可用。")
+
     # 启动时预热默认引擎；失败不退出（模型可在设置面板下载后重载）
-    try:
-        await engine_mgr.load(ENGINE)
-    except Exception as e:
-        print(f"[asr_local] 模型预热失败: {e}（ASR 暂不可用，可在设置面板下载模型后点「重载」）")
+    if _sherpa_onnx is not None and np is not None:
+        try:
+            await engine_mgr.load(ENGINE)
+        except Exception as e:
+            print(f"[asr_local] 模型预热失败: {e}（ASR 暂不可用，可在设置面板下载模型后点「重载」）")
+
+    if websockets is None:
+        print("[asr_local] 缺少 websockets 依赖，WebSocket 识别服务未启动（模型管理仍可用）")
+        await asyncio.Future()
+        return
+
     async with websockets.serve(handle, "127.0.0.1", PORT, max_size=10 * 1024 * 1024):
         print(f"[asr_local] 监听 ws://127.0.0.1:{PORT} (引擎: {ENGINE}, 支持热切换 sensevoice/qwen3)")
         await asyncio.Future()
