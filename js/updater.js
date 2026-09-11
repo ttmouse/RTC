@@ -12,7 +12,7 @@ export async function getAppVersion() {
   try {
     return await window.__TAURI__.app.getVersion();
   } catch {
-    return '1.0.16';
+    return '1.0.20';
   }
 }
 
@@ -24,6 +24,52 @@ export async function updateVersionBadge() {
 function setUpdateStatus(text) {
   const el = $('updateStatus');
   if (el) el.textContent = text;
+}
+
+// ---------- 进度条 ----------
+// Tauri updater 的 DownloadEvent 形如 { event, data }：
+//   Started  -> data.contentLength（可能为 null）
+//   Progress -> data.chunkLength（单块字节数，需自行累加）
+//   Finished -> 无 data
+// 插件不提供累计字节/百分比，所以这里自己累加。
+
+function updateProgressEls() {
+  return ['updateProgress', 'updateBannerProgress']
+    .map((id) => $(id))
+    .filter(Boolean);
+}
+
+function resetUpdateProgress() {
+  updateProgressEls().forEach((wrap) => {
+    wrap.classList.add('hidden');
+    wrap.classList.remove('indeterminate');
+    const fill = wrap.querySelector('.update-progress-fill');
+    const text = wrap.querySelector('.update-progress-text');
+    if (fill) fill.style.width = '0%';
+    if (text) text.textContent = '0%';
+  });
+}
+
+function renderUpdateProgress({ percent = 0, indeterminate = false, label = '处理中' }) {
+  updateProgressEls().forEach((wrap) => {
+    wrap.classList.remove('hidden');
+    wrap.classList.toggle('indeterminate', indeterminate);
+    const fill = wrap.querySelector('.update-progress-fill');
+    const text = wrap.querySelector('.update-progress-text');
+    if (indeterminate) {
+      // 清掉 inline 宽度，否则会盖住 CSS 的 35% 扫动宽度
+      if (fill) fill.style.width = '';
+      if (text) text.textContent = label;
+      return;
+    }
+    const p = Math.max(0, Math.min(100, percent));
+    if (fill) fill.style.width = p + '%';
+    if (text) text.textContent = p.toFixed(0) + '%';
+  });
+}
+
+function fmtMB(bytes) {
+  return Math.round((bytes || 0) / 1048576) + ' MB';
 }
 
 export function showUpdateBanner(update) {
@@ -60,12 +106,14 @@ export async function checkForUpdates(manual = false) {
       if (manual) toast(`发现新版本 v${update.version}，点击横幅立即更新`);
     } else {
       hideUpdateBanner();
+      resetUpdateProgress();
       setUpdateStatus(`已是最新版本（v${await getAppVersion()}）`);
       if (manual) toast('已是最新版本');
     }
   } catch (e) {
     console.error('[updater] check failed:', e);
     hideUpdateBanner();
+    resetUpdateProgress();
     setUpdateStatus(`检查更新失败：${e.message || e}`);
     if (manual) toast('检查更新失败：' + (e.message || e));
   } finally {
@@ -81,17 +129,40 @@ export async function installUpdate() {
   const btn = $('updateInstallBtn');
   if (btn) btn.disabled = true;
   setUpdateStatus('正在下载更新…');
+  resetUpdateProgress();
+  renderUpdateProgress({ indeterminate: true, label: '连接中' });
+  let downloaded = 0;
+  let total = 0;
   try {
     await update.downloadAndInstall((ev) => {
-      if (!ev || ev.event !== 'Progress' || !ev.data) return;
-      const p = ev.data.percent;
-      if (typeof p === 'number') {
-        setUpdateStatus(`正在下载更新 ${p.toFixed(0)}%…`);
-      } else if (ev.data.downloaded) {
-        setUpdateStatus(`正在下载更新…（${Math.round(ev.data.downloaded / 1048576)} MB）`);
+      if (!ev || !ev.event) return;
+      const data = ev.data || {};
+      if (ev.event === 'Started') {
+        total = typeof data.contentLength === 'number' ? data.contentLength : 0;
+        downloaded = 0;
+        if (total > 0) {
+          renderUpdateProgress({ percent: 0 });
+        } else {
+          renderUpdateProgress({ indeterminate: true, label: '下载中' });
+        }
+      } else if (ev.event === 'Progress') {
+        downloaded += data.chunkLength || 0;
+        if (total > 0) {
+          const p = (downloaded / total) * 100;
+          renderUpdateProgress({ percent: p });
+          setUpdateStatus(`正在下载更新 ${p.toFixed(0)}%（${fmtMB(downloaded)} / ${fmtMB(total)}）…`);
+        } else {
+          renderUpdateProgress({ indeterminate: true, label: fmtMB(downloaded) });
+          setUpdateStatus(`正在下载更新…（已下载 ${fmtMB(downloaded)}）`);
+        }
+      } else if (ev.event === 'Finished') {
+        // 下载结束，接下来是解压/安装，总量未知 -> 不确定态
+        renderUpdateProgress({ indeterminate: true, label: '安装中' });
+        setUpdateStatus('更新下载完成，正在安装…');
       }
     });
-    setUpdateStatus('更新下载完成，正在重启应用…');
+    resetUpdateProgress();
+    setUpdateStatus('更新安装完成，正在重启应用…');
     toast('更新完成，正在重启应用…');
     setTimeout(() => {
       try {
@@ -103,6 +174,7 @@ export async function installUpdate() {
     }, 800);
   } catch (e) {
     console.error('[updater] install failed:', e);
+    resetUpdateProgress();
     setUpdateStatus('更新失败，请重试');
     toast('更新失败：' + (e.message || e));
     if (btn) btn.disabled = false;

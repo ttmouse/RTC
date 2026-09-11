@@ -179,6 +179,8 @@
   .s-field .model-progress-track{ flex:1; height:6px; background:var(--rule); border-radius:3px; overflow:hidden; }
   .s-field .model-progress-fill{ height:100%; width:0%; background:var(--seal); border-radius:3px; transition:width .3s; }
   .s-field .model-progress-text{ font-size:11px; color:var(--ink-soft); min-width:48px; text-align:right; }
+  /* 解压阶段：总量未知，进度条切不确定态扫动 */
+  .s-field .model-progress.indeterminate .model-progress-fill{ width:35%; animation:update-indeterminate 1.2s ease-in-out infinite; transition:none; }
   .s-field .model-btns{ display:flex; gap:6px; flex-wrap:wrap; }
   .s-field .model-btns .sbtn{ padding:4px 12px; font-size:11px; border:1px solid var(--rule); border-radius:3px; background:transparent; cursor:pointer; color:var(--ink-soft); }
   .s-field .model-btns .sbtn:hover{ border-color:var(--ink); color:var(--ink); }
@@ -240,6 +242,22 @@
   #updateBanner #updateInstallBtn:disabled{ opacity:.55; cursor:default; }
   #updateBanner #updateBannerClose{ background:none; border:none; font-size:15px; cursor:pointer;
         color:#a08a4a; line-height:1; padding:2px 6px; }
+  /* 更新进度条（设置面板 + 顶部横幅共用） */
+  .update-progress{ display:flex; align-items:center; gap:8px; width:100%; margin-top:8px; }
+  .update-progress.hidden{ display:none; }
+  .update-progress-track{ flex:1; height:6px; background:var(--rule); border-radius:3px; overflow:hidden; }
+  .update-progress-fill{ height:100%; width:0%; background:var(--seal); border-radius:3px; transition:width .3s; }
+  .update-progress-text{ font-size:11px; color:var(--ink-soft); min-width:48px; text-align:right; }
+  /* 不确定态：总量未知（如解压中）时来回扫动，避免看起来像卡住 */
+  .update-progress.indeterminate .update-progress-fill{ width:35%; animation:update-indeterminate 1.2s ease-in-out infinite; transition:none; }
+  @keyframes update-indeterminate{
+    0%{ transform:translateX(-100%); }
+    100%{ transform:translateX(300%); }
+  }
+  #updateBanner .update-progress{ width:120px; margin-top:0; flex:none; }
+  #updateBanner .update-progress-text{ min-width:36px; color:#a08a4a; }
+  #updateBanner .update-progress-track{ background:#e8c96a; }
+  #updateBanner .update-progress-fill{ background:#b8860b; }
   .line{ position:relative; }
     /* 选择复制由浮动按钮处理（见 JS） */
 
