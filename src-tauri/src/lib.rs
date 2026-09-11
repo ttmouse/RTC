@@ -344,6 +344,21 @@ fn resolve_project_dir(app_handle: &tauri::AppHandle) -> PathBuf {
     }
 }
 
+/// 查找捆绑 sidecar 的完整路径。
+///
+/// Tauri 2 externalBin 在 macOS 上打包到 Contents/MacOS/ 下，文件名不带 target triple；
+/// 同时兼容放置于资源目录（带/不带 triple）的历史布局。
+fn find_sidecar(project_dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let mut candidates = vec![
+        project_dir.join(name),
+        project_dir.join(format!("{}-aarch64-apple-darwin", name)),
+    ];
+    if let Some(parent) = project_dir.parent() {
+        candidates.push(parent.join("MacOS").join(name));
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
 /// 在受限 PATH 下查找可执行文件（Finder 启动时 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin）
 fn find_binary(name: &str) -> Option<String> {
     // 检查候选路径优先于 PATH（Finder 启动时 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin）
@@ -397,6 +412,32 @@ fn find_binary(name: &str) -> Option<String> {
 /// 启动 Node.js 服务（server.js）
 fn start_node_server(app_handle: &tauri::AppHandle) -> Option<Child> {
     let project_dir = resolve_project_dir(app_handle);
+
+    // 优先启动捆绑的 Node sidecar（bun 编译的单文件，无需系统安装 Node.js）
+    if let Some(p) = find_sidecar(&project_dir, "node-server") {
+        println!("[tauri] 启动捆绑 Node 服务 (sidecar): {:?}", p);
+        match Command::new(&p)
+            .current_dir(&project_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(stderr) = child.stderr.take() {
+                    std::thread::spawn(move || {
+                        use std::io::BufRead;
+                        for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                            eprintln!("[node-sidecar] {}", line);
+                        }
+                    });
+                }
+                println!("[tauri] Node sidecar 已启动 (PID: {})", child.id());
+                return Some(child);
+            }
+            Err(e) => eprintln!("[tauri] 启动 Node sidecar 失败: {}，回退系统 node", e),
+        }
+    }
+
     let server_path = project_dir.join("server.js");
 
     if !server_path.exists() {
@@ -430,8 +471,52 @@ fn start_node_server(app_handle: &tauri::AppHandle) -> Option<Child> {
     }
 }
 
+/// 判断某个 python3 是否具备本地 ASR 所需依赖。
+///
+/// 只校验 `python3 --version` 会被系统 Python（无 sherpa_onnx）蒙混过关，
+/// 导致服务启动即崩、用户只看到「无法连接本地模型服务」。
+///
+/// 这里只做探测、不代用户安装：装什么、装到哪个环境由用户决定，
+/// 缺失时前端会给出该解释器对应的 pip 命令。
+fn python_has_asr_deps(path: &str) -> bool {
+    Command::new(path)
+        .args(["-c", "import sherpa_onnx, numpy, websockets"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .and_then(|mut c| c.wait())
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 fn start_asr_server(app_handle: &tauri::AppHandle) -> Option<Child> {
     let project_dir = resolve_project_dir(app_handle);
+
+    // 优先启动捆绑的 ASR sidecar（pyinstaller 单文件，含 sherpa-onnx/numpy/websockets）
+    if let Some(p) = find_sidecar(&project_dir, "asr-server") {
+        println!("[tauri] 启动捆绑 ASR 服务 (sidecar): {:?}", p);
+        match Command::new(&p)
+            .current_dir(&project_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(mut child) => {
+                if let Some(stderr) = child.stderr.take() {
+                    std::thread::spawn(move || {
+                        use std::io::BufRead;
+                        for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                            eprintln!("[asr-sidecar] {}", line);
+                        }
+                    });
+                }
+                println!("[tauri] ASR sidecar 已启动 (PID: {})", child.id());
+                return Some(child);
+            }
+            Err(e) => eprintln!("[tauri] 启动 ASR sidecar 失败: {}，回退系统 python", e),
+        }
+    }
+
     let server_py = project_dir.join("asr_local").join("server.py");
 
     if !server_py.exists() {
@@ -439,25 +524,66 @@ fn start_asr_server(app_handle: &tauri::AppHandle) -> Option<Child> {
         return None;
     }
 
-    let python_bin = match find_binary("python3") {
+    // 探测顺序不变（Homebrew 优先），但要求依赖齐全；
+    // 全部不齐时返回第一个可用解释器，由其降级为「可下载模型、不可识别」。
+    let mut fallback: Option<String> = None;
+    let mut python_bin: Option<String> = None;
+    for candidate in [
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3",
+    ] {
+        if !std::path::Path::new(candidate).is_file() {
+            continue;
+        }
+        if python_has_asr_deps(candidate) {
+            python_bin = Some(candidate.to_string());
+            break;
+        }
+        if fallback.is_none() {
+            fallback = Some(candidate.to_string());
+        }
+    }
+
+    let python_bin = match python_bin.or(fallback).or_else(|| find_binary("python3")) {
         Some(p) => p,
         None => {
-            eprintln!("[tauri] 找不到 python3 可执行文件");
+            eprintln!("[tauri] 找不到 python3 可执行文件，本地模型管理不可用");
             return None;
         }
     };
 
+    // 依赖缺失不阻止启动：服务会降级为「可下载模型、不可识别语音」，
+    // 缺失详情经 /model/status 的 environment 字段由设置面板呈现。
+    if !python_has_asr_deps(&python_bin) {
+        eprintln!(
+            "[tauri] {} 缺少本地 ASR 依赖（sherpa-onnx/numpy/websockets），本地识别将不可用；\
+             请在应用「设置 → 本地模型」按提示安装",
+            python_bin
+        );
+    }
+
     println!("[tauri] 启动本地 ASR ({}): {:?}", python_bin, server_py);
 
-    match Command::new(python_bin)
+    match Command::new(&python_bin)
         .args(["-u", &server_py.to_string_lossy()])
         .current_dir(&project_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
     {
-        Ok(child) => {
+        Ok(mut child) => {
             println!("[tauri] 本地 ASR 已启动 (PID: {})", child.id());
+            // 读回 stderr：Python 侧崩溃信息（缺依赖/端口占用/模型损坏）
+            // 此前被 Stdio::piped() 吞掉，用户只剩一个无信息的 "Load failed"。
+            if let Some(stderr) = child.stderr.take() {
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                        eprintln!("[asr_local] {}", line);
+                    }
+                });
+            }
             Some(child)
         }
         Err(e) => {

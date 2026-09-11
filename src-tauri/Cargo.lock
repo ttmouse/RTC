@@ -2762,7 +2762,7 @@ dependencies = [
 
 [[package]]
 name = "rtc-transcriber"
-version = "1.0.19"
+version = "1.0.20"
 dependencies = [
  "arboard",
  "core-foundation 0.10.1",

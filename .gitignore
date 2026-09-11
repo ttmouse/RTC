@@ -26,3 +26,6 @@ CAPABILITY_DOC.md
 
 # ── 本地数据（运行时写入）───────────────────────
 events/
+
+# ── 打包用 sidecar 二进制（pyinstaller / bun --compile 产物，单个 60~450MB，不入库）──
+src-tauri/binaries/
