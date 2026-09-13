@@ -1,7 +1,8 @@
 import { state, isLocalEngine, normalizeEngine, engineStatusText } from './state.js';
-import { $, esc, toast, addLine } from './ui.js';
+import { $, esc, toast, addLine, scrollListToBottom } from './ui.js';
 import { applyCorrection } from './correction.js';
 import { pasteToCursor } from './clipboard.js';
+import { tryHandleSpecialCommand, learnSpecialCommand } from './commands.js';
 import { saveEntry } from './history.js';
 import { saveTotalDuration, updateEngineBadge } from './settings.js';
 
@@ -41,7 +42,7 @@ export function connectASR() {
     if (!state.asrReady && state.recording) {
       connectionTimedOut = true;
       const msg = isLocal
-        ? engineStatusText(eng) + ' 服务未运行：请先执行 ./serve-local.sh 启动本地 ASR 服务，或切换至百炼引擎'
+        ? engineStatusText(eng) + ' 服务未运行：请先执行 ./scripts/serve-local.sh 启动本地 ASR 服务，或切换至百炼引擎'
         : '百炼 ASR 连接超时，请检查 API Key 和网络连接';
       toast(msg);
       state.pcmSendBuffer = [];
@@ -226,8 +227,10 @@ export function sendPCM(pcm) {
   if (state.asrEngine === 'bailian') {
     state.totalDuration += chunkSec;
     saveTotalDuration();
+    // 徽标里只有百炼的费用文案会随计数变化；本地引擎每 256ms 重写一遍
+    // 不变的 DOM 属于白干活（textContent 同值赋值仍会触发重排）。
+    updateEngineBadge();
   }
-  updateEngineBadge();
 }
 
 export function disconnectBailian() {
@@ -272,6 +275,27 @@ function handleASRResult(sentence, browserReceivedAt) {
   if (!text) return;
   const isFinal = !!(sentence.end_time > 0);
   const corrected = applyCorrection(text);
+  if (isFinal && tryHandleSpecialCommand(corrected)) {
+    // 指令已执行（打开应用/触发回车等）。这句话仍是用户说的话，
+    // 照常渲染到页面并存入历史，只是不再输出/粘贴到外部位。
+    const all = $('list').querySelectorAll('.line');
+    const lastTxt = all.length ? all[all.length - 1].querySelector('.txt') : null;
+    if (lastTxt && lastTxt.classList.contains('interim')) {
+      // 指令句若已作为临时行显示，定型为最终文本，避免重复行
+      lastTxt.innerHTML = '';
+      lastTxt.textContent = corrected;
+      lastTxt.className = 'txt';
+    } else {
+      addLine(new Date(), corrected, false);
+    }
+    saveEntry(corrected);
+    return;
+  }
+  if (isFinal) {
+    // 本地未命中 → 异步让 LLM 判定是否打开应用指令，命中则执行并回写学习映射。
+    // 不阻塞打字机流：LLM 未命中/失败时该句仍按普通文本输出。
+    void learnSpecialCommand(corrected);
+  }
   const segId = sentence.seg_id || null;
   const timing = sentence.timing || null;
   const context = { taskId: state.asrTaskId, segId, final: isFinal, rawText: text, text: corrected, autoPaste: state.autoPaste, engine: state.asrEngine, browserReceivedAt };
@@ -334,12 +358,11 @@ function handleASRResult(sentence, browserReceivedAt) {
       } else {
         addLine(new Date(), corrected, true);
       }
-      $('list').scrollTop = $('list').scrollHeight;
+      scrollListToBottom();
     }
     state.asrLastText = corrected;
     return;
   }
-
   let delta = corrected;
   if (corrected.startsWith(state.finalizedText)) {
     delta = corrected.slice(state.finalizedText.length);

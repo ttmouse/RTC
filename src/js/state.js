@@ -1,5 +1,6 @@
 export const state = {
   recording: false,
+  recStartTs: 0,          // 本次录音开始时刻（ms），用于录音按钮上显示本段录音时长
   sentCount: 0,
   wantRecording: false,
   audioCtx: null,
@@ -11,8 +12,8 @@ export const state = {
   wsRetry: 0,
   rendered: new Set(),
   lastDay: '',
-  qMinutes: 30,
-  histTimer: null,
+  stickToBottom: true,   // 列表是否跟随最新内容；用户向上翻阅历史时置 false，不再抢滚动
+  searchQuery: '',
   filterOn: true,
   asrEngine: 'sensevoice',
   apiKey: '',
@@ -45,6 +46,13 @@ export const state = {
   pcmSendBuffer: [],
   pcmBufferStartTime: 0,
   asrStopHandler: null,
+  // AI 服务商配置（OpenAI 兼容）：provider/baseUrl/apiKey/model
+  aiConfig: {
+    provider: 'custom',
+    baseUrl: '',
+    apiKey: '',
+    model: '',
+  },
 };
 
 export const ASR_PRICE = 0.00033;
@@ -66,11 +74,11 @@ export function normalizeEngine(engine) {
 /** 引擎中文显示名 */
 export function engineLabel(engine) {
   const e = normalizeEngine(engine);
-  return ({ bailian: '百炼', sensevoice: '本地 · SenseVoice', qwen3: '千问 · Qwen3-ASR' })[e] || e;
+  return ({ bailian: '百炼', sensevoice: 'SenseVoice', qwen3: 'Qwen3-ASR' })[e] || e;
 }
 
 /** 引擎状态文案（连接/就绪/超时等短状态） */
 export function engineStatusText(engine) {
   const e = normalizeEngine(engine);
-  return ({ bailian: '百炼', sensevoice: '本地 SenseVoice', qwen3: '千问 Qwen3' })[e] || e;
+  return ({ bailian: '百炼', sensevoice: 'SenseVoice', qwen3: 'Qwen3' })[e] || e;
 }

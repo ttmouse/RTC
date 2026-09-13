@@ -19,7 +19,10 @@ const WebSocket = require('ws');
 // ========== HTTP 服务（前端页面） ==========
 
 const PORT = Number(process.env.PORT || 8931);
+const PORT_CHECK_RETRIES = 3; // 端口被占时最多重试次数
 const TIMING_LOGS = process.env.ASR_TIMING_LOGS === '1' || process.env.RTC_TIMING_LOGS === '1';
+const DEV = process.env.RTC_DEV === '1'; // 开发模式：直接服务 src/（免 build），并提供 livereload 探针
+const RELOAD_PORT = Number(process.env.RELOAD_PORT || 8935);
 const DATA_ROOT = process.env.RTC_DATA_DIR || path.join(
   os.homedir(),
   'Library',
@@ -28,7 +31,48 @@ const DATA_ROOT = process.env.RTC_DATA_DIR || path.join(
 );
 const EVENTS_DIR = path.join(DATA_ROOT, 'events');
 const CONFIG_PATH = path.join(DATA_ROOT, 'config.json');
+const COMMANDS_PATH = path.join(DATA_ROOT, 'commands.json');
 const SCHEMA_VERSION = 1;
+const SEARCH_LIMIT = 300; // 搜索命中上限：只回最新的一批，避免把全部历史一次发给前端
+
+// 指令映射默认表：口述说法 → 应用标识（首次访问 /api/commands 时写入数据目录，
+// 之后以 commands.json 为准——用户或外部 AI Agent 可直接修改该文件）。
+const DEFAULT_COMMANDS = {
+  version: 1,
+  aliases: {
+    '微信': 'WeChat',
+    'weixin': 'WeChat',
+    'wechat': 'WeChat',
+    '钉钉': 'DingTalk',
+    'dingtalk': 'DingTalk',
+    '企业微信': 'WeCom',
+    'wecom': 'WeCom',
+    '浏览器': 'Safari',
+    'safari': 'Safari',
+    '谷歌浏览器': 'Google Chrome',
+    'chrome': 'Google Chrome',
+    '终端': 'Terminal',
+    'terminal': 'Terminal',
+    '访达': 'Finder',
+    'finder': 'Finder',
+  },
+  // 动作指令：整句口述 → 动作。支持的动作：enter（触发回车发送）、meeting_summary（总结最近会议生成 Markdown）
+  actions: {
+    '发送': 'enter',
+    '发送一下': 'enter',
+    '发送吧': 'enter',
+    '发出去': 'enter',
+    '回车': 'enter',
+    '总结会议': 'meeting_summary',
+    '会议总结': 'meeting_summary',
+    '总结一下会议': 'meeting_summary',
+    '生成会议纪要': 'meeting_summary',
+    '会议纪要': 'meeting_summary',
+    '总结纪要': 'meeting_summary',
+  },
+};
+const STATIC_ROOT = path.join(__dirname, 'dist');
+const SOURCE_ROOT = path.join(__dirname, 'src');
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css',
@@ -44,6 +88,182 @@ function localDateStamp(input) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// ========== 会议总结（语音指令「总结会议」→ Markdown 文件） ==========
+
+const MEETING_SILENCE_SEC = 300; // 静默 5 分钟切分会议段（与 scripts/transcript.mjs 一致）
+const MEETING_OUTPUT_DIR = process.env.RTC_MEETING_OUTPUT_DIR
+  || path.join(os.homedir(), 'Documents', '会议纪要');
+
+const pad2 = n => String(n).padStart(2, '0');
+
+/** 兼容两种 AI 地址写法：带/不带 /chat/completions 后缀 */
+function chatEndpoint(baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  return /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
+}
+
+/**
+ * 读取最近一场会议的转写事件（跨日期文件，按时间升序）。
+ * 会议按「静默 > MEETING_SILENCE_SEC 切分」：最近一场 = 最近一次长静默之后的所有事件，
+ * 所以从最新的日期文件往回扫，遇到第一个超过阈值的间隔就停，无需读全部历史。
+ * 旧实现（readAllEvents）每次「总结会议」都把历史以来所有 jsonl readFileSync 读完再过滤，
+ * 而逐字稿最终只保留最后一段、且截断到 50k 字符——扫全量历史属于纯浪费，
+ * 与 /api/transcripts/events 轮询路径已修掉的全量读是同一个反模式。
+ */
+function readLastSessionEvents() {
+  const events = [];
+  let files = [];
+  try {
+    files = fs.readdirSync(EVENTS_DIR)
+      .filter(f => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+      .sort()
+      .reverse();
+  } catch { return events; }
+  let prevTs = null;
+  const gapMs = MEETING_SILENCE_SEC * 1000;
+  outer:
+  for (const f of files) {
+    let data = '';
+    try { data = fs.readFileSync(path.join(EVENTS_DIR, f), 'utf-8'); } catch { continue; }
+    const lines = data.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+      let ev = null;
+      try { ev = JSON.parse(line); } catch { /* 单行损坏跳过 */ }
+      if (!ev || ev.type !== 'segment' || typeof ev.text !== 'string' || !ev.text.trim()) continue;
+      const ts = Date.parse(ev.ts);
+      if (!Number.isFinite(ts)) continue;
+      if (prevTs !== null && prevTs - ts > gapMs) break outer;
+      events.push(ev);
+      prevTs = ts;
+    }
+  }
+  events.reverse(); // 回溯扫描得到的是倒序，恢复为时间升序（与 detectSessions 的输入约定一致）
+  return events;
+}
+
+/** 会议段检测：静默超过 silenceSec 即切分新段（与 transcript.mjs 相同算法） */
+function detectSessions(events, silenceSec) {
+  const sessions = [];
+  let current = null;
+  for (const ev of events) {
+    const ts = new Date(ev.ts);
+    if (!current) {
+      current = { start: ts, end: ts, count: 1, texts: [ev.text] };
+    } else {
+      const gap = (ts - current.end) / 1000;
+      if (gap > silenceSec) {
+        sessions.push(current);
+        current = { start: ts, end: ts, count: 1, texts: [ev.text] };
+      } else {
+        current.end = ts;
+        current.count += 1;
+        current.texts.push(ev.text);
+      }
+    }
+  }
+  if (current) sessions.push(current);
+  return sessions;
+}
+
+function formatLocal(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 执行会议总结：取最近一场会议 → AI 生成 Markdown → 写入 ~/Documents/会议纪要/ */
+async function runMeetingSummary() {
+  // 1) 读取最近一场会议的事件（从最新日期文件往回扫，遇到长静默即停，不读全量历史）
+  const events = readLastSessionEvents();
+  if (!events.length) throw new Error('暂无会议记录');
+
+  // 2) 检测会议段，取最近一场
+  const sessions = detectSessions(events, MEETING_SILENCE_SEC);
+  const s = sessions[sessions.length - 1];
+
+  // 3) 逐字稿（只留本段，带时间戳）
+  const lines = [];
+  for (const ev of events) {
+    const t = new Date(ev.ts);
+    if (t < s.start || t > s.end) continue;
+    lines.push(`[${pad2(t.getHours())}:${pad2(t.getMinutes())}] ${ev.text}`);
+  }
+  const transcript = lines.join('\n').slice(0, 50000);
+
+  // 4) AI 配置（config.json → settings.ai）
+  let ai = null;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    ai = cfg.settings && cfg.settings.ai;
+  } catch { /* 未配置 */ }
+  const baseUrl = ai && typeof ai.baseUrl === 'string' ? ai.baseUrl.trim() : '';
+  const apiKey = ai && typeof ai.apiKey === 'string' ? ai.apiKey.trim() : '';
+  const model = ai && typeof ai.model === 'string' ? ai.model.trim() : '';
+  if (!baseUrl || !model) throw new Error('未配置 AI 服务商（设置 → AI 接入）');
+
+  // 5) LLM 总结
+  const system =
+    '你是会议纪要整理助手。根据用户提供的会议逐字稿，生成一份结构清晰的中文 Markdown 会议纪要，包含以下小节：' +
+    '## 会议概况（时间 / 时长 / 议题标题）、## 讨论要点、## 结论与共识、## 待办事项（如有明确分工或期限请列出）。' +
+    '只输出 Markdown 正文，不要代码块包裹，不要客套话。如果逐字稿过短或与会议无关，如实简要说明。';
+  const payload = {
+    model,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: `以下是会议逐字稿：\n${transcript}` },
+    ],
+    stream: false,
+    max_tokens: 12000, // 思考型模型会先消耗大量 token，必须给足预算否则正文为空
+  };
+  let content = '';
+  try {
+    const upRes = await fetch(chatEndpoint(baseUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(120000),
+    });
+    const data = await upRes.json().catch(() => ({}));
+    if (!upRes.ok) {
+      const detail = (data.error && (data.error.message || data.error.code))
+        || `HTTP ${upRes.status}`;
+      throw new Error(`AI 总结失败：${typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 200)}`);
+    }
+    content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+  } catch (e) {
+    if (e.name === 'TimeoutError') throw new Error('AI 总结超时，请稍后重试');
+    if (e.message && e.message.startsWith('AI 总结失败')) throw e;
+    throw new Error(`无法连接 AI 服务：${e.message || 'unknown'}`);
+  }
+  if (!content.trim()) throw new Error('AI 未返回内容，请重试');
+  // 清理：去代码块包裹、去 AI 自带的一级标题（文件头已提供「# 会议纪要」），避免重复
+  content = content.replace(/^```(?:markdown)?\s*|```\s*$/g, '').trim();
+  content = content.replace(/^#\s+.+(\n|$)/, '');
+
+  // 6) 写 Markdown 文件
+  const startLocal = formatLocal(s.start);
+  const fileName = `会议纪要_${startLocal.replace(/[-: ]/g, '').slice(0, 12)}.md`;
+  fs.mkdirSync(MEETING_OUTPUT_DIR, { recursive: true });
+  const filePath = path.join(MEETING_OUTPUT_DIR, fileName);
+  const durMin = Math.max(1, Math.round((s.end - s.start) / 60000));
+  const header = [
+    '# 会议纪要',
+    '',
+    `> **会议时间：** ${startLocal}（约 ${durMin} 分钟）`,
+    `> **转写条数：** ${s.count}`,
+    '',
+    '---',
+    '',
+  ].join('\n');
+  fs.writeFileSync(filePath, header + content.replace(/^```(?:markdown)?\s*|```\s*$/g, '') + '\n');
+
+  // 7) Finder 中显示生成的文档
+  try { spawn('open', ['-R', filePath], { timeout: 3000 }); } catch { /* 忽略 */ }
+  console.log(`[meeting] 会议纪要已生成: ${filePath}`);
+  return { path: filePath, fileName, sessionStart: startLocal, count: s.count };
+}
+
 function appendTranscriptEvent(event, callback) {
   fs.mkdir(EVENTS_DIR, { recursive: true }, (mkdirErr) => {
     if (mkdirErr) {
@@ -57,6 +277,54 @@ function appendTranscriptEvent(event, callback) {
       callback
     );
   });
+}
+
+// ---------- config.json 写入队列 ----------
+// 读-改-写整体串行 + 原子替换：多个请求同时改 config 时不会交错丢字段，
+// 写一半被 kill 也不会把 config.json 截断（里面存着 API Key）。
+let configWriteChain = Promise.resolve();
+
+function enqueueConfigTask(task, callback) {
+  const run = () => Promise.resolve().then(task);
+  configWriteChain = configWriteChain.then(run, run);
+  configWriteChain
+    .then(() => callback(null), (error) => callback(error))
+    .catch(() => {});
+}
+
+function readConfigFile() {
+  return new Promise((resolve) => {
+    fs.readFile(CONFIG_PATH, 'utf-8', (err, data) => {
+      if (err) { resolve({}); return; }
+      try { resolve(JSON.parse(data) || {}); } catch (e) { resolve({}); }
+    });
+  });
+}
+
+function writeConfigFile(config) {
+  return new Promise((resolve, reject) => {
+    const tmpPath = CONFIG_PATH + '.tmp';
+    fs.mkdir(DATA_ROOT, { recursive: true }, (mkdirErr) => {
+      if (mkdirErr) { reject(mkdirErr); return; }
+      fs.writeFile(tmpPath, JSON.stringify(config, null, 2), 'utf-8', (writeErr) => {
+        if (writeErr) { reject(writeErr); return; }
+        fs.rename(tmpPath, CONFIG_PATH, (renameErr) => renameErr ? reject(renameErr) : resolve());
+      });
+    });
+  });
+}
+
+/** 整体覆盖（PUT） */
+function writeConfig(config, callback) {
+  enqueueConfigTask(() => writeConfigFile(config), callback);
+}
+
+/** 只合并指定字段（PATCH）：read-modify-write 在队列里完成 */
+function patchConfig(partial, callback) {
+  enqueueConfigTask(async () => {
+    const current = await readConfigFile();
+    await writeConfigFile({ ...current, ...partial });
+  }, callback);
 }
 
 function readJsonBody(req, callback) {
@@ -101,13 +369,83 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // PUT /api/config — 写入本地配置
-  if (req.method === 'PUT' && req.url === '/api/config') {
-    readJsonBody(req, (err, parsed) => {
-      if (err || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'invalid config' }));
+  // GET /api/status — 服务运行状态（uptime 单位秒），供前端判断服务是否正常
+  if (req.method === 'GET' && req.url === '/api/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, uptime: Math.floor(process.uptime()), pid: process.pid }));
+    return;
+  }
+
+  // GET /api/storage — 存储位置与文件概览（设置面板展示用）
+  if (req.method === 'GET' && req.url === '/api/storage') {
+    let eventFiles = 0, eventBytes = 0;
+    try {
+      const files = fs.readdirSync(EVENTS_DIR).filter(f => f.endsWith('.jsonl'));
+      eventFiles = files.length;
+      for (const f of files) {
+        eventBytes += fs.statSync(path.join(EVENTS_DIR, f)).size;
+      }
+    } catch { /* 目录不存在视为 0 */ }
+    const exists = p => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      dataRoot: DATA_ROOT,
+      eventsDir: EVENTS_DIR,
+      configFile: CONFIG_PATH,
+      commandsFile: COMMANDS_PATH,
+      stats: {
+        eventFiles,
+        eventBytes,
+        configExists: exists(CONFIG_PATH),
+        commandsExists: exists(COMMANDS_PATH),
+      },
+    }));
+    return;
+  }
+
+  // GET /api/commands — 读取指令映射表（不存在时返回内置默认表；旧文件缺 actions 自动补齐）
+  if (req.method === 'GET' && req.url === '/api/commands') {
+    fs.readFile(COMMANDS_PATH, 'utf-8', (err, data) => {
+      if (err) {
+        // 首次访问：把默认表落盘，之后以文件为准
+        fs.mkdir(DATA_ROOT, { recursive: true }, () => {
+          fs.writeFile(COMMANDS_PATH, JSON.stringify(DEFAULT_COMMANDS, null, 2), 'utf-8', () => {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(DEFAULT_COMMANDS));
+          });
+        });
         return;
+      }
+      let parsed = {};
+      try { parsed = JSON.parse(data); } catch { /* 损坏时按默认表重建 */ }
+      const upgraded = !parsed.aliases || typeof parsed.aliases !== 'object';
+      if (!parsed.actions || typeof parsed.actions !== 'object') {
+        parsed.actions = { ...DEFAULT_COMMANDS.actions };
+      }
+      if (upgraded) parsed.aliases = { ...DEFAULT_COMMANDS.aliases };
+      if (upgraded || JSON.stringify(parsed) !== data.replace(/\s+$/, '')) {
+        fs.writeFile(COMMANDS_PATH, JSON.stringify(parsed, null, 2), 'utf-8', () => {});
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(parsed));
+    });
+    return;
+  }
+
+  // PUT /api/commands — 保存指令映射表（前端学习回写 / 外部工具修改）
+  if (req.method === 'PUT' && req.url === '/api/commands') {
+    readJsonBody(req, (err, parsed) => {
+      if (err || !parsed || typeof parsed !== 'object') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      if (!parsed.aliases || typeof parsed.aliases !== 'object') {
+        if (!parsed.actions || typeof parsed.actions !== 'object') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'aliases or actions object required' }));
+          return;
+        }
       }
       fs.mkdir(DATA_ROOT, { recursive: true }, (mkdirErr) => {
         if (mkdirErr) {
@@ -115,7 +453,7 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ ok: false, error: mkdirErr.message }));
           return;
         }
-        fs.writeFile(CONFIG_PATH, JSON.stringify(parsed, null, 2), 'utf-8', (writeErr) => {
+        fs.writeFile(COMMANDS_PATH, JSON.stringify(parsed, null, 2), 'utf-8', (writeErr) => {
           if (writeErr) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: false, error: writeErr.message }));
@@ -124,6 +462,163 @@ const server = http.createServer((req, res) => {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true }));
         });
+      });
+    });
+    return;
+  }
+
+  // POST /key/enter — 触发回车键（语音指令「发送」用；不碰剪贴板）。
+  // 需 macOS 辅助功能权限；失败降级为仅提示。
+  if (req.method === 'POST' && req.url === '/key/enter') {
+    const cmd = 'tell application "System Events" to keystroke return';
+    const as = spawn('osascript', ['-e', cmd], {
+      timeout: 2000,
+      env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+    });
+    as.on('exit', (code) => {
+      if (code === 0) {
+        console.log('[key] enter 已发送');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } else {
+        console.warn('[key] enter 发送失败 (exit:', code, ') — 可能缺少辅助功能权限');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: true,
+          warn: 'accessibility_permission_required',
+          message: '已尝试触发回车，但可能缺少辅助功能权限',
+        }));
+      }
+    });
+    as.on('error', (e) => {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: e.message }));
+    });
+    return;
+  }
+
+  // POST /api/llm/chat — OpenAI 兼容 Chat Completions 代理
+  // 浏览器 → 本服务 → 自定义服务商（baseUrl/apiKey/model 由前端传入，Key 只在本机流转）
+  if (req.method === 'POST' && req.url === '/api/llm/chat') {
+    readJsonBody(req, async (err, parsed) => {
+      if (err || !parsed || typeof parsed !== 'object') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      const baseUrl = typeof parsed.baseUrl === 'string' ? parsed.baseUrl.trim() : '';
+      const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '';
+      const model = typeof parsed.model === 'string' ? parsed.model.trim() : '';
+      const messages = Array.isArray(parsed.messages) ? parsed.messages : null;
+      if (!baseUrl || !model || !messages || !messages.length) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'baseUrl / model / messages are required' }));
+        return;
+      }
+      const endpoint = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+      const payload = {
+        model,
+        messages,
+        stream: false,
+        max_tokens: Number.isFinite(parsed.maxTokens) ? parsed.maxTokens : 64,
+      };
+      try {
+        const upstreamRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(30000),
+        });
+        const data = await upstreamRes.json().catch(() => ({}));
+        if (!upstreamRes.ok) {
+          const detail = (data && data.error && (data.error.message || data.error.code || data.error.type))
+            || JSON.stringify(data).slice(0, 300)
+            || `HTTP ${upstreamRes.status}`;
+          res.writeHead(upstreamRes.status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, status: upstreamRes.status, error: typeof detail === 'string' ? detail : String(detail) }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, data }));
+      } catch (e) {
+        const msg = (e && e.name === 'TimeoutError')
+          ? '连接超时：请检查 API 地址与网络'
+          : (e && e.cause && e.cause.code)
+            ? `无法连接服务商（${e.cause.code}）：请检查 API 地址是否可访问`
+            : (e.message || 'unknown error');
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: msg }));
+      }
+    });
+    return;
+  }
+
+  // POST /api/tasks/meeting-summary — 总结最近一次会议并生成 Markdown 文件
+  if (req.method === 'POST' && req.url === '/api/tasks/meeting-summary') {
+    readJsonBody(req, async (err) => {
+      if (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      try {
+        const result = await runMeetingSummary();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, ...result }));
+      } catch (e) {
+        const msg = (e && e.message) || 'unknown error';
+        console.warn('[meeting] 总结失败:', msg);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: msg }));
+      }
+    });
+    return;
+  }
+
+  // PUT /api/config — 整体覆盖本地配置（保留兼容；新代码请用 PATCH）
+  if (req.method === 'PUT' && req.url === '/api/config') {
+    readJsonBody(req, (err, parsed) => {
+      if (err || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid config' }));
+        return;
+      }
+      writeConfig(parsed, (writeErr) => {
+        if (writeErr) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: writeErr.message }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+    return;
+  }
+
+  // PATCH /api/config — 只更新指定字段
+  // 前端有三类互相独立的写入者（录音计时的 totalDuration、设置项的 settings、纠错规则
+  // 的 correctionRules），旧写法各自「GET 全量 → 改自己那一个字段 → PUT 全量」，两个
+  // 写入者交错时后写的那个会用陈旧快照把对方刚存的字段覆盖掉（丢失更新）；而且录音中
+  // 计时每 1s 就要把整份 config（含 API Key）重写一遍。合并放到服务端串行做，各写各的。
+  if (req.method === 'PATCH' && req.url === '/api/config') {
+    readJsonBody(req, (err, parsed) => {
+      if (err || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid config patch' }));
+        return;
+      }
+      patchConfig(parsed, (patchErr) => {
+        if (patchErr) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: patchErr.message }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
       });
     });
     return;
@@ -172,12 +667,13 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // GET /api/transcripts/events — 读取事件；支持 ?date=YYYY-MM-DD 或 ?from&to
+  // GET /api/transcripts/events — 读取事件；支持 ?date=YYYY-MM-DD、?from&to、?q=关键词（跨全部历史）
   if (req.method === 'GET' && req.url.startsWith('/api/transcripts/events')) {
     const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
     const date = url.searchParams.get('date');
     const fromParam = url.searchParams.get('from');
     const toParam = url.searchParams.get('to');
+    const q = (url.searchParams.get('q') || '').trim().toLowerCase();
 
     const parseEvents = data => data
       .split('\n')
@@ -191,8 +687,9 @@ const server = http.createServer((req, res) => {
       })
       .filter(Boolean);
 
-    const sendEvents = events => {
+    const sendEvents = (events, limit) => {
       events.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+      if (limit && events.length > limit) events = events.slice(-limit);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(events));
     };
@@ -231,7 +728,21 @@ const server = http.createServer((req, res) => {
         sendEvents([]);
         return;
       }
-      const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
+      // 文件名就是事件的本地日期（见 appendTranscriptEvent 的 `${localDateStamp}.jsonl`）。
+      // 先按请求时间窗把文件裁掉，避免为了取最近 30 分钟而把历史以来的全部 jsonl
+      // 读一遍、解析一遍——该接口由历史列表刷新高频调用，窗口裁剪后成本只与窗口天数相关。
+      // 搜索要跨全部历史，所以带 q 时不按日期裁剪文件
+      const fromDay = !q && Number.isFinite(from) ? localDateStamp(new Date(from)) : null;
+      const toDay = !q && Number.isFinite(to) ? localDateStamp(new Date(to)) : null;
+      const jsonlFiles = files.filter(file => {
+        if (!file.endsWith('.jsonl')) return false;
+        const day = file.slice(0, 10);
+        // YYYY-MM-DD 字典序即时间序
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return true; // 命名异常的文件保守保留
+        if (fromDay && day < fromDay) return false;
+        if (toDay && day > toDay) return false;
+        return true;
+      });
       let pending = jsonlFiles.length;
       const allEvents = [];
       if (pending === 0) {
@@ -243,6 +754,11 @@ const server = http.createServer((req, res) => {
           if (!fileErr) allEvents.push(...parseEvents(data));
           pending -= 1;
           if (pending === 0) {
+            if (q) {
+              sendEvents(allEvents.filter(event =>
+                String(event.text || '').toLowerCase().includes(q)), SEARCH_LIMIT);
+              return;
+            }
             sendEvents(allEvents.filter(event => {
               const ts = Date.parse(event.ts);
               return ts >= from && ts <= to;
@@ -431,9 +947,17 @@ const server = http.createServer((req, res) => {
   }
 
   const filePath = req.url === '/' ? '/index.html' : req.url;
-  const fullPath = path.join(__dirname, filePath);
+  if (DEV && req.url === '/__dev_reload.js') {
+    // 开发模式热更新探针：连接 dev.mjs 的 WebSocket，收到 reload 即刷新页面
+    res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(`(()=>{if(!window.WebSocket)return;let ws=null,retry=0;const host=location.hostname||'localhost';function connect(){try{ws=new WebSocket('ws://'+host+':'+${RELOAD_PORT});ws.onopen=()=>{retry=0};ws.onmessage=e=>{if(e.data==='reload')location.reload()};ws.onclose=()=>{ws=null;setTimeout(connect,Math.min(1000*Math.pow(2,retry++),5000))};ws.onerror=()=>{try{ws.close()}catch(_){}}}catch(_){}}connect();})();`);
+    return;
+  }
+  const staticRoot = DEV ? SOURCE_ROOT
+    : (fs.existsSync(path.join(STATIC_ROOT, 'index.html')) ? STATIC_ROOT : SOURCE_ROOT);
+  const fullPath = path.join(staticRoot, filePath);
 
-  if (!fullPath.startsWith(__dirname)) {
+  if (!fullPath.startsWith(staticRoot)) {
     res.writeHead(403); res.end();
     return;
   }
@@ -628,11 +1152,43 @@ wss.on('connection', (ws) => {
   }, 30000);
 });
 
+/**
+ * 释放指定 TCP 端口上的遗留进程
+ */
+function freePort(port) {
+  try {
+    const pid = require('child_process').execSync(
+      `lsof -ti tcp:${port} 2>/dev/null`,
+      { encoding: 'utf-8', timeout: 5000 }
+    ).trim();
+    if (pid) {
+      console.log(`[server] 释放端口 ${port} (PID: ${pid})`);
+      require('child_process').execSync(`kill -9 ${pid}`, { timeout: 3000 });
+    }
+  } catch (e) {
+    // lsof 无匹配或 kill 失败都忽略
+  }
+}
+
 // 监听 '::' 双栈：同时接受 IPv4 (127.0.0.1) 与 IPv6 (::1) 连接。
 // 前端 WebSocket 使用 localhost，在 Tauri WKWebView 中可能解析为 ::1，
 // 只绑 0.0.0.0 会导致 WebView 连不上（连接被拒）。
-server.listen(PORT, '::', () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-  console.log(`WebSocket proxy at ws://localhost:${PORT}`);
-  console.log(`Engines: bailian (cloud) / local (SenseVoice @ ${LOCAL_ASR_URL})`);
-});
+function listenWithRetry(server, port, retries) {
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE' && retries > 0) {
+      console.log(`[server] 端口 ${port} 被占用，尝试释放...`);
+      freePort(port);
+      setTimeout(() => listenWithRetry(server, port, retries - 1), 500);
+    } else {
+      console.error(`[server] 启动失败: ${err.message}`);
+      process.exit(1);
+    }
+  });
+  server.listen(port, '::', () => {
+    console.log(`Server running at http://localhost:${PORT}`);
+    console.log(`WebSocket proxy at ws://localhost:${PORT}`);
+    console.log(`Engines: bailian (cloud) / local (SenseVoice @ ${LOCAL_ASR_URL})`);
+  });
+}
+
+listenWithRetry(server, PORT, PORT_CHECK_RETRIES);

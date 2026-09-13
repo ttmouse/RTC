@@ -1,4 +1,4 @@
-import { fetchLocalConfig, saveLocalConfig } from './storage.js';
+import { fetchLocalConfig, patchLocalConfig } from './storage.js';
 
 const LEGACY_KEYS = [
   'rtc_asr_settings',
@@ -37,21 +37,18 @@ export async function migrateLegacyLocalConfig() {
 
   if (hasLegacyValues) {
     const config = await fetchLocalConfig();
-    let changed = false;
+    const patch = {};
     if (!config.settings && legacyValues.settings) {
-      config.settings = legacyValues.settings;
-      changed = true;
+      patch.settings = legacyValues.settings;
     }
     if (config.totalDuration == null && legacyValues.totalDuration > 0) {
-      config.totalDuration = legacyValues.totalDuration;
-      changed = true;
+      patch.totalDuration = legacyValues.totalDuration;
     }
     if (!config.correctionRules && legacyValues.correctionRules) {
-      config.correctionRules = legacyValues.correctionRules;
-      changed = true;
+      patch.correctionRules = legacyValues.correctionRules;
     }
-    if (changed) {
-      await saveLocalConfig(config);
+    if (Object.keys(patch).length) {
+      await patchLocalConfig(patch);
     }
   }
 

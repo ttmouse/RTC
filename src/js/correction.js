@@ -1,6 +1,6 @@
 import { state } from './state.js';
 import { $ } from './ui.js';
-import { fetchLocalConfig, saveLocalConfig } from './storage.js';
+import { fetchLocalConfig, patchLocalConfig } from './storage.js';
 
 export const DEFAULT_RULES = `美塔提示词 => Meta Prompt
 菲格马 => figma
@@ -147,9 +147,7 @@ function applyCorrectionRules(text) {
 }
 
 async function persistCorrectionRules(text) {
-  const config = await fetchLocalConfig();
-  config.correctionRules = text;
-  await saveLocalConfig(config);
+  await patchLocalConfig({ correctionRules: text });
 }
 
 export function saveCorrectionRules(text) {

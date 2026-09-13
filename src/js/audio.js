@@ -1,5 +1,5 @@
 import { state, VAD_METER_FULL_SCALE, isLocalEngine, normalizeEngine } from './state.js';
-import { $, setStatus } from './ui.js';
+import { $, setStatus, setRecordBtn } from './ui.js';
 import { vadSend, sendPCM, finalizePending, disconnectBailian } from './asr.js';
 import { flushTotalDuration } from './settings.js';
 
@@ -85,6 +85,7 @@ export async function startAudio() {
 export function stopRec() {
   state.wantRecording = false;
   state.recording = false;
+  state.recStartTs = 0;
   clearTimeout(state.reconnectTimer);
   try { if (state.proc) state.proc.disconnect(); } catch (e) {}
   try { if (state.srcNode) state.srcNode.disconnect(); } catch (e) {}
@@ -110,7 +111,7 @@ export function stopRec() {
   if (levelText) levelText.textContent = `0.0000 / ${state.vadThreshold.toFixed(4)}`;
   flushTotalDuration();
   const btn = $('btn');
-  btn.textContent = '▶ 开始录音';
   btn.className = '';
+  setRecordBtn(false);
   setStatus('就绪', false);
 }

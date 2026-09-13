@@ -1,14 +1,61 @@
-import { $, setStatus, toast } from './ui.js';
+import { $, setStatus, toast, setRecordBtn, initListAutoScroll } from './ui.js';
 import { state, VAD_METER_FULL_SCALE } from './state.js';
 import { DEFAULT_RULES, flushCorrectionRules, loadCorrectionRules, saveCorrectionRules } from './correction.js';
 import { ensurePastePermission } from './clipboard.js';
 import { connectASR, setAsrStopHandler } from './asr.js';
 import { getAudioConstraints, startAudio, stopRec } from './audio.js';
-import { clearHistory, renderHistory, startHistPoll } from './history.js';
-import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection } from './settings.js';
+import { clearHistory, renderHistory } from './history.js';
+import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, AI_PROVIDERS } from './settings.js';
 import { renderModelStatus, getModelStatus } from './model.js';
+import { initLearnedCommands } from './commands.js';
 import { migrateLegacyLocalConfig } from './config-migration.js';
 import { checkForUpdates, setupUpdateUI, updateVersionBadge } from './updater.js';
+
+/**
+ * 主界面底部显示本地服务累计运行时长。
+ * 启动时从 /api/status 拉取 uptime 基准，之后每秒本地递增；
+ * 每 60 秒重新校准一次，服务重启后自动归零重新计时。
+ * 服务不可达时显示「服务未连接」，用于判断后端是否正常运行。
+ */
+function initServerUptime() {
+  const el = $('statusTime');
+  if (!el) return;
+  let uptime = 0;
+
+  const render = () => {
+    // 录音中：header 状态区显示本段录音时长（由 recStartTs 计时）；空闲时显示服务运行时长
+    const s = state.recording && state.recStartTs
+      ? Math.max(0, Math.floor((Date.now() - state.recStartTs) / 1000))
+      : Math.max(0, Math.floor(uptime));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    el.textContent = h > 0
+      ? `${h}:${pad(m)}:${pad(sec)}`
+      : `${pad(m)}:${pad(sec)}`;
+    if (!state.recording) el.classList.remove('up-offline');
+  };
+
+  const fetchUptime = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8931/api/status');
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const data = await res.json();
+      if (data && typeof data.uptime === 'number') {
+        uptime = data.uptime;
+        render();
+      }
+    } catch {
+      el.textContent = '服务未连接';
+      el.classList.add('up-offline');
+    }
+  };
+
+  fetchUptime();
+  setInterval(() => { uptime += 1; render(); }, 1000);
+  setInterval(fetchUptime, 60000);
+}
 
 setAsrStopHandler(stopRec);
 
@@ -35,7 +82,8 @@ $('btn').onclick = async () => {
   state.sentCount = 0;
   if ($('count')) $('count').textContent = '';
   state.recording = true;
-  $('btn').textContent = '停止录音';
+  state.recStartTs = Date.now();
+  setRecordBtn(true);
   $('btn').className = 'on';
   setStatus('录音中', true);
   try {
@@ -53,7 +101,7 @@ $('btn').onclick = async () => {
     toast('启动录音失败: ' + e.message);
     state.wantRecording = false;
     state.recording = false;
-    $('btn').textContent = '▶ 开始录音';
+    setRecordBtn(false);
     $('btn').className = '';
     setStatus('就绪', false);
     try { if (state.stream) state.stream.getTracks().forEach(t => t.stop()); } catch (ex) {}
@@ -77,7 +125,11 @@ function showSettings(show) {
   $('queryBar').style.display = show ? 'none' : '';
   $('list').style.display = show ? 'none' : '';
   document.querySelector('footer').style.display = show ? 'none' : '';
-  if (show) renderModelStatus();
+  if (show) {
+    renderModelStatus();
+    syncAIForm();
+    loadStorageInfo();
+  }
 }
 
 $('settingsBtn').onclick = () => showSettings(true);
@@ -88,6 +140,7 @@ $('settingsSaveBtn').onclick = async () => {
     state.asrEngine = 'sensevoice';
     updateEngineBadge();
   }
+  readAIForm();
   saveASRSettings();
   saveCorrectionRules($('correctionRules').value);
   await flushASRSettings();
@@ -115,6 +168,18 @@ $('settingsResetBtn').onclick = async () => {
   state.autoPaste = false;
   state.autoEnter = false;
   state.filterOn = true;
+  // AI 服务商恢复默认（自定义：清空；预设：保留预设值）
+  const prevProvider = state.aiConfig.provider;
+  const defaults = AI_PROVIDERS[prevProvider] ? AI_PROVIDERS[prevProvider] : AI_PROVIDERS.custom;
+  state.aiConfig = {
+    provider: prevProvider,
+    baseUrl: defaults.baseUrl || '',
+    apiKey: '',
+    model: defaults.model || '',
+  };
+  const aiTestStatus = $('aiTestStatus');
+  if (aiTestStatus) { aiTestStatus.textContent = ''; aiTestStatus.className = 'key-test-status'; }
+  syncAIForm();
   syncToggleUI();
   updateEngineBadge();
   $('correctionRules').value = DEFAULT_RULES;
@@ -135,14 +200,16 @@ document.addEventListener('mouseup', () => {
 $('list').addEventListener('click', e => {
   const sel = window.getSelection();
   if (sel && !sel.isCollapsed) return;
-  const txt = e.target.closest('.txt');
+  const line = e.target.closest('.line');
+  if (!line) return;
+  const txt = line.querySelector('.txt');
   if (!txt) return;
   const text = txt.textContent.trim();
   if (!text) return;
   navigator.clipboard.writeText(text).then(() => {
-    txt.style.transition = 'background .15s';
-    txt.style.background = 'rgba(191,58,30,.08)';
-    setTimeout(() => { txt.style.background = ''; }, 400);
+    line.style.transition = 'background .15s';
+    line.style.background = 'rgba(191,58,30,.08)';
+    setTimeout(() => { line.style.background = ''; }, 400);
   }).catch(() => {});
 });
 
@@ -271,6 +338,46 @@ $('apiKey').addEventListener('blur', () => {
 });
 $('apiKeyTestBtn').onclick = testBailianConnection;
 
+// ---------- AI 服务商表单 ----------
+
+// 预设切换：自动填充 baseUrl / 模型名（用户已手填 values 时同样覆盖为预设值）
+$('aiProvider').onchange = function () {
+  const preset = AI_PROVIDERS[this.value];
+  if (!preset) return;
+  state.aiConfig.provider = this.value;
+  if (preset.baseUrl) $('aiBaseUrl').value = preset.baseUrl;
+  if (preset.model) $('aiModel').value = preset.model;
+  const st = $('aiTestStatus');
+  if (st) { st.textContent = ''; st.className = 'key-test-status'; }
+  readAIForm();
+  saveASRSettings();
+};
+
+$('aiBaseUrl').onchange = () => { readAIForm(); saveASRSettings(); };
+$('aiModel').onchange = () => { readAIForm(); saveASRSettings(); };
+$('aiApiKey').onchange = () => { readAIForm(); saveASRSettings(); };
+
+// API Key 明文/密文切换（复用百炼的交互）
+function setAIKeyVisible(show) {
+  const input = $('aiApiKey');
+  const btn = $('aiApiKeyToggle');
+  input.type = show ? 'text' : 'password';
+  btn.classList.toggle('showing', show);
+  btn.title = show ? '隐藏 API Key' : '显示 API Key';
+  btn.setAttribute('aria-label', btn.title);
+}
+$('aiApiKeyToggle').onclick = () => {
+  setAIKeyVisible($('aiApiKey').type === 'password');
+  $('aiApiKey').focus();
+};
+$('aiApiKey').addEventListener('blur', () => {
+  if ($('aiApiKey').type !== 'text') return;
+  if (document.activeElement === $('aiApiKeyToggle')) return;
+  setAIKeyVisible(false);
+});
+$('aiTestBtn').onclick = testAIConnection;
+
+
 $('silenceTimeout').oninput = function () {
   state.silenceTimeout = parseInt(this.value);
   $('silenceTimeoutLabel').textContent = state.silenceTimeout + 'ms';
@@ -321,23 +428,37 @@ $('corrReset').onclick = async () => {
   await flushCorrectionRules();
 };
 
-document.querySelectorAll('.qbtn[data-min]').forEach(b => {
-  b.onclick = () => {
-    document.querySelectorAll('.qbtn[data-min]').forEach(x => x.className = 'qbtn');
-    b.className = 'qbtn on';
-    state.qMinutes = +b.dataset.min;
-    void renderHistory(true).catch(e => {
-      console.error('[transcript] history load failed:', e.message || e);
+// 搜索框：停止输入 250ms 后重查一次，避免每敲一个字就打一次接口。
+// 这里必须判空：dev 模式下改 src/ 会触发热重载，页面有可能拿到「新 JS + 旧 HTML」的
+// 中间态；一旦 $('searchInput') 为 null 却不判空，整个模块会在求值阶段抛错，
+// 后面的启动流程（含首次 renderHistory）全部不执行，界面就成空列表。
+const searchInput = $('searchInput');
+let searchTimer = null;
+if (searchInput) searchInput.oninput = (e) => {
+  state.searchQuery = e.target.value.trim();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    void renderHistory(true).catch(err => {
+      console.error('[transcript] history load failed:', err.message || err);
     });
-  };
-});
+  }, 250);
+};
 
-$('clearBtn').onclick = () => {
-  if (confirm('确定清空所有历史记录？')) {
-    clearHistory()
-      .then(() => {})
-      .catch(e => toast('清空失败：' + (e.message || e)));
-  }
+$('clearDataBtn').onclick = () => {
+  if (!confirm('确定清除全部历史记录？该操作不可恢复。')) return;
+  clearHistory()
+    .then(() => toast('历史记录已清除'))
+    .catch(e => toast('清除失败：' + (e.message || e)));
+};
+
+$('nukeDataBtn').onclick = () => {
+  if (!confirm('确定清除所有数据？历史记录与全部设置都会被删除，且不可恢复。')) return;
+  clearHistory()
+    .then(() => {
+      $('settingsResetBtn').click();
+      toast('所有数据已清除');
+    })
+    .catch(e => toast('清除失败：' + (e.message || e)));
 };
 
 document.addEventListener('keydown', (e) => {
@@ -358,19 +479,21 @@ document.addEventListener('keydown', (e) => {
 
 (async () => {
   setStatus('就绪', false);
+  initListAutoScroll();
   await migrateLegacyLocalConfig();
   await Promise.all([
     loadCorrectionRules(),
     loadASRSettings(),
     loadTotalDuration(),
+    initLearnedCommands(),
   ]);
   if (state.autoPaste) ensurePastePermission();
   updateEngineBadge();
   refreshEngineMenuAvailability();
   setupUpdateUI();
   updateVersionBadge();
+  initServerUptime();
   await renderHistory(true);
-  startHistPoll();
   $('btn').click();
   // 启动 6 秒后静默检查更新；发现新版本时显示顶部横幅提醒
   setTimeout(() => checkForUpdates(false), 6000);
@@ -378,7 +501,78 @@ document.addEventListener('keydown', (e) => {
   console.error('[app] startup failed:', e.message || e);
 });
 
-/* 纠错规则模态框控制 */
+// ---------- 数据存储位置展示 ----------
+
+function storageBase() {
+  return (location.protocol === 'http:' || location.protocol === 'https:') && location.port === '8931'
+    ? ''
+    : 'http://127.0.0.1:8931';
+}
+
+function fmtBytes(n) {
+  if (!n) return '0 B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+let storagePaths = {};
+
+async function loadStorageInfo() {
+  try {
+    const r = await fetch(`${storageBase()}/api/storage`);
+    const data = await r.json();
+    if (!data || !data.dataRoot) return;
+    storagePaths = {
+      dataRoot: data.dataRoot,
+      eventsDir: data.eventsDir,
+      configFile: data.configFile,
+      commandsFile: data.commandsFile,
+    };
+    const st = data.stats || {};
+    $('storageDataRoot').textContent = data.dataRoot;
+    $('storageEvents').textContent =
+      `${data.eventsDir}（共 ${st.eventFiles || 0} 个记录文件 · ${fmtBytes(st.eventBytes)}）`;
+    $('storageConfigFile').textContent =
+      `${data.configFile}${st.configExists ? ' · 已存在' : ' · 尚未创建'}`;
+    $('storageCommandsFile').textContent =
+      `${data.commandsFile}${st.commandsExists ? ' · 已存在' : ' · 尚未创建'}`;
+  } catch (e) {
+    $('storageDataRoot').textContent = '无法读取（服务未连接）: ' + (e.message || e);
+  }
+}
+
+// 在访达中显示
+function ensureStorageButtons() {
+  const container = $('settingsPage');
+  if (!container) return;
+  container.querySelectorAll('.storage-open-btn').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.onclick = () => {
+      const path = storagePaths[btn.dataset.open];
+      if (!path) return;
+      if (window.__TAURI__ && window.__TAURI__.shell) {
+        window.__TAURI__.shell.open(path).catch(() => {});
+      } else {
+        toast('仅桌面版支持打开文件夹');
+      }
+    };
+  });
+  container.querySelectorAll('.storage-copy-btn').forEach(btn => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.onclick = () => {
+      const path = storagePaths[btn.dataset.copy];
+      if (!path) return;
+      navigator.clipboard.writeText(path)
+        .then(() => toast('路径已复制'))
+        .catch(() => toast('复制失败'));
+    };
+  });
+}
+ensureStorageButtons();
+
+// ---------- 纠错规则模态框控制 ----------
 window.correctionOpenEditor = function correctionOpenEditor() {
   document.getElementById('correctionModal').classList.add('open');
 };

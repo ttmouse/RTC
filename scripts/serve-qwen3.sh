@@ -7,7 +7,7 @@
 # 与正式链路（8931/8932 SenseVoice）完全隔离，可同时运行对比效果。
 # 页面里的引擎选择器仍选「本地引擎」，实际连到的会是 Qwen3-ASR。
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # 杀掉旧的 Qwen3 测试进程（只杀 8933/8934）
 kill $(lsof -ti:8933 2>/dev/null) 2>/dev/null

@@ -5,6 +5,8 @@
     "identifier": "io.rtc.transcriber",
     "build": {
         "frontendDist": "../dist",
+        "beforeDevCommand": "npm run dev:web",
+        "devUrl": "http://localhost:8931",
         "beforeBuildCommand": "npm run build"
     },
     "app": {

@@ -2,7 +2,7 @@
 # 启动 RTC 完整链路（本地 SenseVoice 引擎）
 # 先起 asr_local（ws://127.0.0.1:8932），再起 node server.js（HTTP + WS 代理 :8931）
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # 先杀掉旧进程
 kill $(lsof -ti:8931 2>/dev/null) 2>/dev/null

@@ -405,7 +405,20 @@ class ModelHTTPHandler(BaseHTTPRequestHandler):
 
 
 def start_model_http_server():
-    srv = ThreadingHTTPServer(("127.0.0.1", MODEL_HTTP_PORT), ModelHTTPHandler)
+    ThreadingHTTPServer.allow_reuse_address = True
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", MODEL_HTTP_PORT), ModelHTTPHandler)
+    except OSError as e:
+        print(f"[asr_local] 端口 {MODEL_HTTP_PORT} 被占用: {e}，尝试自动释放...")
+        import subprocess
+        pid = subprocess.run(
+            ["lsof", "-ti", f"tcp:{MODEL_HTTP_PORT}"],
+            capture_output=True, text=True
+        ).stdout.strip()
+        if pid:
+            subprocess.run(["kill", "-9", pid], capture_output=True)
+            time.sleep(0.5)
+        srv = ThreadingHTTPServer(("127.0.0.1", MODEL_HTTP_PORT), ModelHTTPHandler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     print(f"[asr_local] 模型管理 HTTP: http://127.0.0.1:{MODEL_HTTP_PORT}")
 
@@ -838,9 +851,30 @@ async def handle(ws):
 engine_mgr = EngineManager(initial_engine=ENGINE)
 
 
+def _free_port(port: int):
+    """释放指定 TCP 端口上的遗留进程"""
+    import subprocess
+    try:
+        pid = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}"],
+            capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        if pid:
+            print(f"[asr_local] 释放端口 {port} (PID: {pid})")
+            subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
+            time.sleep(0.3)
+    except Exception:
+        pass
+
+
 async def main():
     global _ASYNC_LOOP
     _ASYNC_LOOP = asyncio.get_running_loop()
+
+    # 启动前清理两个端口的残留进程，避免旧进程被 Tauri 杀掉后端口仍处于 TIME_WAIT
+    _free_port(PORT)
+    _free_port(MODEL_HTTP_PORT)
+
     # 先起模型管理 HTTP（8933）：即使推理依赖缺失，用户仍能下载模型 / 查看状态
     start_model_http_server()
 

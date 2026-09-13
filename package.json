@@ -4,8 +4,12 @@
     "description": "实时语音转文字工具：本地 SenseVoice 引擎（完全离线）/ 阿里云百炼 ASR / 浏览器 Web Speech，支持网页与 Tauri 桌面端。",
     "main": "index.js",
     "scripts": {
-        "build": "mkdir -p dist/css dist/js && cp index.html dist/index.html && cp -R css/. dist/css/ && cp -R js/. dist/js/",
-        "test": "node scripts/check-static.mjs"
+        "build": "rm -rf dist && mkdir -p dist/css dist/js && cp src/index.html dist/index.html && cp -R src/css/. dist/css/ && cp -R src/js/. dist/js/",
+    "dev": "cd src-tauri && tauri dev",
+    "dev:web": "node scripts/dev.mjs",
+        "test": "node scripts/check-static.mjs",
+        "rtc": "node scripts/rtc.mjs",
+        "rtc:transcript": "node scripts/transcript.mjs"
     },
     "keywords": [],
     "author": "",

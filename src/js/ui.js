@@ -20,6 +20,47 @@ export function setStatus(t, on) {
   $('dot').className = on ? 'on' : '';
 }
 
+export function setRecordBtn(recording) {
+  // 按钮已简化成纯图标圆形按钮：文案只留在 title/aria-label，保证可访问性
+  const label = recording ? '停止录音' : '开始录音';
+  const btn = $('btn');
+  if (btn) { btn.title = label; btn.setAttribute('aria-label', label); }
+  const iconMic = $('btnIconMic');
+  const iconPause = $('btnIconPause');
+  if (iconMic) iconMic.classList.toggle('hidden', !!recording);
+  if (iconPause) iconPause.classList.toggle('hidden', !recording);
+}
+
+// ---------- 列表跟随滚动 ----------
+// 只在用户本来就贴在底部时才自动跟随新内容，避免每 5s 的历史轮询
+// 把正在向上翻阅的人强行拽回底部。
+const BOTTOM_SLACK = 40;
+
+function listNearBottom() {
+  const list = $('list');
+  if (!list) return true;
+  return list.scrollHeight - list.scrollTop - list.clientHeight <= BOTTOM_SLACK;
+}
+
+/** 滚到底部；force=true 时忽略用户当前滚动位置（切换查询区间/强制重载时用） */
+export function scrollListToBottom(force) {
+  const list = $('list');
+  if (!list) return;
+  if (!force && !state.stickToBottom) return;
+  list.scrollTop = list.scrollHeight;
+  state.stickToBottom = true;
+}
+
+/** 绑定一次滚动监听，持续更新 state.stickToBottom */
+export function initListAutoScroll() {
+  const list = $('list');
+  if (!list || list.dataset.autoscrollBound) return;
+  list.dataset.autoscrollBound = '1';
+  list.addEventListener('scroll', () => {
+    state.stickToBottom = listNearBottom();
+  }, { passive: true });
+}
+
 export function tsParts(d) {
   const p = n => String(n).padStart(2, '0');
   return {
@@ -48,7 +89,7 @@ export function addLine(dateObj, text, isInterim) {
   }
   const div = document.createElement('div');
   div.className = 'line';
-  div.innerHTML = `<span class="ts"><b>${day}</b>${time}</span>` +
+  div.innerHTML = `<span class="ts">${time}</span>` +
     `<span class="txt${isInterim ? ' interim' : ''}"></span>`;
   const el = div.querySelector('.txt');
   if (isInterim) {
@@ -57,5 +98,5 @@ export function addLine(dateObj, text, isInterim) {
     el.textContent = text;
   }
   $('list').appendChild(div);
-  $('list').scrollTop = $('list').scrollHeight;
+  scrollListToBottom();
 }

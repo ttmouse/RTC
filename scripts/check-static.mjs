@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = [
-  'index.html',
+  'src/index.html',
   'playground.html',
   'playground-settings.html',
 ];
@@ -33,23 +33,23 @@ for (const file of files) {
     throw new Error(`${file}: hardcoded API key value detected`);
   }
 
-  if (file === 'index.html') {
+  if (file === 'src/index.html') {
     const inline = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)]
       .find((match) => match[2].trim());
     if (inline) throw new Error('index.html: inline script body found');
     if (!html.includes('rel="stylesheet" href="css/style.css"')) {
-      throw new Error('index.html: external stylesheet missing');
+      throw new Error('src/index.html: external stylesheet missing');
     }
     if (!html.includes('<script type="module" src="js/main.js"></script>')) {
-      throw new Error('index.html: module entry missing');
+      throw new Error('src/index.html: module entry missing');
     }
   }
 }
 
-const jsDir = path.join(root, 'js');
+const jsDir = path.join(root, 'src/js');
 const jsFiles = fs.readdirSync(jsDir)
   .filter(file => file.endsWith('.js'))
-  .map(file => path.join('js', file))
+  .map(file => path.join('src/js', file))
   .sort();
 
 for (const file of jsFiles) {

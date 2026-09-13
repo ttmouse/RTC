@@ -3,25 +3,31 @@
     --ink-faint:#8f8572; --rule:#d4cbb6; --seal:#bf3a1e; --seal-deep:#8f2a14;
     --radius:4px; --radius-sm:3px;
     --mono:"SF Mono","Menlo","Consolas",monospace;
-    --serif:"Noto Serif SC","Songti SC","STSong","SimSun",serif;
+    --font:"SF Mono","Menlo","Consolas","Noto Sans Mono CJK SC","Sarasa Mono SC","PingFang SC",monospace;
   }
   * { margin:0; padding:0; box-sizing:border-box; }
   html,body { height:100%; }
-  body { font-family:var(--serif); background:var(--paper); color:var(--ink);
+  body { font-family:var(--font); background:var(--paper); color:var(--ink);
          height:100dvh; display:flex; flex-direction:column; position:relative;
          -webkit-font-smoothing:antialiased; }
+  /* 背景纹理层：全视口 fixed，必须提升为独立合成层，否则每次滚动都会重绘
+     整屏噪点图案与径向渐变（WKWebView 下表现为列表滚动/悬停卡顿）。 */
   body::before{ content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    transform:translateZ(0); will-change:transform;
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.04'/%3E%3C/svg%3E"); }
   body::after{ content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    transform:translateZ(0); will-change:transform;
     background:radial-gradient(130% 80% at 50% -20%, rgba(255,252,240,.6), transparent 55%),
                radial-gradient(80% 50% at 100% 100%, rgba(160,140,100,.1), transparent 60%); }
 
   header{ position:relative; z-index:30; background:var(--ink); color:var(--paper);
-          padding:12px 20px; display:flex; justify-content:space-between; align-items:center;
-          border-bottom:3px double var(--seal); }
+         padding:12px 20px; display:flex; justify-content:space-between; align-items:center; }
   header h1{ font-size:16px; font-weight:700; letter-spacing:.12em; display:flex; align-items:center; gap:10px; }
   #status{ font-size:11px; display:flex; align-items:center; gap:6px; color:#b7ab92;
            font-family:var(--mono); letter-spacing:.04em; }
+  #statusTime{ font-family:var(--mono); font-size:11px; color:#b7ab92;
+        font-variant-numeric:tabular-nums; letter-spacing:.04em; }
+  #statusTime.up-offline{ color:#f29b8a; }
   #dot{ width:7px; height:7px; border-radius:50%; background:#5c5344; flex-shrink:0; }
   #dot.on{ background:var(--seal); box-shadow:0 0 0 3px rgba(191,58,30,.2); }
   .header-actions{ display:flex; align-items:center; gap:10px; }
@@ -32,37 +38,47 @@
   #settingsBtn:hover{ color:var(--seal); }
   #settingsBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
   .engineWrap{ position:relative; display:flex; align-items:center; }
-  #engineBadge{ font-size:11px; color:var(--ink-faint); font-family:var(--mono);
-        padding:4px 6px; border:none; border-radius:var(--radius-sm);
-        letter-spacing:.02em; cursor:pointer; background:none;
-        display:inline-flex; align-items:center; gap:5px; }
-  #engineBadge .caret{ flex-shrink:0; opacity:.8; }
-  #engineBadge:hover{ color:var(--paper); }
-  #engineBadge.bailian{ color:var(--seal-deep); }
-  #engineBadge.bailian:hover{ color:var(--seal); }
+  /* 左下胶囊：模型切换（原右上 header 移入 footer actionRow 左侧）；
+     盒模型与 .footerToggle 严格对齐：高度/内距/圆角/字体/描边一致 */
+  .engineWrap.enginePill{ flex:1 1 0; min-width:0; }
+  #engineBadge{ display:inline-flex; align-items:center; justify-content:center; gap:6px;
+        min-height:46px; padding:8px 20px; border:1px solid var(--rule);
+        border-radius:999px; background:none; color:var(--ink-soft);
+        font-family:var(--font); font-size:13px; line-height:1; cursor:pointer; white-space:nowrap;
+        /* 防止 macOS WebKit 把按钮文字当作可选中文本，拖选/微动会吞掉 click */
+        -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+        transition:border-color .15s, color .15s, background-color .15s; }
+  #engineBadge .caret{ flex-shrink:0; opacity:.8; pointer-events:none; }
+  /* 悬停：底色一并变化（不只靠描边），与列表行悬停同一套墨色调 */
+  #engineBadge:hover{ background:rgba(26,22,17,.07); border-color:var(--ink-soft); color:var(--ink); }
+  #engineBadge.bailian{ border-color:var(--seal); color:var(--seal-deep); }
   #engineBadge:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
-  /* 自定义引擎下拉菜单（不使用浏览器原生 select，避免 WebKit 弹出层闪烁） */
-  .engineMenu{ position:absolute; top:calc(100% + 8px); right:0; z-index:80; min-width:210px;
+  /* 自定义引擎下拉菜单（不使用浏览器原生 select，避免 WebKit 弹出层闪烁）；
+     胶囊在窗口底部，菜单向上弹出 */
+  .engineMenu{ position:absolute; left:0; bottom:calc(100% + 8px); z-index:80; min-width:210px;
         background:var(--paper); border:1px solid var(--rule); border-radius:6px;
         box-shadow:0 10px 30px rgba(0,0,0,.22); padding:5px; }
   .engineMenu.hidden{ display:none; }
   .engineOption.hidden{ display:none; }
   .engineOption{ display:flex; align-items:center; width:100%; padding:8px 12px; background:none;
-        border:none; border-radius:4px; font-family:var(--serif); font-size:12px;
+        border:none; border-radius:4px; font-family:var(--font); font-size:12px;
         color:var(--ink-soft); cursor:pointer; letter-spacing:.04em; text-align:left; }
   .engineOption:hover{ background:var(--paper-2); color:var(--ink); }
   .engineOption.on{ color:var(--seal-deep); font-weight:700; }
   .engineOption:focus-visible{ outline:2px solid var(--seal); outline-offset:-2px; }
 
   main{ flex:1; overflow-y:auto; padding:16px 20px 24px; position:relative; z-index:1;
-        scrollbar-width:thin; scrollbar-color:var(--rule) transparent; }
+        scrollbar-width:thin; scrollbar-color:rgba(212,203,182,.6) transparent; }
 
-  .line{ padding:6px 0; display:flex; gap:12px; align-items:baseline;
-         border-bottom:1px dotted var(--rule); }
+  /* 不加行分隔线：转写是连续口语流水，不是网格。靠行距区分即可，
+     一屏的分隔线从 8 条降到 1 条（只剩 .daysep 的日期区块边界）。 */
+  .line{ padding:8px 0; display:flex; gap:12px; align-items:baseline;
+         cursor:pointer; transition:background-color .12s linear; }
+  /* 悬停：整条记录非常淡的背景提示可点击；点击 .txt 会复制整句（已有逻辑） */
+  .line:hover{ background:rgba(26,22,17,.04); }
+  /* 日期已由 .daysep 统管，这里只留时间，左栏从两行压到一行 */
   .ts{ color:var(--ink-faint); font-size:10px; font-family:var(--mono);
-       flex-shrink:0; min-width:112px; text-align:right; letter-spacing:.02em; }
-  .ts b{ color:var(--ink-soft); font-weight:500; display:block; font-size:10px;
-         letter-spacing:.12em; margin-bottom:1px; }
+       flex-shrink:0; min-width:56px; text-align:right; letter-spacing:.02em; }
   .txt{ color:var(--ink); font-size:15px; line-height:1.7; flex:1;
         text-wrap:pretty; }
   .cursor{ display:inline-block; width:2px; height:1em; background:var(--seal);
@@ -76,26 +92,27 @@
            width:30%; height:1px; background:var(--rule); }
   .daysep::before{ left:0; } .daysep::after{ right:0; }
 
-  #queryBar{ padding:10px 20px; background:var(--paper-2);
-             border-bottom:1px solid var(--rule); gap:8px; flex-wrap:wrap;
+  #queryBar{ padding:6px 20px; background:var(--paper-2);
+             gap:8px; flex-wrap:wrap;
              align-items:center; position:relative; z-index:2; display:flex; }
-  .qbtn{ padding:5px 14px; border:1px solid var(--rule); border-radius:999px;
-         background:transparent; font-size:12px; color:var(--ink-soft); cursor:pointer;
-         font-family:var(--serif); }
-  .qbtn.on{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
-  .qbtn:hover{ border-color:var(--ink); }
-  .qbtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
-  #clearBtn{ border-style:dashed; }
-  #clearBtn:hover{ border-color:var(--seal); color:var(--seal); }
+  #searchInput{ flex:1; min-width:0; padding:9px 14px; border:1px solid var(--rule);
+                border-radius:999px; background:var(--paper); font-size:12px; line-height:1.2;
+                font-family:var(--font); color:var(--ink); outline:none;
+                -webkit-appearance:none; appearance:none; accent-color:var(--seal); }
+  #searchInput::placeholder{ color:var(--ink-faint); }
+  #searchInput:focus{ border-color:var(--seal); }
 
   footer{ background:var(--paper-2); border-top:1px solid var(--rule);
           padding:10px 20px 12px; display:grid; gap:8px;
           position:relative; z-index:2; }
-  #versionBadge{ font-size:10px; color:var(--ink-faint); opacity:0.5; user-select:none; }
-  #btn{ background:var(--ink); color:var(--paper); border:none; padding:10px 34px;
-        min-width:170px; min-height:46px; border-radius:999px;
-        font-size:15px; font-weight:700; cursor:pointer;
-        font-family:var(--serif); letter-spacing:.1em; }
+  #versionBadge{ font-size:10px; color:#b7ab92; opacity:0.55; user-select:none;
+                 letter-spacing:.04em; font-weight:400; }
+  /* 录音按钮：纯图标圆形按钮（文案走 title/aria-label，不占版面） */
+  #btn{ background:var(--ink); color:var(--paper); border:none;
+        width:56px; height:56px; flex:none; padding:0; border-radius:50%;
+        cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+  #btn svg{ flex-shrink:0; }
+  #btn svg.hidden{ display:none; }
   #btn:hover{ background:#2d271f; }
   #btn.on{ background:var(--seal); }
   #btn.on:hover{ background:var(--seal-deep); }
@@ -116,20 +133,23 @@
         background:var(--seal-deep); z-index:2; }
   #levelMeterText{ font-family:var(--mono); font-size:10px; line-height:1.2;
         color:var(--ink-faint); white-space:nowrap; letter-spacing:0; }
-  .actionRow{ display:flex; justify-content:center; align-items:center;
+  /* 底部三段式：左=模型胶囊，中=录音按钮（窗口正中），右=两个开关（贴右）；
+     左右两段等宽弹性(flex:1 1 0)，中间按钮就落在窗口几何中心 */
+  .actionRow{ display:flex; align-items:center;
         position:relative; gap:10px; }
-  .actionRow > #versionBadge{ position:absolute; right:0; top:50%;
-        transform:translateY(-50%); }
-  .footerToggles{ display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  /* 右侧开关：纯图标圆形按钮（无文字，含义走 title/aria-label） */
+  .footerToggles{ display:flex; align-items:center; gap:8px;
+        flex:1 1 0; min-width:0; justify-content:flex-end; }
   .footerToggle{ display:inline-flex; align-items:center; justify-content:center;
-        gap:6px; min-height:46px; padding:8px 20px; border:1px solid var(--rule);
-        border-radius:999px; background:none; color:var(--ink-soft);
-        font-family:var(--serif); font-size:13px; line-height:1; cursor:pointer;
-        opacity:.65; white-space:nowrap; transition:opacity .15s, border-color .15s, color .15s; }
+        width:46px; height:46px; padding:0; border:1px solid var(--rule);
+        border-radius:50%; background:none; color:var(--ink-soft);
+        font-family:var(--font); font-size:13px; line-height:1; cursor:pointer;
+        opacity:.65; white-space:nowrap; transition:opacity .15s, background .15s, border-color .15s, color .15s; }
   .footerToggle svg{ flex-shrink:0; }
   .footerToggle:hover{ opacity:1; border-color:var(--ink-soft); color:var(--ink); }
-  .footerToggle.on{ opacity:1; border-color:var(--seal); color:var(--seal-deep); }
-  .footerToggle.on:hover{ border-color:var(--seal-deep); color:var(--seal-deep); }
+  /* 激活态：深灰实心（不用主题红，避免与录制按钮的红色状态抢视觉） */
+  .footerToggle.on{ opacity:1; background:var(--ink-soft); border-color:var(--ink-soft); color:var(--paper); }
+  .footerToggle.on:hover{ background:var(--ink); border-color:var(--ink); }
 
   .footerToggle:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
   /* 全页面设置面板 */
@@ -191,8 +211,8 @@
   .s-field .select-wrap::after{ content:""; position:absolute; right:10px; top:calc(50% - 2px); border-left:4px solid transparent; border-right:4px solid transparent; border-top:5px solid var(--ink-faint); pointer-events:none; }
   .s-field textarea{ width:100%; min-height:80px; padding:6px 8px; border:1px solid var(--rule); border-radius:3px; background:var(--paper); font-size:12px; font-family:var(--mono); color:var(--ink); resize:vertical; outline:none; line-height:1.5; }
   .s-field textarea:focus{ border-color:var(--seal); }
-  .s-field input[type=password]{ width:100%; padding:6px 8px; border:1px solid var(--rule); border-radius:3px; background:var(--paper); font-size:12px; font-family:var(--mono); color:var(--ink); outline:none; }
-  .s-field input[type=password]:focus{ border-color:var(--seal); }
+  .s-field input[type=password], .s-field input[type=text]{ width:100%; padding:6px 8px; border:1px solid var(--rule); border-radius:3px; background:var(--paper); font-size:12px; font-family:var(--mono); color:var(--ink); outline:none; }
+  .s-field input[type=password]:focus, .s-field input[type=text]:focus{ border-color:var(--seal); }
   /* API Key 输入：明文切换 + 连接测试 */
   .s-field .key-wrap{ position:relative; }
   .s-field .key-wrap input{ width:100%; padding:6px 34px 6px 8px; border:1px solid var(--rule);
@@ -231,14 +251,14 @@
   .s-page-foot .sbtn.danger{ color:var(--seal); border-color:var(--seal); margin-left:auto; }
   .s-page-foot .sbtn.danger:hover{ background:var(--seal-light, rgba(191,58,30,.08)); }
   #err{ color:var(--seal-deep); font-size:12px; padding:5px 20px; display:none;
-        background:#f3e3dc; position:relative; z-index:2; font-family:var(--serif); }
+        background:#f3e3dc; position:relative; z-index:2; font-family:var(--font); }
   #updateBanner{ display:flex; align-items:center; gap:10px; padding:6px 16px;
         background:#fff7e0; border-bottom:1px solid #e8c96a; color:#7a5b00;
-        font-size:12px; font-family:var(--serif); position:relative; z-index:2; }
+        font-size:12px; font-family:var(--font); position:relative; z-index:2; }
   #updateBanner.hidden{ display:none; }
   #updateBanner #updateBannerText{ flex:1; }
   #updateBanner #updateInstallBtn{ background:#b8860b; color:#fff; border:none; border-radius:3px;
-        padding:3px 10px; cursor:pointer; font-weight:600; font-family:var(--serif); }
+        padding:3px 10px; cursor:pointer; font-weight:600; font-family:var(--font); }
   #updateBanner #updateInstallBtn:disabled{ opacity:.55; cursor:default; }
   #updateBanner #updateBannerClose{ background:none; border:none; font-size:15px; cursor:pointer;
         color:#a08a4a; line-height:1; padding:2px 6px; }
@@ -258,8 +278,6 @@
   #updateBanner .update-progress-text{ min-width:36px; color:#a08a4a; }
   #updateBanner .update-progress-track{ background:#e8c96a; }
   #updateBanner .update-progress-fill{ background:#b8860b; }
-  .line{ position:relative; }
-    /* 选择复制由浮动按钮处理（见 JS） */
 
 
 
@@ -274,20 +292,17 @@
     header{ padding:10px 14px; flex-wrap:wrap; gap:6px; }
     header h1{ font-size:14px; }
     .header-actions{ flex-wrap:wrap; gap:6px; }
-    #engineBadge{ font-size:10px; padding:3px 4px; }
+    #engineBadge{ font-size:12px; padding:6px 16px; min-height:40px; }
     .line{ gap:8px; }
-    .ts{ min-width:80px; font-size:10px; }
+    .ts{ min-width:56px; font-size:10px; }
     .txt{ font-size:14px; }
-    #queryBar{ padding:8px 14px; }
-    .qbtn{ font-size:11px; padding:4px 10px; }
+    #queryBar{ padding:6px 14px; }
+    #searchInput{ font-size:12px; padding:9px 12px; }
     footer{ padding:8px 14px 10px; gap:6px; }
-    #btn{ min-width:150px; min-height:40px; padding:8px 24px; font-size:14px; }
-    .footerToggle{ min-height:40px; padding:6px 16px; font-size:12px; }
+    #btn{ width:48px; height:48px; }
+    #btn svg{ width:20px; height:20px; }
+    .footerToggle{ width:40px; height:40px; padding:0; }
     #versionBadge{ font-size:9px; }
-  }
-
-  @media (max-width:420px){
-    .actionRow > #versionBadge{ display:none; }
   }
 
   /* 模态框遮罩 */
@@ -312,7 +327,7 @@
   .modal-overlay .modal-foot{ display:flex; gap:8px; padding:10px 20px 14px;
     border-top:1px solid var(--rule); }
   .modal-overlay .modal-foot .sbtn{ padding:7px 20px; border:1px solid var(--rule);
-    border-radius:var(--radius); font-size:12px; font-family:var(--serif); cursor:pointer;
+    border-radius:var(--radius); font-size:12px; font-family:var(--font); cursor:pointer;
     letter-spacing:.08em; color:var(--ink-soft); background:transparent; }
   .modal-overlay .modal-foot .sbtn:hover{ border-color:var(--ink); color:var(--ink); }
   .modal-overlay .modal-foot .sbtn.primary{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
@@ -322,3 +337,4 @@
   @media(max-width:520px){
     .modal-overlay .modal-box{ width:100vw; max-width:100vw; max-height:100vh; border-radius:0; }
   }
+

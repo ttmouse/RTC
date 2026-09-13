@@ -20,7 +20,10 @@
 # 1. 安装依赖
 npm install
 
-# 2. 启动服务（提供 WebSocket 代理 + HTTP 粘贴端点）
+# 2. 构建前端
+npm run build
+
+# 3. 启动服务（提供 WebSocket 代理 + HTTP 粘贴端点）
 node server.js
 
 # 3. 浏览器打开 http://localhost:8931
@@ -38,6 +41,21 @@ cargo tauri build
 
 # 3. 产物在 src-tauri/target/release/bundle/ 下
 ```
+
+### 方式三：开发模式（热更新，默认桌面端 APP）
+
+```bash
+# 1. 启动桌面端开发（Tauri 窗口 + 热更新，首次需编译 1-3 分钟）
+npm run dev
+
+# 2. 只想在浏览器里快速调 UI 时
+npm run dev:web   → 浏览器打开 http://localhost:8931
+```
+
+- **改 src/ 下任何文件，保存即自动刷新**（CSS / HTML / JS 都支持，桌面窗口和浏览器都生效）
+- 想顺手看等宽字体效果、调样式、改 UI，先 `npm run dev:web` 在浏览器里调，再 `npm run dev` 看桌面效果
+- 开发前请**退出已安装的 RTC APP**（它的内置服务占用 8931 端口，会与开发服务冲突）
+- 注意：改 `server.js` 等后端代码不会自动重启，需 Ctrl+C 重跑
 
 ## 安装本地 SenseVoice 模型
 
@@ -98,9 +116,9 @@ pip install sherpa-onnx numpy websockets
 ## 目录结构
 
 ```text
-index.html            # HTML 骨架与 module entry
-css/style.css         # 全部样式
-js/                   # 前端 ES 模块
+src/index.html        # HTML 骨架与 module entry
+src/css/style.css     # 全部样式
+src/js/                # 前端 ES 模块
   main.js             # 事件绑定与启动入口
   state.js            # 共享状态
   ui.js               # DOM/UI 工具
@@ -111,10 +129,12 @@ js/                   # 前端 ES 模块
   audio.js            # 录音管道
   settings.js         # 设置持久化与状态同步
 server.js             # Node 后端（HTTP + WebSocket 代理）
-proxy.py              # 阿里云百炼 ASR WebSocket 代理
+scripts/proxy.py      # 阿里云百炼 ASR WebSocket 代理
 asr_local/server.py   # 本地 SenseVoice 引擎服务
+scripts/              # 启动、模型与检查脚本
+docs/                 # 产品分析报告
 src-tauri/            # Tauri 桌面端
-scripts/check-static.mjs  # 静态检查脚本
+dist/                 # 构建产物（不入库）
 ```
 
 ## 许可

@@ -314,6 +314,39 @@ fn paste_text(text: String, auto_enter: Option<bool>) -> Result<PasteOutcome, St
     Ok(outcome)
 }
 
+/// 激活指定应用。
+///
+/// 不做白名单限制（应用名由前端指令/LLM 学习/CLI 传入，产品允许打开任意已安装应用）；
+/// 仅做字符集校验防注入：`open -a` 以参数形式接收（无 shell 拼接），
+/// 但防御性校验只允许安全字符，避免异常输入。`open` 对不存在的应用会失败返回，无破坏面。
+#[tauri::command]
+fn activate_app(app: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if app.is_empty() || app.len() > 64 {
+            return Err("无效的应用名".into());
+        }
+        if !app.chars().all(|c| c.is_alphanumeric() || c.is_whitespace() || "-_.".contains(c)) {
+            return Err("应用名包含非法字符".into());
+        }
+        let status = Command::new("/usr/bin/open")
+            .args(["-a", app.as_str()])
+            .status()
+            .map_err(|e| format!("启动应用失败: {}", e))?;
+        if status.success() {
+            Ok("ok".into())
+        } else {
+            Err(format!("应用不存在或无法打开: {}", app))
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("应用指令目前仅支持 macOS".into())
+    }
+}
+
 #[tauri::command]
 fn accessibility_permission() -> bool {
     mac_accessibility::is_trusted()
@@ -407,6 +440,28 @@ fn find_binary(name: &str) -> Option<String> {
     }
 
     None
+}
+
+/// 杀掉占用指定端口的遗留进程（防止上次异常退出后端口残留）
+fn kill_previous_processes(port: u16) {
+    use std::process::Command;
+    let output = Command::new("lsof")
+        .args(["-ti", &format!("tcp:{}", port)])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        });
+    if let Some(pids) = output {
+        for pid in pids.lines().filter(|l| !l.is_empty()) {
+            println!("[tauri] 释放端口 {port} (PID: {pid})");
+            let _ = Command::new("kill").args(["-9", pid]).status();
+        }
+    }
 }
 
 /// 启动 Node.js 服务（server.js）
@@ -701,6 +756,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             paste_text,
             copy_to_clipboard,
+            activate_app,
             accessibility_permission,
             request_accessibility_permission
         ])
@@ -708,26 +764,48 @@ pub fn run() {
             let handle = app.handle().clone();
             restore_window_state(&handle);
 
-            // 启动 Node.js 服务
-            let node_child = start_node_server(&handle);
+            let is_dev = cfg!(debug_assertions);
+
+            // 生产/打包版：清理上一轮残留进程后自启全套服务（端口被占时旧服务是最可能的来源）。
+            // dev 模式：不杀任何已有进程——8931 可能由 npm run dev:web（dev.mjs）提供，
+            // 8932/8933 可能由上轮残留或被复用的 ASR 占用；直接复用监听中的服务，
+            // 缺失才补齐启动，避免重复起服务/会话中途被杀导致「停止录音后无法再开始」。
+            let (node_child, node_reused) = if is_dev {
+                if wait_for_tcp("127.0.0.1", 8931, 1) {
+                    println!("[tauri] dev: 复用已有 Node 服务 (127.0.0.1:8931)");
+                    (None, true)
+                } else {
+                    (start_node_server(&handle), false)
+                }
+            } else {
+                kill_previous_processes(8931);
+                kill_previous_processes(8932);
+                kill_previous_processes(8933);
+                (start_node_server(&handle), false)
+            };
             if let Some(child) = node_child {
                 let state = app.state::<AppState>();
                 *state.node_server.lock().unwrap() = Some(child);
             }
 
-            // 启动本地 ASR
-            let asr_started = {
-                let asr_child = start_asr_server(&handle);
-                let started = asr_child.is_some();
-                if let Some(child) = asr_child {
-                    let state = app.state::<AppState>();
-                    *state.asr_server.lock().unwrap() = Some(child);
+            let (asr_child, asr_reused) = if is_dev {
+                if wait_for_tcp("127.0.0.1", 8932, 1) {
+                    println!("[tauri] dev: 复用已有本地 ASR (127.0.0.1:8932)");
+                    (None, true)
+                } else {
+                    (start_asr_server(&handle), false)
                 }
-                started
+            } else {
+                (start_asr_server(&handle), false)
             };
+            let asr_started = asr_child.is_some();
+            if let Some(child) = asr_child {
+                let state = app.state::<AppState>();
+                *state.asr_server.lock().unwrap() = Some(child);
+            }
 
             // 轮询等待 Node.js 服务就绪（最多 15 秒）
-            let node_ready = wait_for_http("http://127.0.0.1:8931", 15);
+            let node_ready = if node_reused { true } else { wait_for_http("http://127.0.0.1:8931", 15) };
             if node_ready {
                 println!("[tauri] Node.js 服务就绪");
             } else {
@@ -735,8 +813,8 @@ pub fn run() {
             }
 
             // 轮询等待本地 ASR 就绪（最多 30 秒，模型加载约 2-3 秒）
-            if asr_started {
-                let asr_ready = wait_for_tcp("127.0.0.1", 8932, 30);
+            if asr_started || asr_reused {
+                let asr_ready = if asr_reused { true } else { wait_for_tcp("127.0.0.1", 8932, 30) };
                 if asr_ready {
                     println!("[tauri] 本地 ASR 就绪");
                 } else {
