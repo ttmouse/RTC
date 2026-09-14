@@ -133,7 +133,9 @@ function commandRowHtml(section, key, value) {
     target = `<input class="cmdInput cmdValueIn" value="${escHtml(value)}" placeholder="要发出去的话" spellcheck="false">`;
   } else {
     const label = section === 'actions' ? (ACTION_LABELS[value] || value || '选择动作') : (value || '选择应用');
-    target = `<button type="button" class="cmdTargetBtn${value ? '' : ' empty'}" data-value="${escHtml(value)}">${escHtml(label)}</button>`;
+    // title：右边这一栏窄，长应用名（如 Karabiner-VirtualHIDDevice-Manager）会被截断，
+    // 鼠标停留一下能看到全名
+    target = `<button type="button" class="cmdTargetBtn${value ? '' : ' empty'}" data-value="${escHtml(value)}" title="${escHtml(label)}">${escHtml(label)}</button>`;
   }
   return `<div class="cmdEditRow" data-section="${section}">`
     + `<input class="cmdInput cmdPhraseIn" value="${escHtml(key)}" placeholder="说法，多个用 ｜ 隔开" spellcheck="false">`

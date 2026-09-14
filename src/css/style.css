@@ -460,7 +460,11 @@
   .cmdInput{ flex:1 1 0; min-width:0; height:32px; padding:0 10px; border:1px solid var(--rule);
         border-radius:var(--radius); background:var(--paper); color:var(--ink);
         font-family:inherit; font-size:13px; outline:none; }
-  .cmdEditRow .cmdPhraseIn{ flex:0 0 28%; }
+  /* 说法一栏常要写好几个说法（飞书｜飞出｜飞速），右边只是应用名或动作名，都很短——
+     所以这两种行让左边吃满剩余宽度，右边只留够读一个名字。快捷短语的右边是要发出去的
+     那段话，本来就长，保持默认的左右等宽。 */
+  .cmdEditRow[data-section="aliases"] .cmdTargetBtn,
+  .cmdEditRow[data-section="actions"] .cmdTargetBtn{ flex:0 0 200px; }
   .cmdInput::placeholder{ color:var(--ink-faint); }
   .cmdInput:focus{ border-color:var(--ink-soft); }
   .cmdInput:focus-visible{ outline:2px solid var(--seal); outline-offset:-2px; }
