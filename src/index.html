@@ -219,7 +219,7 @@
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <span id="corrCount" style="font-size:11px;color:var(--ink-faint);">0 条规则</span>
-            <button class="sbtn" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);" onclick="correctionOpenEditor()">管理</button>
+            <button class="sbtn sm" onclick="correctionOpenEditor()">管理</button>
           </div>
         </div>
       </div>
@@ -281,32 +281,32 @@
         <div class="fl">数据目录</div>
         <div class="fd" id="storageDataRoot">加载中…</div>
         <div style="display:flex;gap:6px;margin-top:4px;">
-          <button class="sbtn storage-open-btn" data-open="dataRoot" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);">在访达中显示</button>
-          <button class="sbtn storage-copy-btn" data-copy="dataRoot" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);">复制路径</button>
+          <button class="sbtn sm storage-open-btn" data-open="dataRoot">在访达中显示</button>
+          <button class="sbtn sm storage-copy-btn" data-copy="dataRoot">复制路径</button>
         </div>
       </div>
       <div class="s-field">
         <div class="fl">历史记录</div>
         <div class="fd" id="storageEvents">加载中…</div>
         <div style="display:flex;gap:6px;margin-top:4px;">
-          <button class="sbtn storage-open-btn" data-open="eventsDir" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);">在访达中显示</button>
-          <button class="sbtn storage-copy-btn" data-copy="eventsDir" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);">复制路径</button>
+          <button class="sbtn sm storage-open-btn" data-open="eventsDir">在访达中显示</button>
+          <button class="sbtn sm storage-copy-btn" data-copy="eventsDir">复制路径</button>
         </div>
       </div>
       <div class="s-field">
         <div class="fl">配置文件</div>
         <div class="fd" id="storageConfigFile">加载中…（含 AI 服务商配置与 API Key，勿外发）</div>
         <div style="display:flex;gap:6px;margin-top:4px;">
-          <button class="sbtn storage-open-btn" data-open="configFile" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);">在访达中显示</button>
-          <button class="sbtn storage-copy-btn" data-copy="configFile" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);">复制路径</button>
+          <button class="sbtn sm storage-open-btn" data-open="configFile">在访达中显示</button>
+          <button class="sbtn sm storage-copy-btn" data-copy="configFile">复制路径</button>
         </div>
       </div>
       <div class="s-field">
         <div class="fl">指令配置文件</div>
         <div class="fd" id="storageCommandsFile">加载中…（语音指令映射，可发给外部 AI Agent）</div>
         <div style="display:flex;gap:6px;margin-top:4px;">
-          <button class="sbtn storage-open-btn" data-open="commandsFile" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);">在访达中显示</button>
-          <button class="sbtn storage-copy-btn" data-copy="commandsFile" style="padding:3px 10px;font-size:11px;border:1px solid var(--rule);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft);">复制路径</button>
+          <button class="sbtn sm storage-open-btn" data-open="commandsFile">在访达中显示</button>
+          <button class="sbtn sm storage-copy-btn" data-copy="commandsFile">复制路径</button>
         </div>
       </div>
     </div>
@@ -319,7 +319,7 @@
             <div class="tt">清除历史记录</div>
             <div class="ts">删除全部语音转写记录（不可恢复）</div>
           </div>
-          <button class="sbtn danger" id="clearDataBtn" style="margin:0;flex:none;padding:5px 14px;">清 除</button>
+          <button class="sbtn danger" id="clearDataBtn">清 除</button>
         </div>
       </div>
       <div class="s-field">
@@ -328,23 +328,25 @@
             <div class="tt">清除所有数据</div>
             <div class="ts">清空历史记录，并恢复 API、AI 服务商、纠错规则等所有设置为默认</div>
           </div>
-          <button class="sbtn danger" id="nukeDataBtn" style="margin:0;flex:none;padding:5px 14px;">清 除</button>
+          <button class="sbtn danger" id="nukeDataBtn">清 除</button>
         </div>
       </div>
     </div>
 
-    <div class="sg-title">软件更新</div>
-    <div class="s-field">
-      <div class="toggle-row">
-        <div class="ti">
-          <div class="tt">应用更新</div>
-          <div class="ts" id="updateStatus">当前版本 v1.0.20</div>
+    <div class="s-group">
+      <div class="sg-title">软件更新</div>
+      <div class="s-field">
+        <div class="toggle-row">
+          <div class="ti">
+            <div class="tt">应用更新</div>
+            <div class="ts" id="updateStatus">当前版本 v1.0.20</div>
+          </div>
+          <button class="sbtn" id="checkUpdateBtn">检查更新</button>
         </div>
-        <button class="sbtn" id="checkUpdateBtn" style="margin:0;flex:none;">检查更新</button>
-      </div>
-      <div class="update-progress hidden" id="updateProgress">
-        <div class="update-progress-track"><div class="update-progress-fill"></div></div>
-        <span class="update-progress-text">0%</span>
+        <div class="update-progress hidden" id="updateProgress">
+          <div class="update-progress-track"><div class="update-progress-fill"></div></div>
+          <span class="update-progress-text">0%</span>
+        </div>
       </div>
     </div>
 

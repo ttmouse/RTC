@@ -242,6 +242,28 @@
   .s-field .corr-row .cc button{ padding:3px 10px; border:1px solid var(--rule); border-radius:3px; font-size:11px; cursor:pointer; background:transparent; color:var(--ink-soft); }
   .s-field .corr-row .cc button:hover{ border-color:var(--ink); color:var(--ink); }
   .s-field .corr-row .cc button:focus-visible{ outline:2px solid var(--seal); outline-offset:1px; }
+  /* ── 按钮基类 ──
+     此前只有底栏 / 模态框 / 模型卡片内的 .sbtn 各自定义了样式；数据清理、软件更新
+     里的按钮只有裸 class，会退化成 macOS 原生按钮（灰底、系统字体），和纸质主题脱节。
+     这里补齐基类。注意选择器保持最低优先级（单类），底栏/模型等处的尺寸仍由各自
+     作用域规则覆盖，不受影响。 */
+  .sbtn{ display:inline-flex; align-items:center; justify-content:center; flex:none;
+        padding:5px 14px; border:1px solid var(--rule); border-radius:var(--radius-sm);
+        background:transparent; color:var(--ink-soft);
+        font-size:12px; line-height:1.4; font-family:inherit; letter-spacing:.04em;
+        cursor:pointer; white-space:nowrap;
+        -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+        transition:border-color .15s, color .15s, background-color .15s; }
+  .sbtn:hover{ border-color:var(--ink); color:var(--ink); }
+  .sbtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  .sbtn:disabled{ opacity:.5; cursor:default; }
+  .sbtn.hidden{ display:none; }
+  /* 主操作 / 危险操作 / 行内小号：hover 用复合选择器，避免被 .sbtn:hover 抢走文字色 */
+  .sbtn.primary{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  .sbtn.primary:hover{ background:#2d271f; color:var(--paper); border-color:var(--ink); }
+  .sbtn.danger{ color:var(--seal); border-color:var(--seal); }
+  .sbtn.danger:hover{ background:rgba(191,58,30,.08); color:var(--seal-deep); border-color:var(--seal-deep); }
+  .sbtn.sm{ padding:3px 10px; font-size:11px; }
   .s-page-foot{ display:flex; gap:10px; padding:14px 20px 16px; border-top:2px solid var(--ink);
         background:var(--paper); flex-shrink:0; }
   .s-page-foot .sbtn{ padding:7px 20px; border:1px solid var(--rule); border-radius:var(--radius); font-size:12px; cursor:pointer; letter-spacing:.08em; color:var(--ink-soft); background:transparent; }
