@@ -129,11 +129,33 @@ export function initRunStatus() {
   }, 1000);
 }
 
+// 状态切换的「按下」确认：给元素加一次短促脉冲（样式见 style.css 的 .toggled）。
+// 同一套动画同时服务底部两个开关和录制按钮，别再各写一份。
+// 先摘 class 再读一次布局，是为了连点两次时动画能重新播；定时器按元素存，
+// 同一颗按钮的两次脉冲不会互相截断。
+const pulseTimers = new WeakMap();
+
+export function flashPulse(el) {
+  if (!el) return;
+  el.classList.remove('toggled');
+  void el.offsetWidth;
+  el.classList.add('toggled');
+  clearTimeout(pulseTimers.get(el));
+  pulseTimers.set(el, setTimeout(() => el.classList.remove('toggled'), 340));
+}
+
 export function setRecordBtn(recording) {
   // 按钮已简化成纯图标圆形按钮：文案只留在 title/aria-label，保证可访问性
   const label = recording ? '停止录音' : '开始录音';
   const btn = $('btn');
   if (btn) { btn.title = label; btn.setAttribute('aria-label', label); }
+  // 录制按钮的两种状态（常态黑底 / 录音中红底）只在这里切换，脉冲也挂在同一个
+  // 地方：点击、⌘⇧V 之外的键盘入口、全局热键、启动自动开录全都经过这个函数，
+  // 不会漏掉反馈。只在「状态真的变了」时脉冲——麦克风授权失败的回滚会再调一次
+  // setRecordBtn(false)，那一次不该给用户一个「成了」的动静。
+  const wasOn = !!(btn && btn.classList.contains('on'));
+  if (btn) btn.classList.toggle('on', !!recording);
+  if (btn && wasOn !== !!recording) flashPulse(btn);
   const iconMic = $('btnIconMic');
   const iconPause = $('btnIconPause');
   if (iconMic) iconMic.classList.toggle('hidden', !!recording);

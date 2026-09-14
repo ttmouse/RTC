@@ -1,4 +1,4 @@
-import { $, renderRunStatus, initRunStatus, toast, setRecordBtn, initListAutoScroll, listNearTop } from './ui.js';
+import { $, renderRunStatus, initRunStatus, toast, setRecordBtn, flashPulse, initListAutoScroll, listNearTop } from './ui.js';
 import { state, meterPctToRms, clampVADThreshold } from './state.js';
 import { DEFAULT_RULES, flushCorrectionRules, loadCorrectionRules, saveCorrectionRules } from './correction.js';
 import { ensurePastePermission } from './clipboard.js';
@@ -24,25 +24,14 @@ setAsrStopHandler(stopRec);
 // Tauri 全局热键 ⌥⌘P 全都走下面这两个函数，新增入口也不会再漏掉提示音。
 //
 // 切换确认同样挂在这里：开关自己做一下短促的「按下」脉冲（样式见
-// style.css 的 .footerToggle.toggled），不再往顶部写一行字。反馈落在
-// 手指按下的那个按钮上，连续切换也不会在标题下方反复闪字。
-const toggleFlashTimers = new WeakMap();
-
-function flashToggle(el) {
-  if (!el) return;
-  el.classList.remove('toggled');
-  void el.offsetWidth;   // 读一次布局，连点两次时动画也能重新播
-  el.classList.add('toggled');
-  clearTimeout(toggleFlashTimers.get(el));
-  toggleFlashTimers.set(el, setTimeout(() => el.classList.remove('toggled'), 340));
-}
-
+// style.css 的 .toggled，脉冲本身是 ui.js 的 flashPulse，和录制按钮共用一套），
+// 不再往顶部写一行字。反馈落在手指按下的那个按钮上，连续切换也不会在标题下方反复闪。
 function setAutoPaste(on) {
   state.autoPaste = on;
   syncToggleUI();
   saveASRSettings();
   playToggle(on);
-  flashToggle($('ftPaste'));
+  flashPulse($('ftPaste'));
   if (on) ensurePastePermission();
 }
 
@@ -55,7 +44,7 @@ function setAutoEnter(on) {
   syncToggleUI();
   saveASRSettings();
   playToggle(on);
-  flashToggle($('ftEnter'));
+  flashPulse($('ftEnter'));
 }
 
 function toggleAutoEnter() {
@@ -96,7 +85,6 @@ $('btn').onclick = async () => {
   state.recording = true;
   state.recStartTs = Date.now();
   setRecordBtn(true);
-  $('btn').className = 'on';
   renderRunStatus();
   try {
     await startAudio();
@@ -114,7 +102,6 @@ $('btn').onclick = async () => {
     state.wantRecording = false;
     state.recording = false;
     setRecordBtn(false);
-    $('btn').className = '';
     renderRunStatus();
     try { if (state.stream) state.stream.getTracks().forEach(t => t.stop()); } catch (ex) {}
     state.stream = null;

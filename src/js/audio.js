@@ -112,8 +112,8 @@ export function stopRec() {
   const levelText = $('levelMeterText');
   if (levelText) levelText.textContent = `0.0000 / ${state.vadThreshold.toFixed(4)}`;
   flushTotalDuration();
-  const btn = $('btn');
-  btn.className = '';
+  // 按钮的常态/录音中状态统一由 setRecordBtn 切（它顺带播一下脉冲），
+  // 这里不再单独改 className，否则状态就有了两个来源。
   setRecordBtn(false);
   renderRunStatus();
 }

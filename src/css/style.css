@@ -181,12 +181,17 @@
   /* 激活态：深灰实心（不用主题红，避免与录制按钮的红色状态抢视觉） */
   .footerToggle.on{ opacity:1; background:var(--ink-soft); border-color:var(--ink-soft); color:var(--paper); }
   .footerToggle.on:hover{ background:var(--ink); border-color:var(--ink); }
-  /* 切换确认：开关自己做一下短促的「按下」脉冲（JS 在 setAutoPaste / setAutoEnter
-     里加 .toggled）。取代原先顶部弹出的一行「自动粘贴已开启 / 已关闭」：那行字离
+  /* 切换确认：开关和中间那颗录制按钮都自己做一下短促的「按下」脉冲
+     （JS 在 setAutoPaste / setAutoEnter / setRecordBtn 里加 .toggled）。
+     开关这一侧取代的是原先顶部弹出的一行「自动粘贴已开启 / 已关闭」：那行字离
      操作位置远，连续切换会在标题下方反复闪。窗口在前台时看这一下，不在前台
      （⌥⌘P 全局热键）时靠 playToggle 的音区分开/关。
+     录制按钮复用同一套：它的状态变化只有「黑 → 红」一次换色，点下去到底启动
+     没有，此前只能看顶栏的文字；脉冲落在手指按下的那颗按钮上，和开关是同一种
+     语言。环形阴影用墨色而不是印章红——红色是「录音中」这个状态本身，别拿它
+     当装饰（见 ui-interaction-spec 第 1 节）。
      只用 transform / box-shadow，不动布局、不触发重排（理由同文件顶部噪点层注释） */
-  .footerToggle.toggled{ animation:toggle-confirm .32s cubic-bezier(.16,1,.3,1); }
+  .footerToggle.toggled, #btn.toggled{ animation:toggle-confirm .32s cubic-bezier(.16,1,.3,1); }
   @keyframes toggle-confirm{
     0%{ transform:scale(1); box-shadow:0 0 0 0 rgba(26,22,17,.30); }
     40%{ transform:scale(1.12); box-shadow:0 0 0 5px rgba(26,22,17,.16); }
@@ -510,7 +515,7 @@
   }
   @media (prefers-reduced-motion:reduce){
     #settingsPage .settingsPageBody > .s-group{ animation:none; }
-    .footerToggle.toggled{ animation:none; }
+    .footerToggle.toggled, #btn.toggled{ animation:none; }
   }
   #err{ color:var(--seal-deep); font-size:12px; padding:5px 20px; display:none;
         background:#f3e3dc; position:relative; z-index:2; font-family:var(--font); }
