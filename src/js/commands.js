@@ -90,15 +90,27 @@ export async function initLearnedCommands() {
 /* ---------------- 语音指令面板（右上角图标入口；测试功能，刻意轻量） ---------------- */
 
 // 动作码 → 人话。未知动作码原样显示，新增动作时面板不会失真
-const ACTION_LABELS = { enter: '按下回车键', arrow_down: '按下方向键', arrow_up: '按上方向键', meeting_summary: '生成 Markdown 会议纪要' };
+const ACTION_LABELS = { enter: '按下回车', arrow_down: '按下 ↓', arrow_up: '按下 ↑', meeting_summary: '生成会议纪要' };
 
 /* ---------------- 语音指令管理页（整页；增删改查都在这） ---------------- */
 // 以前这里是个只读小面板：想改指令得自己去编辑 commands.json，而 open -a 认的是
 // .app 包名（写显示名「飞书」会报「应用不存在」），改错了还不好自查。
 // 现在点图标直接打开这一页，和设置同一个形态：左边说法、右边目标，随时增删改。
 
-const ACTION_ORDER = ['enter', 'meeting_summary', 'arrow_down', 'arrow_up'];
-const CMD_ROW_BOX = { aliases: 'cmdRowsAliases', actions: 'cmdRowsActions', snippets: 'cmdRowsSnippets' };
+// 动作分两类，界面上分两块摆：按键类是「替你敲一下」，功能类是「让 app 干一件事」。
+// 混在一起用户会以为会议总结也只是个快捷键——它并不按键，说完要等一下结果。
+const ACTION_GROUPS = [
+  { id: 'keys', order: ['enter', 'arrow_down', 'arrow_up'] },
+  { id: 'features', order: ['meeting_summary'] },
+];
+const ACTION_ORDER = ACTION_GROUPS.flatMap((g) => g.order);
+const ACTION_GROUP_BOX = { keys: 'cmdRowsKeys', features: 'cmdRowsFeatures' };
+const CMD_ROW_BOX = {                                // section → 它在页面上占的容器（动作有两个）
+  aliases: ['cmdRowsAliases'],
+  actions: Object.values(ACTION_GROUP_BOX),
+  snippets: ['cmdRowsSnippets'],
+};
+const ALL_CMD_BOXES = Object.values(CMD_ROW_BOX).flat();
 const CMD_ICON_TRASH = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>';
 
 let cmdMenuBound = false;   // 图标入口只绑一次
@@ -159,8 +171,8 @@ function groupPhrasesByValue(table) {
   return groups;
 }
 
-function renderCommandRows(section, table) {
-  const box = document.getElementById(CMD_ROW_BOX[section]);
+function renderCommandRows(section, table, boxId) {
+  const box = document.getElementById(boxId);
   if (!box) return;
   const groups = groupPhrasesByValue(table);
   box.innerHTML = groups.length
@@ -168,10 +180,19 @@ function renderCommandRows(section, table) {
     : '<div class="cmdEmpty">还没有，点下面的「添加一条」</div>';
 }
 
+/** 这个动作属于哪一类（按「值」判断；认不出的先归按键，不至于凭空消失） */
+function actionGroupId(value) {
+  const hit = ACTION_GROUPS.find((g) => g.order.includes(value));
+  return hit ? hit.id : ACTION_GROUPS[0].id;
+}
+
 function renderCommandPage(tables) {
-  renderCommandRows('aliases', tables.aliases);
-  renderCommandRows('actions', tables.actions);
-  renderCommandRows('snippets', tables.snippets);
+  renderCommandRows('aliases', tables.aliases, 'cmdRowsAliases');
+  renderCommandRows('snippets', tables.snippets, 'cmdRowsSnippets');
+  // 动作按类归位：渲染时就按值分组，所以哪怕哪一行选错了类的动作，重开也会回到正确那边
+  const byGroup = { keys: {}, features: {} };
+  for (const [key, value] of Object.entries(tables.actions || {})) byGroup[actionGroupId(value)][key] = value;
+  for (const g of ACTION_GROUPS) renderCommandRows('actions', byGroup[g.id], ACTION_GROUP_BOX[g.id]);
 }
 
 /** 整页打开时把主界面让开（和设置页同一套做法） */
@@ -197,10 +218,12 @@ function splitPhraseKeys(raw) {
 function collectCommandPage() {
   const problems = [];
   const tables = { aliases: {}, actions: {}, snippets: {} };
-  for (const section of ['aliases', 'actions', 'snippets']) {
-    const box = document.getElementById(CMD_ROW_BOX[section]);
+  // 动作分两块容器，所以遍历容器而不是遍历 section；section 从行自己身上拿
+  for (const boxId of ALL_CMD_BOXES) {
+    const box = document.getElementById(boxId);
     if (!box) continue;
     for (const row of box.querySelectorAll('.cmdEditRow')) {
+      const section = row.dataset.section;
       const raw = row.querySelector('.cmdPhraseIn').value.trim();
       const input = row.querySelector('.cmdValueIn');
       const target = row.querySelector('.cmdTargetBtn');
@@ -317,12 +340,14 @@ function ensureEmptyHint(box) {
   if (hasRow && hint) hint.remove();
 }
 
-function addCommandRow(section) {
-  const box = document.getElementById(CMD_ROW_BOX[section]);
+function addCommandRow(section, boxId) {
+  const box = document.getElementById(boxId || CMD_ROW_BOX[section][0]);
   if (!box) return;
   const hint = box.querySelector('.cmdEmpty');
   if (hint) hint.remove();
-  box.insertAdjacentHTML('beforeend', commandRowHtml(section, '', section === 'actions' ? 'enter' : ''));
+  // 新行的默认动作：按它所在那块的头一个来（按键块给回车，功能块给会议纪要）
+  const group = ACTION_GROUPS.find((g) => ACTION_GROUP_BOX[g.id] === boxId);
+  box.insertAdjacentHTML('beforeend', commandRowHtml(section, '', group ? group.order[0] : ''));
   const row = box.lastElementChild;
   row.querySelector('.cmdPhraseIn').focus();
   row.scrollIntoView({ block: 'nearest' });
@@ -403,7 +428,7 @@ function bindCommandPage() {
 
   page.addEventListener('click', (e) => {
     const add = e.target.closest('.cmdAddBtn');
-    if (add) { addCommandRow(add.dataset.section); return; }
+    if (add) { addCommandRow(add.dataset.section, add.dataset.box); return; }
     const targetBtn = e.target.closest('.cmdTargetBtn');
     if (targetBtn) { void pickCommandTarget(targetBtn); return; }
     // 行尾只剩「删除」一个图标按钮
