@@ -171,13 +171,20 @@ function groupPhrasesByValue(table) {
   return groups;
 }
 
+/** 空块里的提示。功能块没有「添加一条」，别让它指向一个不存在的按钮 */
+function emptyHintFor(boxId) {
+  return boxId === 'cmdRowsFeatures'
+    ? '这里没有可用功能（功能里是程序逻辑，只能改说法）'
+    : '还没有，点下面的「添加一条」';
+}
+
 function renderCommandRows(section, table, boxId) {
   const box = document.getElementById(boxId);
   if (!box) return;
   const groups = groupPhrasesByValue(table);
   box.innerHTML = groups.length
     ? groups.map((g) => commandRowHtml(section, g.keys.join('｜'), g.value)).join('')
-    : '<div class="cmdEmpty">还没有，点下面的「添加一条」</div>';
+    : `<div class="cmdEmpty">${emptyHintFor(boxId)}</div>`;
 }
 
 /** 这个动作属于哪一类（按「值」判断；认不出的先归按键，不至于凭空消失） */
@@ -336,7 +343,7 @@ function ensureEmptyHint(box) {
   if (!box) return;
   const hasRow = !!box.querySelector('.cmdEditRow');
   const hint = box.querySelector('.cmdEmpty');
-  if (!hasRow && !hint) box.insertAdjacentHTML('beforeend', '<div class="cmdEmpty">还没有，点下面的「添加一条」</div>');
+  if (!hasRow && !hint) box.insertAdjacentHTML('beforeend', `<div class="cmdEmpty">${emptyHintFor(box.id)}</div>`);
   if (hasRow && hint) hint.remove();
 }
 
