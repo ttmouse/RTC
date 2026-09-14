@@ -7,6 +7,7 @@
  *   playStart  —— 开始录音：上行两音（确认「已开始」）
  *   playStop   —— 停止录音：下行两音（确认「已结束」）
  *   playToggle —— 开关类按钮：开=高音 tick，关=低音 tick
+ *   playPaste  —— 自动粘贴已真正发出 Cmd+V
  */
 import { state } from './state.js';
 
@@ -65,4 +66,15 @@ export function playStop() {
 
 export function playToggle(on) {
   seq(on ? [[880, 0.09, 0.07]] : [[523.25, 0.08, 0.07]], 'triangle');
+}
+
+/**
+ * 自动粘贴成功：两声极短的高音 tick（「已送达」）。
+ *
+ * 音高比 playStart 更高、时长更短、峰值更低（0.07 对 0.14），因为这一声是
+ * 每句话都会响的：粘贴在录音进行中触发，麦克风仍在采集，太响既会被 ASR
+ * 拾进去，也会很快变成噪音。用 triangle 与录音起止的 sine 拉开音色区分。
+ */
+export function playPaste() {
+  seq([[1046.5, 0.07, 0.045], [1567.98, 0.075, 0.07]], 'triangle');
 }

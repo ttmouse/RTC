@@ -1,6 +1,7 @@
 import { state } from './state.js';
 import { toast } from './ui.js';
 import { apiUrl } from './api.js';
+import { playPaste } from './sfx.js';
 
 export function pasteToCursor(text, autoEnter) {
   const t0 = performance.now();
@@ -13,6 +14,21 @@ export function pasteToCursor(text, autoEnter) {
     }));
   };
   console.log('[paste] 进入粘贴, text:', text.slice(0, 30), 'autoEnter:', autoEnter);
+
+  // 粘贴结果只有这一处分流：Tauri 与 HTTP 两条路径共用，避免以后再加通道时
+  // 漏掉音效、或各写一份重复发声（UX.FEEDBACK.001：同一动作共享同一反馈）。
+  // 只在真正发出 Cmd+V 后出声：clipboard_only 表示被 macOS 拦下且已有报错 toast，
+  // 此时再补一声「成功」音只会误导用户。
+  const afterPaste = (status, source) => {
+    if (status === 'clipboard_only') {
+      logTiming('paste.done_clipboard_only');
+      console.log(`[paste] ${source} 完成（仅剪贴板，无自动粘贴）`);
+      return;
+    }
+    logTiming('paste.done');
+    console.log(`[paste] ${source} Cmd+V 已发送`);
+    playPaste();
+  };
   const tauriInvoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
   const reportPasteError = e => {
     const msg = (e && e.message) ? e.message : String(e);
@@ -30,13 +46,7 @@ export function pasteToCursor(text, autoEnter) {
     tauriInvoke('paste_text', { text, autoEnter })
       .then(result => {
         const status = result && typeof result === 'object' ? result.status : result;
-        if (status === 'clipboard_only') {
-          logTiming('paste.done_clipboard_only');
-          console.log('[paste] Tauri paste 完成（仅剪贴板，无自动粘贴）');
-        } else {
-          logTiming('paste.done');
-          console.log('[paste] Tauri Cmd+V 已发送');
-        }
+        afterPaste(status, 'Tauri paste');
       })
       .catch(reportPasteError);
     return;
@@ -51,13 +61,7 @@ export function pasteToCursor(text, autoEnter) {
     .then(async res => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
-      if (data.warn === 'auto_paste_disabled') {
-        logTiming('paste.done_clipboard_only');
-        console.log('[paste] 服务端 paste 完成（仅剪贴板，无自动粘贴）');
-      } else {
-        logTiming('paste.done');
-        console.log('[paste] 服务端 paste 成功');
-      }
+      afterPaste(data.warn === 'auto_paste_disabled' ? 'clipboard_only' : 'ok', '服务端 paste');
     })
     .catch(reportPasteError);
 }
