@@ -143,12 +143,28 @@ function commandRowHtml(section, key, value) {
     + `</div>`;
 }
 
+/**
+ * 渲染时把目标相同的说法并成一行。
+ * 用户是按「这个应用要哪些说法」来想的（飞出｜飞速｜飞书 都是 Lark），拆成多行会把
+ * 同一件事散在好几处；底层仍是扁平键值对（外部工具好改），只在显示这一层合并。
+ */
+function groupPhrasesByValue(table) {
+  const groups = [];
+  const byValue = new Map();
+  for (const [key, value] of Object.entries(table || {})) {
+    let group = byValue.get(value);
+    if (!group) { group = { keys: [], value }; byValue.set(value, group); groups.push(group); }
+    group.keys.push(key);
+  }
+  return groups;
+}
+
 function renderCommandRows(section, table) {
   const box = document.getElementById(CMD_ROW_BOX[section]);
   if (!box) return;
-  const entries = Object.entries(table || {});
-  box.innerHTML = entries.length
-    ? entries.map(([k, v]) => commandRowHtml(section, k, v)).join('')
+  const groups = groupPhrasesByValue(table);
+  box.innerHTML = groups.length
+    ? groups.map((g) => commandRowHtml(section, g.keys.join('｜'), g.value)).join('')
     : '<div class="cmdEmpty">还没有，点下面的「添加一条」</div>';
 }
 
