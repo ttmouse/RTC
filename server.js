@@ -734,6 +734,9 @@ const server = http.createServer((req, res) => {
             // 必须同时接受符号链接：Safari.app 是指向 Cryptexes 的软链，
             // 只看 isDirectory() 会把整条漏掉（列表里没 Safari，用户以为没装）。
             if (!entry.name.endsWith('.app')) continue;
+            // 点开头的是系统内部组件（.Karabiner-VirtualHIDDevice-Manager 之类），
+            // 没人会想「打开」它们，露在列表里只会让人怀疑自己选错了东西。
+            if (entry.name.startsWith('.')) continue;
             if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
             const fullPath = path.join(dir, entry.name);
             if (entry.isSymbolicLink() && !fs.existsSync(fullPath)) continue;
