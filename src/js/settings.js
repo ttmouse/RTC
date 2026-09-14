@@ -42,6 +42,7 @@ function settingsFromState() {
     autoPaste: state.autoPaste,
     autoEnter: state.autoEnter,
     filterOn: state.filterOn,
+    sfx: state.sfxOn,
     ai: { ...state.aiConfig },
   };
 }
@@ -53,6 +54,7 @@ function applySettings(config) {
   state.gainMultiplier = s.gainMultiplier || 1;
   state.autoPaste = s.autoPaste || false;
   state.autoEnter = s.autoEnter || false;
+  state.sfxOn = s.sfx !== false;   // 旧配置无此字段 → 默认开启
   state.filterOn = typeof s.filterOn === 'boolean' ? s.filterOn : true;
   state.apiKey = s.key || '';
   state.qwen3ModelDir = typeof s.qwen3ModelDir === 'string' ? s.qwen3ModelDir : '';
@@ -200,6 +202,8 @@ export function syncToggleUI() {
   if (se) se.classList.toggle('on', state.autoEnter);
   const ff = $('filterToggle');
   if (ff) ff.classList.toggle('on', state.filterOn);
+  const sf = $('sfxToggle');
+  if (sf) sf.classList.toggle('on', state.sfxOn);
 }
 
 // ---------- AI 服务商表单同步与测试连接 ----------

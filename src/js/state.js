@@ -34,6 +34,7 @@ export const state = {
   gainMultiplier: 1,
   autoPaste: false,
   autoEnter: false,
+  sfxOn: true,             // 按钮提示音开关（sfx.js）
   noiseFilter: true,
   correctionRules: [],
   correctionEnabled: true,

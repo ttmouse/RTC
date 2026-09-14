@@ -2,6 +2,7 @@ import { state, VAD_METER_FULL_SCALE, isLocalEngine, normalizeEngine } from './s
 import { $, setStatus, setRecordBtn } from './ui.js';
 import { vadSend, sendPCM, finalizePending, disconnectBailian } from './asr.js';
 import { flushTotalDuration } from './settings.js';
+import { playStop } from './sfx.js';
 
 export function getAudioConstraints() {
   const agc = isLocalEngine(normalizeEngine(state.asrEngine)) ? false : true;
@@ -83,6 +84,7 @@ export async function startAudio() {
 }
 
 export function stopRec() {
+  playStop();   // 停录路径可能来自按钮 / 快捷键 / WS 断开，统一在这里出声
   state.wantRecording = false;
   state.recording = false;
   state.recStartTs = 0;

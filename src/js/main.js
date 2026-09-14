@@ -10,6 +10,7 @@ import { renderModelStatus, getModelStatus } from './model.js';
 import { initLearnedCommands } from './commands.js';
 import { migrateLegacyLocalConfig } from './config-migration.js';
 import { checkForUpdates, setupUpdateUI, updateVersionBadge } from './updater.js';
+import { playStart, playToggle } from './sfx.js';
 
 /**
  * 主界面底部显示本地服务累计运行时长。
@@ -59,6 +60,32 @@ function initServerUptime() {
 
 setAsrStopHandler(stopRec);
 
+// ---------- 开关类行为（唯一入口） ----------
+// 音效挂在「行为」而不是「按钮点击」上：footer 按钮、设置页开关、⌘⇧V/⌘⇧E、
+// Tauri 全局热键 ⌥⌘P 全都走下面这两个函数，新增入口也不会再漏掉提示音。
+function setAutoPaste(on) {
+  state.autoPaste = on;
+  syncToggleUI();
+  saveASRSettings();
+  playToggle(on);
+  if (on) ensurePastePermission();
+}
+
+function toggleAutoPaste() {
+  setAutoPaste(!state.autoPaste);
+}
+
+function setAutoEnter(on) {
+  state.autoEnter = on;
+  syncToggleUI();
+  saveASRSettings();
+  playToggle(on);
+}
+
+function toggleAutoEnter() {
+  setAutoEnter(!state.autoEnter);
+}
+
 $('btn').onclick = async () => {
   if (state.recording) {
     state.wantRecording = false;
@@ -70,6 +97,7 @@ $('btn').onclick = async () => {
     return;
   }
   state.wantRecording = true;
+  playStart();   // 在 getUserMedia / 建立 WS 之前先响，避免提示音被麦克风录进识别结果
   if (!state.stream) {
     try {
       state.stream = await navigator.mediaDevices.getUserMedia({ audio: getAudioConstraints() });
@@ -118,6 +146,14 @@ $('filterToggle').onclick = () => {
     state.stream = null;
     $('btn').onclick();
   }
+};
+
+const sfxToggle = $('sfxToggle');
+if (sfxToggle) sfxToggle.onclick = () => {
+  state.sfxOn = !state.sfxOn;
+  syncToggleUI();
+  saveASRSettings();
+  playToggle(state.sfxOn);   // 开启时立刻让用户听到效果（关闭时静默）
 };
 
 function showSettings(show) {
@@ -222,6 +258,7 @@ function changeEngine(next) {
     return;
   }
   state.asrEngine = next;
+  playToggle(true);
   saveASRSettings();
   updateEngineBadge();
   if (state.recording) {
@@ -390,31 +427,13 @@ $('gainMultiplier').oninput = function () {
   saveASRSettings();
 };
 
-$('autoPasteBtn').onclick = function () {
-  state.autoPaste = !state.autoPaste;
-  syncToggleUI();
-  saveASRSettings();
-  if (state.autoPaste) ensurePastePermission();
-};
+$('autoPasteBtn').onclick = () => toggleAutoPaste();
 
-$('autoEnterBtn').onclick = function () {
-  state.autoEnter = !state.autoEnter;
-  syncToggleUI();
-  saveASRSettings();
-};
+$('autoEnterBtn').onclick = () => toggleAutoEnter();
 
-$('ftPaste').onclick = function () {
-  state.autoPaste = !state.autoPaste;
-  syncToggleUI();
-  saveASRSettings();
-  if (state.autoPaste) ensurePastePermission();
-};
+$('ftPaste').onclick = () => toggleAutoPaste();
 
-$('ftEnter').onclick = function () {
-  state.autoEnter = !state.autoEnter;
-  syncToggleUI();
-  saveASRSettings();
-};
+$('ftEnter').onclick = () => toggleAutoEnter();
 
 $('corrSave').onclick = async () => {
   saveCorrectionRules($('correctionRules').value);
@@ -464,17 +483,19 @@ $('nukeDataBtn').onclick = () => {
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
     e.preventDefault();
-    state.autoEnter = !state.autoEnter;
-    syncToggleUI();
-    saveASRSettings();
+    toggleAutoEnter();
   }
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'V') {
     e.preventDefault();
-    state.autoPaste = !state.autoPaste;
-    syncToggleUI();
-    saveASRSettings();
-    if (state.autoPaste) ensurePastePermission();
+    toggleAutoPaste();
   }
+});
+
+// 系统级全局热键（⌥⌘P，由 Rust 侧注册并 emit）：窗口不在前台也能切换自动粘贴。
+// 与上面的 ⌘⇧V 同一条路径（都走 toggleAutoPaste）；多一句 toast——窗口不在前台时看不到 footer 按钮的填充状态。
+window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => {
+  toggleAutoPaste();
+  toast(state.autoPaste ? '自动粘贴已开启（⌥⌘P）' : '自动粘贴已关闭（⌥⌘P）');
 });
 
 (async () => {

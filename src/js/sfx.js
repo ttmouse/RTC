@@ -1,0 +1,68 @@
+/**
+ * 界面提示音：用 Web Audio 现场合成，不依赖任何音频文件。
+ * 这样离线（Tauri 打包后无网络、无静态资源）也能响，且不增加打包体积/请求。
+ *
+ * 音量刻意压得低（0.06~0.16）：录音时麦克风仍在采集，提示音太大会被 ASR 一起识别进去。
+ * 约定：
+ *   playStart  —— 开始录音：上行两音（确认「已开始」）
+ *   playStop   —— 停止录音：下行两音（确认「已结束」）
+ *   playToggle —— 开关类按钮：开=高音 tick，关=低音 tick
+ */
+import { state } from './state.js';
+
+let ctx = null;
+
+/** 惰性创建 AudioContext：首次调用来自用户点击，不会被浏览器自动播放策略拦截 */
+function ac() {
+  if (!state.sfxOn) return null;
+  if (!ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try {
+      ctx = new AC();
+    } catch (e) {
+      return null;
+    }
+  }
+  // 长时间空闲或系统休眠后会被挂起，播放前恢复一次
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  return ctx;
+}
+
+/** 单个音符：指数包络避免爆音（起音 12ms 上扬，尾音自然衰减） */
+function note(a, freq, at, dur, peak, type) {
+  const osc = a.createOscillator();
+  const gain = a.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.setValueAtTime(freq, at);
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(peak, at + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  osc.connect(gain).connect(a.destination);
+  osc.start(at);
+  osc.stop(at + dur + 0.02);
+}
+
+/** 依次播放一串 [频率, 峰值, 时长] */
+function seq(steps, type) {
+  const a = ac();
+  if (!a) return;
+  const t0 = a.currentTime + 0.01;
+  let at = t0;
+  for (const [freq, peak, dur] of steps) {
+    note(a, freq, at, dur, peak, type);
+    at += dur * 0.75;   // 略微重叠，听感更连贯
+  }
+}
+
+export function playStart() {
+  seq([[659.25, 0.14, 0.11], [987.77, 0.16, 0.16]]);
+}
+
+export function playStop() {
+  seq([[987.77, 0.13, 0.11], [587.33, 0.14, 0.18]]);
+}
+
+export function playToggle(on) {
+  seq(on ? [[880, 0.09, 0.07]] : [[523.25, 0.08, 0.07]], 'triangle');
+}
