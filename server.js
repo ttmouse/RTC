@@ -433,6 +433,78 @@ function patchConfig(partial, callback) {
   }, callback);
 }
 
+// ---------- commands.json 写入队列 ----------
+// 与 config.json 同一套姿势：读-改-写整体串行 + 原子替换。
+// 为什么不用「读整表 → 改 → 整体写回」：这张文件允许用户和外部 Agent 直接编辑，
+// 整表覆盖会把别人刚改的内容静默抹掉（原则 6）。所以 PATCH 只动调用方点名的键。
+let commandsWriteChain = Promise.resolve();
+
+function enqueueCommandsTask(task, callback) {
+  const run = () => Promise.resolve().then(task);
+  commandsWriteChain = commandsWriteChain.then(run, run);
+  commandsWriteChain
+    .then((value) => callback(null, value), (error) => callback(error))
+    .catch(() => {});
+}
+
+/** 读指令表；缺分区/损坏时退回默认表（旧文件不手改也能用） */
+function readCommandsFile() {
+  return new Promise((resolve) => {
+    const withDefaults = (parsed) => {
+      const out = parsed && typeof parsed === 'object' ? parsed : {};
+      if (!out.aliases || typeof out.aliases !== 'object') out.aliases = { ...DEFAULT_COMMANDS.aliases };
+      if (!out.actions || typeof out.actions !== 'object') out.actions = { ...DEFAULT_COMMANDS.actions };
+      if (!out.snippets || typeof out.snippets !== 'object') out.snippets = { ...DEFAULT_COMMANDS.snippets };
+      if (!out.version) out.version = 1;
+      return out;
+    };
+    fs.readFile(COMMANDS_PATH, 'utf-8', (err, data) => {
+      if (err) { resolve(withDefaults(null)); return; }
+      try { resolve(withDefaults(JSON.parse(data))); } catch (e) { resolve(withDefaults(null)); }
+    });
+  });
+}
+
+function writeCommandsFile(next) {
+  return new Promise((resolve, reject) => {
+    const tmpPath = COMMANDS_PATH + '.tmp';
+    fs.mkdir(DATA_ROOT, { recursive: true }, (mkdirErr) => {
+      if (mkdirErr) { reject(mkdirErr); return; }
+      fs.writeFile(tmpPath, JSON.stringify(next, null, 2), 'utf-8', (writeErr) => {
+        if (writeErr) { reject(writeErr); return; }
+        fs.rename(tmpPath, COMMANDS_PATH, (renameErr) => renameErr ? reject(renameErr) : resolve());
+      });
+    });
+  });
+}
+
+/**
+ * 把 PATCH body 应用到指令表：每个分区只认识 set（新增/修改）与 del（删除）两种动作，
+ * 其余键一律忽略。删除必须显式列出——合并语义本身表达不了「删掉一条」，
+ * 而界面里用户删掉条目是常规操作。
+ */
+function applyCommandsPatch(current, patch) {
+  const next = { ...current };
+  for (const section of ['aliases', 'actions', 'snippets']) {
+    const part = patch[section];
+    if (!part || typeof part !== 'object') continue;
+    const base = (next[section] && typeof next[section] === 'object') ? { ...next[section] } : {};
+    if (part.set && typeof part.set === 'object') {
+      for (const [key, value] of Object.entries(part.set)) {
+        if (UNSAFE_KEYS.has(key)) continue;
+        if (typeof value === 'string' && value) base[key] = value;
+      }
+    }
+    if (Array.isArray(part.del)) {
+      for (const key of part.del) {
+        if (typeof key === 'string') delete base[key];
+      }
+    }
+    next[section] = base;
+  }
+  return next;
+}
+
 function readJsonBody(req, callback) {
   let body = '';
   req.on('data', chunk => {
@@ -522,6 +594,12 @@ const server = http.createServer((req, res) => {
   }
 
   // GET /api/commands — 读取指令映射表（不存在时返回内置默认表；旧文件缺 actions 自动补齐）
+  // ?defaults=1：只回出厂默认表，给管理页的「恢复默认」把表单填成默认值（不落盘）
+  if (req.method === 'GET' && req.url === '/api/commands?defaults=1') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(DEFAULT_COMMANDS));
+    return;
+  }
   if (req.method === 'GET' && req.url === '/api/commands') {
     fs.readFile(COMMANDS_PATH, 'utf-8', (err, data) => {
       if (err) {
@@ -585,6 +663,87 @@ const server = http.createServer((req, res) => {
         });
       });
     });
+    return;
+  }
+
+  // PATCH /api/commands — 只更新指定条目（指令界面保存时用）
+  // body: { aliases: { set: {说法: 目标}, del: [说法] }, actions: {...}, snippets: {...} }
+  // 返回写盘后的完整指令表，前端直接用它刷新内存表。
+  if (req.method === 'PATCH' && req.url === '/api/commands') {
+    readJsonBody(req, (err, parsed) => {
+      if (err || !parsed || typeof parsed !== 'object') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      const touched = ['aliases', 'actions', 'snippets'].some(
+        (s) => parsed[s] && typeof parsed[s] === 'object'
+      );
+      if (!touched) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'aliases/actions/snippets patch required' }));
+        return;
+      }
+      enqueueCommandsTask(async () => {
+        const current = await readCommandsFile();
+        const next = applyCommandsPatch(current, parsed);
+        await writeCommandsFile(next);
+        return next;
+      }, (writeErr, next) => {
+        if (writeErr) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: writeErr.message }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, aliases: next.aliases, actions: next.actions, snippets: next.snippets }));
+      });
+    });
+    return;
+  }
+
+  // GET /api/apps — 列出本机已安装的应用，给指令界面的「打开应用」当候选。
+  // name 用的是 **.app 包名**（去掉 .app 后缀），因为 `open -a` 只认这个：
+  // 它既不认中文显示名「飞书」，也不认 CFBundleName「Feishu」（实测都报应用不存在）。
+  // 界面里让人从这份列表里选，就不会再出现「说打开飞书，提示应用不存在」。
+  if (req.method === 'GET' && req.url === '/api/apps') {
+    // 不扫 /System/Library/CoreServices：那里 117 个条目几乎全是后台组件
+    // （WindowServer、loginwindow…），用户不可能想「打开」它们，只会把列表淹掉。
+    // 那个目录里唯一有意义的用户级应用是访达，单独补一条（见下）。
+    const dirs = [
+      '/Applications',
+      path.join(os.homedir(), 'Applications'),
+      '/System/Applications',
+      '/System/Applications/Utilities',
+    ];
+    const finderPath = '/System/Library/CoreServices/Finder.app';
+    const found = new Map();
+    let pending = dirs.length;
+    const finish = () => {
+      if (--pending > 0) return;
+      if (!found.has('Finder') && fs.existsSync(finderPath)) found.set('Finder', finderPath);
+      const apps = [...found].map(([name, fullPath]) => ({ name, path: fullPath }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, apps }));
+    };
+    for (const dir of dirs) {
+      fs.readdir(dir, { withFileTypes: true }, (readErr, entries) => {
+        if (!readErr) {
+          for (const entry of entries) {
+            // 必须同时接受符号链接：Safari.app 是指向 Cryptexes 的软链，
+            // 只看 isDirectory() 会把整条漏掉（列表里没 Safari，用户以为没装）。
+            if (!entry.name.endsWith('.app')) continue;
+            if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isSymbolicLink() && !fs.existsSync(fullPath)) continue;
+            const name = entry.name.slice(0, -4);
+            if (!found.has(name)) found.set(name, fullPath);
+          }
+        }
+        finish();
+      });
+    }
     return;
   }
 

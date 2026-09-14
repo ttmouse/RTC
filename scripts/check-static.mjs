@@ -11,6 +11,7 @@
  * Python 能否编译）。
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -73,11 +74,25 @@ for (const file of jsFiles) {
   ));
 }
 
+// 前端模块必须按 ESM 检查。本项目 package.json 没有 "type" 字段，`.js` 默认是 CommonJS，
+// 含 import 的文件会走 Node 的「模块语法检测」路径——而那条路径**只解析、不做早错检查**。
+// 实测：`import ...; let a = 1; let a = 2;` 存成 .js，`node --check` 退出码是 0（不报错）；
+// 同内容存成 .mjs 才会以「Identifier 'a' has already been declared」失败。
+// 一个重复的 let 声明就是这样溜过检查的：静态检查全绿，运行时整个模块加载失败。
+// 所以统一复制成 .mjs 再检查，强制走真正的 ESM 编译。
+const syntaxTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rtc-syntax-'));
+// 用 realpath：macOS 上 /tmp 是 /private/tmp 的软链，而 node 报错里给的是解析后的路径，
+// 不统一的话下面的 replaceAll 匹配不上，报错信息里就会留着临时文件路径给用户看。
+const syntaxTmpFile = path.join(fs.realpathSync(syntaxTmpDir), 'module.mjs');
+
 for (const file of jsFiles) {
   const filePath = path.join(jsDir, file);
-  // --check 只验证语法。这里额外确保 ESM 关键字不会被当成 CJS 报错。
-  const result = spawnSync(process.execPath, ['--check', filePath], { encoding: 'utf8' });
-  if (result.status !== 0) fail(`${rel(filePath)}: ${result.stderr.trim()}`);
+  fs.copyFileSync(filePath, syntaxTmpFile);
+  const result = spawnSync(process.execPath, ['--check', syntaxTmpFile], { encoding: 'utf8' });
+  if (result.status !== 0) {
+    // 报错信息里是临时文件路径，换回真实路径再抛，否则谁也定位不到是哪个文件
+    fail(`${rel(filePath)}: ${result.stderr.trim().replaceAll(syntaxTmpFile, rel(filePath))}`);
+  }
 
   const src = fs.readFileSync(filePath, 'utf8');
   for (const m of src.matchAll(/import\s*\{([^}]+)\}\s*from\s*'\.\/([^']+)'/g)) {
@@ -130,5 +145,7 @@ for (const file of JSON_FILES) {
     fail(`${file}: JSON 解析失败 — ${e.message}`);
   }
 }
+
+fs.rmSync(syntaxTmpDir, { recursive: true, force: true });
 
 console.log(`static checks passed (${jsFiles.length} frontend modules, ${BACKEND_JS.length} backend scripts, ${PY_FILES.length} python files, ${JSON_FILES.length} json files)`);

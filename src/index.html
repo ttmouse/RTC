@@ -12,10 +12,9 @@
   <div class="header-actions">
     <div id="status"><span id="dot"></span><span id="statusText">就绪</span><span id="statusTime" title="录音中为本次录音时长；空闲时显示本地服务运行时长（服务重启后归零）"></span></div>
     <div class="cmdWrap">
-      <button id="cmdBtn" title="语音指令（测试功能）" aria-haspopup="dialog" aria-expanded="false">
+      <button id="cmdBtn" title="语音指令" aria-haspopup="dialog" aria-expanded="false">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
       </button>
-      <div class="cmdMenu hidden" id="cmdMenu" role="dialog" aria-label="语音指令"></div>
     </div>
     <button id="settingsBtn" title="设置">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -307,6 +306,53 @@
     <button class="sbtn primary" id="settingsSaveBtn">保 存</button>
     <button class="sbtn" id="settingsCancelBtn">取 消</button>
     <button class="sbtn danger" id="settingsResetBtn">恢复默认</button>
+  </div>
+</div>
+
+<!-- 语音指令管理页：和设置同一形态（整页覆盖）。
+     以前点右上角那个图标只弹一个只读小面板，要改指令得自己去改 commands.json
+     （还得知道 open -a 认的是 .app 包名，写中文名会报「应用不存在」）。
+     所以改成整页可编辑：左右两列直接改，应用目标从列表里选，增删改查都在这里。 -->
+<div id="cmdPage" class="hidden">
+  <div class="settingsPageHeader">
+    <span>语音指令</span>
+    <button id="cmdPageClose" title="关闭" aria-label="关闭">&times;</button>
+  </div>
+  <div class="settingsPageBody">
+
+    <div class="s-group">
+      <div class="sg-title">打开应用</div>
+      <div class="cmdDesc">
+        说「打开 + 左边这句」就切到右边那个应用。<b>目标必须从列表里选</b>——
+        系统只认程序自己的名字，比如飞书是 <code>Lark</code>，写成「飞书」它会说找不到。
+      </div>
+      <div class="cmdRows" id="cmdRowsAliases"></div>
+      <button type="button" class="sbtn cmdAddBtn" data-section="aliases">+ 添加一条</button>
+    </div>
+
+    <div class="s-group">
+      <div class="sg-title">动作</div>
+      <div class="cmdDesc">整句说完就触发，不用说「打开」这类前缀。</div>
+      <div class="cmdRows" id="cmdRowsActions"></div>
+      <button type="button" class="sbtn cmdAddBtn" data-section="actions">+ 添加一条</button>
+    </div>
+
+    <div class="s-group">
+      <div class="sg-title">快捷短语</div>
+      <div class="cmdDesc">说完这句，就把右边那段话粘贴到光标位置并回车发出去。</div>
+      <div class="cmdRows" id="cmdRowsSnippets"></div>
+      <button type="button" class="sbtn cmdAddBtn" data-section="snippets">+ 添加一条</button>
+    </div>
+
+    <div class="cmdDesc cmdFootNote">
+      这张表同时也是一份明文文件，在数据目录的 <code>commands.json</code>，
+      外部工具和你自己的 AI 助手都能直接改它。
+    </div>
+  </div>
+  <div class="s-page-foot">
+    <button class="sbtn primary" id="cmdPageSave">保 存</button>
+    <button class="sbtn" id="cmdPageCancel">取 消</button>
+    <button class="sbtn danger" id="cmdPageReset">恢复默认</button>
   </div>
 </div>
 

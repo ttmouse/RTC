@@ -59,41 +59,20 @@ async function loadCommandMap() {
   return { aliases: map, actions, snippets };
 }
 
-/** 写回 commands.json（PUT /api/commands）
- *  内存里的表是**启动快照**，而这份文件是允许用户与外部 Agent 直接编辑的
- *  （设置里的「指令配置文件」就是它）。直接整体写回会把外部改动静默抹掉，
- *  所以先把磁盘上的最新内容读回来：同名的键以**磁盘为准**（人改的是权威），
- *  内存里多出来的键（本次刚学到的新说法）才补进去。
- *  注：因此这里的合并无法表达「删除」——面板是只读的，没有删除入口；
- *  将来若加删除，需改成按变更集写回。 */
-async function persistCommandMap(map) {
+/** 写回单条指令（PATCH /api/commands，只动这一条）
+ *  为什么不整表 PUT：这份文件允许用户和外部 Agent 直接编辑（设置里的「指令配置文件」
+ *  就是它），整表覆盖会把别人刚改的内容静默抹掉（原则 6）。PATCH 只提交本次学到的
+ *  这一条，其余条目一概不碰；删除只在管理页里由用户显式做。 */
+async function persistCommandEntry(section, key, value) {
   try {
-    // 1) 读盘，拿外部可能已经改过的最新内容
-    let diskAliases = {};
-    let diskActions = {};
-    let diskSnippets = {};
-    try {
-      const fresh = await fetch(apiUrl('/api/commands'));
-      const disk = await fresh.json().catch(() => ({}));
-      if (disk.aliases && typeof disk.aliases === 'object') diskAliases = disk.aliases;
-      if (disk.actions && typeof disk.actions === 'object') diskActions = disk.actions;
-      if (disk.snippets && typeof disk.snippets === 'object') diskSnippets = disk.snippets;
-    } catch { /* 读不到就退回按内存表写，至少不丢本次学习结果 */ }
-
-    // 2) 合并后写回：磁盘优先，内存补新增
     const r = await fetch(apiUrl('/api/commands'), {
-      method: 'PUT',
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        version: 1,
-        aliases: { ...map, ...diskAliases },
-        actions: { ...actionCache, ...diskActions },
-        snippets: { ...snippetCache, ...diskSnippets },
-      }),
+      body: JSON.stringify({ [section]: { set: { [key]: value } } }),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
   } catch (e) {
-    console.error('[command] 指令表保存失败:', e.message || e);
+    console.error('[command] 指令回写失败:', e.message || e);
   }
 }
 
@@ -112,95 +91,330 @@ export async function initLearnedCommands() {
 
 // 动作码 → 人话。未知动作码原样显示，新增动作时面板不会失真
 const ACTION_LABELS = { enter: '按下回车键', arrow_down: '按下方向键', arrow_up: '按上方向键', meeting_summary: '生成 Markdown 会议纪要' };
-let cmdMenuBound = false;
 
-/** 从别名表反推应用展示名：优先取中文说法作主名，其余英文说法作同义词 */
-function appDisplay(appId) {
-  const keys = Object.keys(commandCache).filter((k) => commandCache[k] === appId);
-  const name = keys.find((k) => /[\u4e00-\u9fff]/.test(k)) || keys[0] || appId;
-  return { name, rest: keys.filter((k) => k !== name) };
+/* ---------------- 语音指令管理页（整页；增删改查都在这） ---------------- */
+// 以前这里是个只读小面板：想改指令得自己去编辑 commands.json，而 open -a 认的是
+// .app 包名（写显示名「飞书」会报「应用不存在」），改错了还不好自查。
+// 现在点图标直接打开这一页，和设置同一个形态：左边说法、右边目标，随时增删改。
+
+const ACTION_ORDER = ['enter', 'meeting_summary', 'arrow_down', 'arrow_up'];
+const CMD_ROW_BOX = { aliases: 'cmdRowsAliases', actions: 'cmdRowsActions', snippets: 'cmdRowsSnippets' };
+const CMD_ICON_PLAY = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+const CMD_ICON_TRASH = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>';
+
+let cmdMenuBound = false;   // 图标入口只绑一次
+let cmdPageBound = false;   // 管理页内的事件只绑一次
+let cmdPageBefore = null;   // 打开页面时的快照：保存时用它算「到底改了哪几条」
+let cmdApps = null;         // 应用候选（name 就是 open -a 认的包名）
+let cmdAppsPending = null;
+let cmdPickerEl = null;
+let cmdPickerCleanup = null;
+
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
-/** 用内存里的指令表渲染面板（纯本地，不出网） */
-function renderCommandMenu() {
-  const box = document.getElementById('cmdMenu');
+/** 应用候选（GET /api/apps）：返回的 name 就是包名，不是显示名 */
+function loadAppList() {
+  if (cmdApps) return Promise.resolve(cmdApps);
+  if (cmdAppsPending) return cmdAppsPending;
+  cmdAppsPending = fetch(apiUrl('/api/apps'))
+    .then((r) => r.json())
+    .then((d) => { cmdApps = (d && Array.isArray(d.apps)) ? d.apps : []; return cmdApps; })
+    .catch(() => { cmdApps = []; return cmdApps; })
+    .finally(() => { cmdAppsPending = null; });
+  return cmdAppsPending;
+}
+
+/** 一行 = 一条指令：说法 → 目标（应用 / 动作 / 要发出去的话） */
+function commandRowHtml(section, key, value) {
+  let target;
+  if (section === 'snippets') {
+    target = `<input class="cmdInput cmdValueIn" value="${escHtml(value)}" placeholder="要发出去的话" spellcheck="false">`;
+  } else {
+    const label = section === 'actions' ? (ACTION_LABELS[value] || value || '选择动作') : (value || '选择应用');
+    target = `<button type="button" class="cmdTargetBtn${value ? '' : ' empty'}" data-value="${escHtml(value)}">${escHtml(label)}</button>`;
+  }
+  return `<div class="cmdEditRow" data-section="${section}">`
+    + `<input class="cmdInput cmdPhraseIn" value="${escHtml(key)}" placeholder="说法" spellcheck="false">`
+    + `<span class="cmdArrowTxt">→</span>${target}`
+    + `<button type="button" class="cmdIconBtn" data-act="try" title="试一下" aria-label="试一下">${CMD_ICON_PLAY}</button>`
+    + `<button type="button" class="cmdIconBtn cmdDelBtn" data-act="del" title="删除这条" aria-label="删除这条">${CMD_ICON_TRASH}</button>`
+    + `</div>`;
+}
+
+function renderCommandRows(section, table) {
+  const box = document.getElementById(CMD_ROW_BOX[section]);
   if (!box) return;
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const rows = (items) => items.map(([main, rest, act]) =>
-    `<div class="cmdRow"><span class="cmdPhrase">${esc(main)}</span>`
-    + `<span class="cmdAlias">${esc(rest.join(' / '))}</span>`
-    + `<span class="cmdAct">${esc(act)}</span></div>`).join('');
-
-  // 别名按应用归组（保持 commands.json 里的顺序），每组取一个中文说法当主名
-  const byApp = new Map();
-  for (const [phrase, app] of Object.entries(commandCache)) {
-    if (!byApp.has(app)) byApp.set(app, []);
-  }
-  const appItems = [...byApp.keys()].map((app) => {
-    const { name, rest } = appDisplay(app);
-    return [name, rest, `打开 ${app}`];
-  });
-
-  const byAction = new Map();
-  for (const [phrase, action] of Object.entries(actionCache)) {
-    if (!byAction.has(action)) byAction.set(action, []);
-    byAction.get(action).push(phrase);
-  }
-  const actItems = [...byAction].map(([action, list]) => {
-    const [main, ...rest] = list;
-    return [main, rest, ACTION_LABELS[action] || action];
-  });
-
-  // 快捷短语：左列是说法，右列提示实际会发出去什么（太长就截断，免得撑破面板）
-  const snipItems = Object.entries(snippetCache).map(([phrase, text]) => [phrase, [], `发送：${clipText(text)}`]);
-
-  box.innerHTML = `
-    <div class="cmdTitle">语音指令<span class="cmdTag">测试功能</span></div>
-    <div class="cmdSec">
-      <div class="cmdSecTitle">打开应用</div>
-      <div class="cmdHint">说「打开 + 名称」，例：打开微信</div>
-      ${rows(appItems)}
-    </div>
-    <div class="cmdSec">
-      <div class="cmdSecTitle">动作</div>
-      <div class="cmdHint">整句说完即触发，不用加前缀</div>
-      ${rows(actItems)}
-    </div>
-    ${snipItems.length ? `<div class="cmdSec">
-      <div class="cmdSecTitle">快捷短语</div>
-      <div class="cmdHint">说这句，就把预设那段话粘贴并发送出去</div>
-      ${rows(snipItems)}
-    </div>` : ''}
-    <div class="cmdFoot">指令表存在数据目录的 commands.json，可在「设置 → 指令配置文件」里修改</div>`;
+  const entries = Object.entries(table || {});
+  box.innerHTML = entries.length
+    ? entries.map(([k, v]) => commandRowHtml(section, k, v)).join('')
+    : '<div class="cmdEmpty">还没有，点下面的「添加一条」</div>';
 }
 
-/** 绑定右上角图标入口：点击开合、点外面/ Esc 关闭 */
+function renderCommandPage(tables) {
+  renderCommandRows('aliases', tables.aliases);
+  renderCommandRows('actions', tables.actions);
+  renderCommandRows('snippets', tables.snippets);
+}
+
+/** 整页打开时把主界面让开（和设置页同一套做法） */
+function setMainHidden(hidden) {
+  const display = hidden ? 'none' : '';
+  for (const id of ['queryBar', 'list']) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = display;
+  }
+  const footer = document.querySelector('footer');
+  if (footer) footer.style.display = display;
+}
+
+/** 读界面上的当前内容。没填全的行不丢弃，收进 problems，保存时一并提示 */
+function collectCommandPage() {
+  const problems = [];
+  const tables = { aliases: {}, actions: {}, snippets: {} };
+  for (const section of ['aliases', 'actions', 'snippets']) {
+    const box = document.getElementById(CMD_ROW_BOX[section]);
+    if (!box) continue;
+    for (const row of box.querySelectorAll('.cmdEditRow')) {
+      const key = row.querySelector('.cmdPhraseIn').value.trim();
+      const input = row.querySelector('.cmdValueIn');
+      const target = row.querySelector('.cmdTargetBtn');
+      const value = ((input ? input.value : (target ? target.dataset.value : '')) || '').trim();
+      if (!key && !value) continue;                       // 整行空着：当没这条
+      if (!key) { problems.push('有一行只填了右边，没写「说法」'); continue; }
+      if (!value) { problems.push(`「${key}」还没选目标`); continue; }
+      if (tables[section][key] !== undefined) { problems.push(`「${key}」在同一个分组里出现了两次`); continue; }
+      tables[section][key] = value;
+    }
+  }
+  return { tables, problems };
+}
+
+/** 只算出改动过的条目：外部同时改过 commands.json 时，没动的内容不受牵连 */
+function diffCommands(before, after) {
+  const patch = {};
+  for (const section of ['aliases', 'actions', 'snippets']) {
+    const oldTable = before[section] || {};
+    const newTable = after[section] || {};
+    const set = {};
+    const del = [];
+    for (const [k, v] of Object.entries(newTable)) if (oldTable[k] !== v) set[k] = v;
+    for (const k of Object.keys(oldTable)) if (!(k in newTable)) del.push(k);
+    if (Object.keys(set).length || del.length) patch[section] = { set, del };
+  }
+  return patch;
+}
+
+function closeCommandPicker() {
+  if (cmdPickerEl) { cmdPickerEl.remove(); cmdPickerEl = null; }
+  if (cmdPickerCleanup) { cmdPickerCleanup(); cmdPickerCleanup = null; }
+}
+
+/** 选应用 / 选动作的浮层（不用原生 select，理由见 style.css） */
+function openCommandPicker(anchor, items, current, { searchable = false } = {}) {
+  closeCommandPicker();
+  const rect = anchor.getBoundingClientRect();
+  const el = document.createElement('div');
+  el.className = 'cmdPicker';
+  el.innerHTML = (searchable ? '<input class="cmdPickerSearch" placeholder="搜索应用…" spellcheck="false">' : '')
+    + '<div class="cmdPickerList"></div>';
+  document.body.appendChild(el);
+  cmdPickerEl = el;
+
+  const list = el.querySelector('.cmdPickerList');
+  const draw = (keyword) => {
+    const kw = (keyword || '').trim().toLowerCase();
+    const shown = kw
+      ? items.filter((it) => it.label.toLowerCase().includes(kw) || (it.sub || '').toLowerCase().includes(kw))
+      : items;
+    list.innerHTML = shown.length
+      ? shown.map((it) => `<button type="button" class="cmdPickItem${it.value === current ? ' on' : ''}" data-value="${escHtml(it.value)}">`
+          + `<span>${escHtml(it.label)}</span>${it.sub ? `<span class="pickSub">${escHtml(it.sub)}</span>` : ''}</button>`).join('')
+      : '<div class="cmdPickNone">没找到</div>';
+  };
+  draw('');
+
+  // 摆位：往下放不下就翻到上面，右边越界就贴右（先量高度再定位）
+  const height = el.offsetHeight;
+  const width = el.offsetWidth;
+  const below = window.innerHeight - rect.bottom - 8;
+  el.style.top = (below >= Math.min(height, 200) ? rect.bottom + 4 : Math.max(8, rect.top - height - 4)) + 'px';
+  el.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) + 'px';
+
+  const search = el.querySelector('.cmdPickerSearch');
+  if (search) {
+    search.oninput = () => draw(search.value);
+    setTimeout(() => search.focus(), 0);
+  }
+  const onOutside = (e) => { if (!el.contains(e.target) && e.target !== anchor) closeCommandPicker(); };
+  const onEscape = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closeCommandPicker(); } };
+  cmdPickerCleanup = () => {
+    document.removeEventListener('click', onOutside, true);
+    document.removeEventListener('keydown', onEscape, true);
+  };
+  setTimeout(() => {
+    document.addEventListener('click', onOutside, true);
+    document.addEventListener('keydown', onEscape, true);
+  }, 0);
+
+  list.addEventListener('click', (e) => {
+    const item = e.target.closest('.cmdPickItem');
+    if (!item) return;
+    anchor.dataset.value = item.dataset.value;
+    anchor.textContent = item.querySelector('span').textContent;
+    anchor.classList.remove('empty');
+    closeCommandPicker();
+  });
+}
+
+/** 点「选择应用 / 选择动作」 */
+async function pickCommandTarget(btn) {
+  const row = btn.closest('.cmdEditRow');
+  const current = btn.dataset.value || '';
+  if (row.dataset.section === 'actions') {
+    openCommandPicker(btn, ACTION_ORDER.map((v) => ({ value: v, label: ACTION_LABELS[v] || v })), current);
+    return;
+  }
+  const apps = await loadAppList();
+  if (!apps.length) { toast('没能读到本机应用列表，请确认本机服务在跑'); return; }
+  openCommandPicker(btn, apps.map((a) => ({ value: a.name, label: a.name, sub: a.path })), current, { searchable: true });
+}
+
+/** 试一下：把这一行当成刚说出口的话触发一次 */
+function tryCommandRow(row) {
+  const section = row.dataset.section;
+  const key = row.querySelector('.cmdPhraseIn').value.trim();
+  const input = row.querySelector('.cmdValueIn');
+  const target = row.querySelector('.cmdTargetBtn');
+  const value = ((input ? input.value : (target ? target.dataset.value : '')) || '').trim();
+  if (!value) { toast('先把右边选好或填好'); return; }
+  if (section === 'aliases') void activate(value, key || value);
+  else if (section === 'actions') runActionCommand(value, key);
+  else executeSnippet(value);
+}
+
+function ensureEmptyHint(box) {
+  if (!box) return;
+  const hasRow = !!box.querySelector('.cmdEditRow');
+  const hint = box.querySelector('.cmdEmpty');
+  if (!hasRow && !hint) box.insertAdjacentHTML('beforeend', '<div class="cmdEmpty">还没有，点下面的「添加一条」</div>');
+  if (hasRow && hint) hint.remove();
+}
+
+function addCommandRow(section) {
+  const box = document.getElementById(CMD_ROW_BOX[section]);
+  if (!box) return;
+  const hint = box.querySelector('.cmdEmpty');
+  if (hint) hint.remove();
+  box.insertAdjacentHTML('beforeend', commandRowHtml(section, '', section === 'actions' ? 'enter' : ''));
+  const row = box.lastElementChild;
+  row.querySelector('.cmdPhraseIn').focus();
+  row.scrollIntoView({ block: 'nearest' });
+}
+
+async function saveCommandPage() {
+  const { tables, problems } = collectCommandPage();
+  if (problems.length) {
+    toast(problems[0] + (problems.length > 1 ? `（还有 ${problems.length - 1} 处）` : ''));
+    return;
+  }
+  const patch = diffCommands(cmdPageBefore || { aliases: {}, actions: {}, snippets: {} }, tables);
+  if (!Object.keys(patch).length) { closeCommandPage(); toast('没有改动'); return; }
+  try {
+    const r = await fetch(apiUrl('/api/commands'), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
+    // 服务端回的是写盘后的全表：直接拿它刷新内存表，不用再读一次
+    commandCache = data.aliases || {};
+    actionCache = data.actions || {};
+    snippetCache = data.snippets || {};
+    closeCommandPage();
+    toast('指令已保存');
+  } catch (e) {
+    toast('保存失败：' + (e.message || e));
+  }
+}
+
+/** 恢复默认：只把界面填回出厂表，点「保存」才写盘（和设置页同一套心智） */
+async function resetCommandPage() {
+  if (!confirm('把三张表都换回出厂指令表？\n\n界面上你自己加的内容会清掉。这一步不会马上写文件，点「保存」才生效。')) return;
+  try {
+    const r = await fetch(apiUrl('/api/commands?defaults=1'));
+    const d = await r.json().catch(() => ({}));
+    renderCommandPage({ aliases: d.aliases || {}, actions: d.actions || {}, snippets: d.snippets || {} });
+    toast('已填入默认指令，点「保存」生效');
+  } catch (e) {
+    toast('读取默认指令失败：' + (e.message || e));
+  }
+}
+
+function closeCommandPage() {
+  closeCommandPicker();
+  const page = document.getElementById('cmdPage');
+  if (page) page.classList.add('hidden');
+  setMainHidden(false);
+}
+
+/** 打开管理页：每次打开都重读一遍文件（外部可能刚改过） */
+async function openCommandPage() {
+  const page = document.getElementById('cmdPage');
+  if (!page) return;
+  bindCommandPage();
+  // 设置页可能开着：两层整页不叠在一起
+  const settings = document.getElementById('settingsPage');
+  if (settings) settings.classList.add('hidden');
+  const { aliases, actions, snippets } = await loadCommandMap();
+  commandCache = aliases;
+  actionCache = actions;
+  snippetCache = snippets;
+  cmdPageBefore = { aliases: { ...aliases }, actions: { ...actions }, snippets: { ...snippets } };
+  renderCommandPage(cmdPageBefore);
+  page.classList.remove('hidden');
+  setMainHidden(true);
+  void loadAppList();   // 后台先把应用列表取回来，点下拉时不用等
+}
+
+/** 管理页里的事件只绑一次：增删、选目标、底部三颗按钮都走这里 */
+function bindCommandPage() {
+  if (cmdPageBound) return;
+  const page = document.getElementById('cmdPage');
+  if (!page) return;
+  cmdPageBound = true;
+
+  page.addEventListener('click', (e) => {
+    const add = e.target.closest('.cmdAddBtn');
+    if (add) { addCommandRow(add.dataset.section); return; }
+    const targetBtn = e.target.closest('.cmdTargetBtn');
+    if (targetBtn) { void pickCommandTarget(targetBtn); return; }
+    const icon = e.target.closest('.cmdIconBtn');
+    if (icon) {
+      const row = icon.closest('.cmdEditRow');
+      if (icon.dataset.act === 'del') { const box = row.parentElement; row.remove(); ensureEmptyHint(box); }
+      else tryCommandRow(row);
+    }
+  });
+
+  const closeBtn = document.getElementById('cmdPageClose');
+  if (closeBtn) closeBtn.onclick = () => closeCommandPage();
+  const cancelBtn = document.getElementById('cmdPageCancel');
+  if (cancelBtn) cancelBtn.onclick = () => closeCommandPage();
+  const saveBtn = document.getElementById('cmdPageSave');
+  if (saveBtn) saveBtn.onclick = () => void saveCommandPage();
+  const resetBtn = document.getElementById('cmdPageReset');
+  if (resetBtn) resetBtn.onclick = () => void resetCommandPage();
+}
+
+/** 绑定右上角图标入口：点开语音指令管理页 */
 function initCommandMenu() {
   const btn = document.getElementById('cmdBtn');
-  const menu = document.getElementById('cmdMenu');
-  if (!btn || !menu || cmdMenuBound) return;
+  if (!btn || cmdMenuBound) return;
   cmdMenuBound = true;
-  const isOpen = () => !menu.classList.contains('hidden');
-  const setOpen = (open) => {
-    menu.classList.toggle('hidden', !open);
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (!open) return;
-    renderCommandMenu(); // 先用内存表秒开
-    // 再后台重读 commands.json：文件被外部改过时，面板能立刻反映最新内容
-    void loadCommandMap().then(({ aliases, actions, snippets }) => {
-      commandCache = aliases;
-      actionCache = actions;
-      snippetCache = snippets;
-      if (isOpen()) renderCommandMenu();
-    });
-  };
-  btn.onclick = (e) => { e.stopPropagation(); setOpen(!isOpen()); };
-  document.addEventListener('click', (e) => {
-    if (!isOpen()) return;
-    if (e.target && e.target.closest && e.target.closest('.cmdWrap')) return;
-    setOpen(false);
-  });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) setOpen(false); });
+  btn.onclick = (e) => { e.stopPropagation(); void openCommandPage(); };
 }
 
 /** 从口述文本提取应用名（"打开微信" → "微信"） */
@@ -374,7 +588,7 @@ export async function learnSpecialCommand(text) {
     // 学习回写：同款说法下次走同步路径直接命中
     if (phrase && phrase.length <= 20 && !actionCache[phrase]) {
       actionCache[phrase] = 'meeting_summary';
-      await persistCommandMap(commandCache);
+      await persistCommandEntry('actions', phrase, 'meeting_summary');
       console.log(`[command] 学习会议总结: "${phrase}"`);
     }
     void executeMeetingSummary();
@@ -415,7 +629,7 @@ export async function learnSpecialCommand(text) {
       // 学习回写：后续同款说法直接命中，不再调 LLM（写 commands.json）
       if (!commandCache[alias] && !commandCache[alias.toLowerCase()]) {
         commandCache[alias] = app;
-        await persistCommandMap(commandCache);
+        await persistCommandEntry('aliases', alias, app);
         console.log(`[command] LLM 学习: "${alias}" → ${app}`);
       }
       const ok = await activate(app, alias);
