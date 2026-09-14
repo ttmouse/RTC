@@ -1,5 +1,6 @@
 import { state } from './state.js';
 import { toast } from './ui.js';
+import { apiUrl } from './api.js';
 
 export function pasteToCursor(text, autoEnter) {
   const t0 = performance.now();
@@ -41,9 +42,7 @@ export function pasteToCursor(text, autoEnter) {
     return;
   }
 
-  const endpoint = (location.protocol === 'http:' || location.protocol === 'https:') && location.port === '8931'
-    ? '/paste'
-    : 'http://127.0.0.1:8931/paste';
+  const endpoint = apiUrl('/paste');
   fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

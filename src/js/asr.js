@@ -1,5 +1,6 @@
+import { wsProxyUrl } from './api.js';
 import { state, isLocalEngine, normalizeEngine, engineStatusText } from './state.js';
-import { $, esc, toast, addLine, scrollListToBottom } from './ui.js';
+import { $, esc, toast, addLine, scrollListToBottom, renderRunStatus } from './ui.js';
 import { applyCorrection } from './correction.js';
 import { pasteToCursor } from './clipboard.js';
 import { tryHandleSpecialCommand, learnSpecialCommand } from './commands.js';
@@ -12,9 +13,35 @@ const VAD_PAD_BLOCKS = 3;
 const VAD_HEARTBEAT_BLOCKS = 54;
 const SILENCE_FRAMES = 16;
 const SILENCE_THRESH = 300;
+// 上行不通时的音频缓冲上限。单个 chunk 是 4096 字节 PCM16@16k ≈ 128ms；
+// 只保留最近 10 秒，恢复连接后补发，超出部分丢弃并明确告知用户。
+const PCM_BUFFER_MAX_MS = 10000;
+const PCM_CHUNK_MS = 4096 / 16000 * 1000;
 
 export function setAsrStopHandler(handler) {
   state.asrStopHandler = handler;
+}
+
+/**
+ * 按句末标点切分，标点保留在句尾。
+ *
+ * 原来是 `delta.split(/(?<=[。！？；])/)`——正则后行断言（lookbehind）。V8/Node 支持，
+ * 但 WebKit 到 Safari 16.4 才支持：这是**解析期**语法错误，不是运行期异常，所以
+ * 在 macOS 10.15/11/12 的 WKWebView 里整个 asr.js 加载失败，main.js 的模块图直接断掉，
+ * 表现为点开就白屏。而 tauri.conf.json 写的 minimumSystemVersion 正是 10.15。
+ * 手写一遍没有任何正则特性依赖，行为完全一致。
+ */
+function splitAfterPunctuation(text) {
+  const out = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if ('。！？；'.includes(text[i])) {
+      out.push(text.slice(start, i + 1));
+      start = i + 1;
+    }
+  }
+  if (start < text.length) out.push(text.slice(start));
+  return out;
 }
 
 export function connectASR() {
@@ -24,9 +51,10 @@ export function connectASR() {
   }
   state.asrReady = false;
   state.asrTaskId = 'asr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+  renderRunStatus(); // 进入「正在连接」
   let connectionTimedOut = false;
 
-  const proxyUrl = `ws://127.0.0.1:8931`;
+  const proxyUrl = wsProxyUrl();
   const eng = normalizeEngine(state.asrEngine);
   const isLocal = isLocalEngine(eng);
   const connectMsg = { type: 'connect', engine: eng };
@@ -104,6 +132,7 @@ export function connectASR() {
         clearTimeout(connectTimeout);
         state.asrReady = true;
         state.pcmBufferStartTime = 0;
+        renderRunStatus(); // 「正在连接」→「识别中」
       } else if (event === 'task-failed') {
         const msg = (data.payload && data.payload.message) ||
           (data.header && data.header.message) ||
@@ -112,6 +141,7 @@ export function connectASR() {
           '未知错误';
         toast((isLocal ? engineStatusText(eng) + ' 识别失败: ' : '百炼任务失败: ') + msg);
         state.asrReady = false;
+        renderRunStatus();
         if (state.recording && !isLocal) {
           setTimeout(() => {
             if (state.recording && state.asrEngine === 'bailian') connectASR();
@@ -134,12 +164,14 @@ export function connectASR() {
   state.asrWs.onerror = () => {
     clearTimeout(connectTimeout);
     if (connectionTimedOut) return;
-    toast('连接异常：无法连接到本地代理服务 (ws://127.0.0.1:8931)，请确认服务已启动');
+    toast(`连接异常：无法连接到本地代理服务 (${proxyUrl})，请确认服务已启动`);
     state.asrReady = false;
+    renderRunStatus();
   };
   state.asrWs.onclose = () => {
     clearTimeout(connectTimeout);
     state.asrReady = false;
+    renderRunStatus();
   };
 }
 
@@ -199,17 +231,33 @@ function checkSilence(pcm) {
 
 export function sendPCM(pcm) {
   if (!state.asrWs || state.asrWs.readyState !== WebSocket.OPEN || !state.asrReady) {
+    // 上行不通时先缓冲。注意这里是**滑窗丢弃**而不是直接 return：
+    // 旧实现在缓冲超过 10 秒后对后续音频一律丢弃，且不告诉任何人——界面还显示「录音中」，
+    // 用户对着麦克风说话，那段音频从来没离开过浏览器。现在按「只保留最近 10 秒」滑动，
+    // 恢复连接后从头补发，并用一条 toast 如实说明间隙。
     if (state.pcmSendBuffer.length === 0) state.pcmBufferStartTime = Date.now();
-    if (state.pcmSendBuffer.length > 0 && Date.now() - state.pcmBufferStartTime > 10000) {
-      return;
+    const bufferedMs = Date.now() - state.pcmBufferStartTime;
+    if (bufferedMs > PCM_BUFFER_MAX_MS) {
+      if (!state.pcmStallNotified) {
+        state.pcmStallNotified = true;
+        toast('识别服务响应较慢，恢复前只保留最近 10 秒音频');
+      }
+      const dropMs = bufferedMs - PCM_BUFFER_MAX_MS;
+      const dropChunks = Math.floor(dropMs / PCM_CHUNK_MS);
+      if (dropChunks > 0) {
+        state.pcmSendBuffer.splice(0, Math.min(dropChunks, state.pcmSendBuffer.length));
+        state.pcmBufferStartTime += dropChunks * PCM_CHUNK_MS;
+      }
     }
     state.pcmSendBuffer.push(pcm);
     if (state.pcmSendBuffer.length > 500) {
-      state.pcmSendBuffer = [];
-      state.pcmBufferStartTime = 0;
+      state.pcmSendBuffer.shift();
+      state.pcmBufferStartTime = Date.now() - state.pcmSendBuffer.length * PCM_CHUNK_MS;
     }
     return;
   }
+
+  state.pcmStallNotified = false;
 
   if (state.pcmSendBuffer.length > 0) {
     const buf = state.pcmSendBuffer;
@@ -253,6 +301,7 @@ export function disconnectBailian() {
   state.asrTaskId = '';
   state.asrSentenceId = null;
   state.asrLastText = '';
+  renderRunStatus();
 }
 
 export function finalizePending() {
@@ -373,7 +422,7 @@ function handleASRResult(sentence, browserReceivedAt) {
     return;
   }
 
-  const segs = delta.split(/(?<=[。！？；])/);
+  const segs = splitAfterPunctuation(delta);
   const complete = segs.filter(s => /[。！？；]$/.test(s));
   const pending = segs.filter(s => !/[。！？；]$/.test(s)).join('');
 

@@ -1,12 +1,7 @@
-function transcriptApi() {
-  const isSameServer =
-    (location.protocol === 'http:' || location.protocol === 'https:') &&
-    location.port === '8931';
-  return isSameServer ? '' : 'http://127.0.0.1:8931';
-}
+import { apiUrl } from './api.js';
 
 export async function appendTranscriptEvent(text, ts, engine) {
-  const response = await fetch(`${transcriptApi()}/api/transcripts/events`, {
+  const response = await fetch(apiUrl('/api/transcripts/events'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -32,7 +27,7 @@ export async function fetchTranscriptEvents(from, to, q) {
   });
   // 带搜索词时服务端忽略 from/to，跨全部历史匹配
   if (q) query.set('q', q);
-  const response = await fetch(`${transcriptApi()}/api/transcripts/events?${query}`, {
+  const response = await fetch(apiUrl(`/api/transcripts/events?${query}`), {
     headers: { 'Content-Type': 'application/json' },
   });
   const data = await response.json().catch(() => ([]));
@@ -43,7 +38,7 @@ export async function fetchTranscriptEvents(from, to, q) {
 }
 
 export async function clearTranscriptEvents() {
-  const response = await fetch(`${transcriptApi()}/api/transcripts/events`, {
+  const response = await fetch(apiUrl('/api/transcripts/events'), {
     method: 'DELETE',
   });
   const data = await response.json().catch(() => ({}));
@@ -53,7 +48,7 @@ export async function clearTranscriptEvents() {
 }
 
 export async function fetchLocalConfig() {
-  const response = await fetch(`${transcriptApi()}/api/config`, {
+  const response = await fetch(apiUrl('/api/config'), {
     headers: { 'Content-Type': 'application/json' },
   });
   const data = await response.json().catch(() => ({}));
@@ -73,7 +68,7 @@ export async function fetchLocalConfig() {
  * 合并挪到服务端串行执行后，各写各的，互不覆盖。
  */
 export async function patchLocalConfig(partial) {
-  const response = await fetch(`${transcriptApi()}/api/config`, {
+  const response = await fetch(apiUrl('/api/config'), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(partial),

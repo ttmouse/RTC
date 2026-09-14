@@ -1,63 +1,22 @@
-import { $, setStatus, toast, setRecordBtn, initListAutoScroll } from './ui.js';
+import { $, renderRunStatus, initRunStatus, toast, setRecordBtn, initListAutoScroll, listNearTop } from './ui.js';
 import { state, VAD_METER_FULL_SCALE } from './state.js';
 import { DEFAULT_RULES, flushCorrectionRules, loadCorrectionRules, saveCorrectionRules } from './correction.js';
 import { ensurePastePermission } from './clipboard.js';
 import { connectASR, setAsrStopHandler } from './asr.js';
 import { getAudioConstraints, startAudio, stopRec } from './audio.js';
-import { clearHistory, renderHistory } from './history.js';
-import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, AI_PROVIDERS } from './settings.js';
+import { clearHistory, loadEarlier, renderHistory } from './history.js';
+import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, syncCollapsibleGroups, refreshGroupSummaries, toggleGroup, AI_PROVIDERS } from './settings.js';
 import { renderModelStatus, getModelStatus } from './model.js';
 import { initLearnedCommands } from './commands.js';
 import { migrateLegacyLocalConfig } from './config-migration.js';
-import { checkForUpdates, setupUpdateUI, updateVersionBadge } from './updater.js';
+import { checkForUpdates, setupUpdateUI, updateVersionInfo } from './updater.js';
 import { playStart, playToggle } from './sfx.js';
+import { apiUrl } from './api.js';
 
 /**
- * 主界面底部显示本地服务累计运行时长。
- * 启动时从 /api/status 拉取 uptime 基准，之后每秒本地递增；
- * 每 60 秒重新校准一次，服务重启后自动归零重新计时。
- * 服务不可达时显示「服务未连接」，用于判断后端是否正常运行。
+ * 主界面顶栏运行状态已收敛到 ui.js 的单一状态机（renderRunStatus / initRunStatus）。
+ * 本文件不再自己写 #statusText / #statusTime，只负责改 state 并在必要时触发重渲染。
  */
-function initServerUptime() {
-  const el = $('statusTime');
-  if (!el) return;
-  let uptime = 0;
-
-  const render = () => {
-    // 录音中：header 状态区显示本段录音时长（由 recStartTs 计时）；空闲时显示服务运行时长
-    const s = state.recording && state.recStartTs
-      ? Math.max(0, Math.floor((Date.now() - state.recStartTs) / 1000))
-      : Math.max(0, Math.floor(uptime));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const pad = (n) => String(n).padStart(2, '0');
-    el.textContent = h > 0
-      ? `${h}:${pad(m)}:${pad(sec)}`
-      : `${pad(m)}:${pad(sec)}`;
-    if (!state.recording) el.classList.remove('up-offline');
-  };
-
-  const fetchUptime = async () => {
-    try {
-      const res = await fetch('http://127.0.0.1:8931/api/status');
-      if (!res.ok) throw new Error(`status ${res.status}`);
-      const data = await res.json();
-      if (data && typeof data.uptime === 'number') {
-        uptime = data.uptime;
-        render();
-      }
-    } catch {
-      el.textContent = '服务未连接';
-      el.classList.add('up-offline');
-    }
-  };
-
-  fetchUptime();
-  setInterval(() => { uptime += 1; render(); }, 1000);
-  setInterval(fetchUptime, 60000);
-}
-
 setAsrStopHandler(stopRec);
 
 // ---------- 开关类行为（唯一入口） ----------
@@ -87,9 +46,12 @@ function toggleAutoEnter() {
 }
 
 $('btn').onclick = async () => {
-  if (state.recording) {
+  if (state.wantRecording) {
+    // 录音中，或正在 await getUserMedia 的半启动状态。
+    // 后者以前会漏：wantRecording 只写不读，用户连点两下时 state.recording 还是 false，
+    // 于是抓第二条麦克风流、建第二条 WebSocket，转写结果整段重复，且旧流再也停不掉。
     state.wantRecording = false;
-    stopRec();
+    if (state.recording) stopRec();
     return;
   }
   if (state.asrEngine === 'bailian' && !state.apiKey) {
@@ -101,19 +63,24 @@ $('btn').onclick = async () => {
   if (!state.stream) {
     try {
       state.stream = await navigator.mediaDevices.getUserMedia({ audio: getAudioConstraints() });
+      state.micError = '';
     } catch (e) {
       toast('无法访问麦克风：' + e.message);
+      state.micError = e.message || '权限被拒';
       state.wantRecording = false;
+      renderRunStatus();
       return;
     }
   }
+  // 等待授权期间用户可能已经再点一下取消了，那就别继续起管道。
+  if (!state.wantRecording) return;
   state.sentCount = 0;
   if ($('count')) $('count').textContent = '';
   state.recording = true;
   state.recStartTs = Date.now();
   setRecordBtn(true);
   $('btn').className = 'on';
-  setStatus('录音中', true);
+  renderRunStatus();
   try {
     await startAudio();
     state.pendingLine = null;
@@ -131,31 +98,28 @@ $('btn').onclick = async () => {
     state.recording = false;
     setRecordBtn(false);
     $('btn').className = '';
-    setStatus('就绪', false);
+    renderRunStatus();
     try { if (state.stream) state.stream.getTracks().forEach(t => t.stop()); } catch (ex) {}
     state.stream = null;
   }
 };
 
-$('filterToggle').onclick = () => {
-  state.filterOn = !state.filterOn;
-  syncToggleUI();
-  saveASRSettings();
-  if (state.recording) {
-    stopRec();
-    state.stream = null;
-    $('btn').onclick();
-  }
+// 降噪 / 回声消除没有开关：默认开启（state.filterOn 由 audio.js getAudioConstraints 读取），
+// 设置页不再暴露该选项。保留状态字段，历史上关掉过的用户其偏好依然生效。
+
+// 百炼 API Key 默认收起，避免一个空输入框常驻占位；点齿轮图标才展开填写。
+// 设置页只做管理，引擎切换仅在底栏药丸。
+$('bailianConfigBtn').onclick = () => {
+  const panel = $('bailianPanel');
+  const btn = $('bailianConfigBtn');
+  const willOpen = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !willOpen);
+  btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
 };
 
-const sfxToggle = $('sfxToggle');
-if (sfxToggle) sfxToggle.onclick = () => {
-  state.sfxOn = !state.sfxOn;
-  syncToggleUI();
-  saveASRSettings();
-  playToggle(state.sfxOn);   // 开启时立刻让用户听到效果（关闭时静默）
-};
-
+// 按钮提示音没有开关：设置页不再暴露该选项，音效恒为启用。
+// state.sfxOn / config.settings.sfx 仍然保留并被 sfx.js 读取，因此
+// 历史上关掉过提示音的用户其偏好依然生效，也不会破坏既有配置文件结构。
 function showSettings(show) {
   $('settingsPage').classList.toggle('hidden', !show);
   $('queryBar').style.display = show ? 'none' : '';
@@ -165,23 +129,36 @@ function showSettings(show) {
     renderModelStatus();
     syncAIForm();
     loadStorageInfo();
+    // 恢复上次的展开/收起偏好（首次打开回落到默认展开状态）
+    syncCollapsibleGroups();
+    // 「识别方式」的选中态与展开面板由 updateEngineBadge() 内部同步（单一写入点）
+    updateEngineBadge();
   }
 }
+
+// 分组折叠：点击标题行切换；状态写入 localStorage，下次打开设置保持同样折叠
+$('settingsPage').addEventListener('click', (e) => {
+  const head = e.target.closest('.s-group.collapsible .sg-head');
+  if (head) {
+    // 登记表键由 head id 去掉 GroupHead 后缀得到（aiGroupHead → ai）
+    toggleGroup(head.id.replace(/GroupHead$/, ''));
+    return;
+  }
+  // 「恢复默认」后所有摘要文案都会变，统一重算一遍
+  if (e.target.closest('#settingsResetBtn')) refreshGroupSummaries();
+});
 
 $('settingsBtn').onclick = () => showSettings(true);
 $('settingsClose').onclick = () => showSettings(false);
 $('settingsSaveBtn').onclick = async () => {
   state.apiKey = $('apiKey').value.trim();
-  if (state.asrEngine === 'bailian' && !state.apiKey) {
-    state.asrEngine = 'sensevoice';
-    updateEngineBadge();
-  }
   readAIForm();
   saveASRSettings();
   saveCorrectionRules($('correctionRules').value);
   await flushASRSettings();
   await flushCorrectionRules();
   renderVADThresholdMarker();
+  refreshGroupSummaries();   // 保存后状态文案可能变了，折叠标题行的摘要同步刷新
   showSettings(false);
 };
 $('settingsCancelBtn').onclick = () => showSettings(false);
@@ -192,9 +169,8 @@ $('settingsResetBtn').onclick = async () => {
   setKeyVisible(false);
   const testStatus = $('apiKeyTestStatus');
   if (testStatus) { testStatus.textContent = ''; testStatus.className = 'key-test-status'; }
+  // VAD 灵敏度无面板控件（唯一入口是主界面电平尺上的可拖刻度），只重置状态
   state.vadThreshold = 0.006;
-  $('vadThreshold').value = 0.006;
-  $('vadThresholdLabel').textContent = '0.006';
   state.silenceTimeout = 2000;
   $('silenceTimeout').value = 2000;
   $('silenceTimeoutLabel').textContent = '2000ms';
@@ -226,7 +202,11 @@ $('settingsResetBtn').onclick = async () => {
   renderVADThresholdMarker();
 };
 
-document.addEventListener('mouseup', () => {
+// 选中即复制：正文区域好用，但**不能**在表单里生效。
+// textarea/input 里的选中同样是 non-collapsed selection，在 API Key 输入框里选一段
+// 想改一下，剪贴板就被悄悄换成了那串 Key——用户接下来粘贴到哪儿都会出岔子。
+document.addEventListener('mouseup', (e) => {
+  if (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
   const sel = window.getSelection();
   const text = sel && !sel.isCollapsed ? sel.toString().trim() : '';
   if (!text) return;
@@ -249,6 +229,10 @@ $('list').addEventListener('click', e => {
   }).catch(() => {});
 });
 
+/**
+ * 切换识别引擎。唯一入口是主界面底栏药丸；设置面板只管配置、不提供切换。
+ * 没有百炼 Key 时不允许切过去并提示——切过去也用不了，不如先拦住。
+ */
 function changeEngine(next) {
   state.apiKey = $('apiKey').value.trim();
   if (next === state.asrEngine) return;
@@ -309,16 +293,10 @@ function refreshEngineMenuAvailability() {
 })();
 refreshEngineMenuAvailability();
 
-$('vadThreshold').oninput = function () {
-  state.vadThreshold = parseFloat(this.value);
-  $('vadThresholdLabel').textContent = state.vadThreshold.toFixed(3);
-  saveASRSettings();
-  renderVADThresholdMarker();
-};
-
-// 主界面 VAD 阈值 tick 可拖拽调整灵敏度
+// VAD 灵敏度唯一入口：主界面电平尺上的可拖刻度（无面板副本）
 (function initVADTickDrag() {
   const bg = $('levelMeterBg');
+  const block = $('levelMeterBlock');
   if (!bg) return;
 
   function setThresholdFromClientX(clientX) {
@@ -327,10 +305,6 @@ $('vadThreshold').oninput = function () {
     const clamped = Math.max(0.001, Math.min(0.05, ratio * VAD_METER_FULL_SCALE));
     state.vadThreshold = Math.round(clamped * 1000) / 1000;
     renderVADThresholdMarker();
-    if ($('vadThreshold')) {
-      $('vadThreshold').value = state.vadThreshold;
-      $('vadThresholdLabel').textContent = state.vadThreshold.toFixed(3);
-    }
     saveASRSettings();
   }
 
@@ -338,19 +312,24 @@ $('vadThreshold').oninput = function () {
   bg.addEventListener('pointerdown', e => {
     bg.setPointerCapture(e.pointerId);
     e.preventDefault();
+    block.classList.add('dragging'); // 拖动中收起刻度 Tips，见 style.css 对应注释
     setThresholdFromClientX(e.clientX);
   });
   bg.addEventListener('pointermove', e => {
     if (e.buttons & 1) setThresholdFromClientX(e.clientX);
   });
+  // 释放捕获后 pointerup / pointercancel 都会派发到 bg 上；两个都要收尾，
+  // 否则拖到一半被系统取消（切窗口等）时 dragging 会一直留着，Tips 再也不弹
+  for (const ev of ['pointerup', 'pointercancel']) {
+    bg.addEventListener(ev, () => block.classList.remove('dragging'));
+  }
 })();
 
 $('apiKey').onchange = () => {
   state.apiKey = $('apiKey').value.trim();
-  if (state.asrEngine === 'bailian' && !state.apiKey) {
-    state.asrEngine = 'sensevoice';
-    updateEngineBadge();
-  }
+  // 不再回落引擎：用户在面板里选的就是他要的。缺 Key 时状态行显示「未配置 Key」，
+  // 真去录音时会被 startRec 拦截并提示。若这里自动切走，用户连选回百炼都会被弹回。
+  updateEngineBadge();
   saveASRSettings();
 };
 
@@ -376,6 +355,9 @@ $('apiKey').addEventListener('blur', () => {
 $('apiKeyTestBtn').onclick = testBailianConnection;
 
 // ---------- AI 服务商表单 ----------
+
+// 折叠/展开由 #settingsPage 上的统一委托处理（见 showSettings 附近），这里不再单独挂 onclick，
+// 否则同一次点击会切换两次、状态又回到原点。
 
 // 预设切换：自动填充 baseUrl / 模型名（用户已手填 values 时同样覆盖为预设值）
 $('aiProvider').onchange = function () {
@@ -427,10 +409,7 @@ $('gainMultiplier').oninput = function () {
   saveASRSettings();
 };
 
-$('autoPasteBtn').onclick = () => toggleAutoPaste();
-
-$('autoEnterBtn').onclick = () => toggleAutoEnter();
-
+// 自动粘贴 / 自动回车：唯一入口是底部两个开关（ftPaste / ftEnter）
 $('ftPaste').onclick = () => toggleAutoPaste();
 
 $('ftEnter').onclick = () => toggleAutoEnter();
@@ -463,20 +442,30 @@ if (searchInput) searchInput.oninput = (e) => {
   }, 250);
 };
 
+// 聊天式向前翻页：滚到列表顶部附近时自动加载更早的记录。
+// 用 rAF 合并滚动事件（一帧内只判断一次），加载中/已到最早由 loadEarlier 自己拦。
+(function initEarlierLoader() {
+  const list = $('list');
+  if (!list || list.dataset.earlierBound) return;
+  list.dataset.earlierBound = '1';
+  let queued = false;
+  list.addEventListener('scroll', () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      if (!listNearTop()) return;
+      void loadEarlier().catch(err => {
+        console.error('[transcript] load earlier failed:', err.message || err);
+      });
+    });
+  }, { passive: true });
+})();
+
 $('clearDataBtn').onclick = () => {
   if (!confirm('确定清除全部历史记录？该操作不可恢复。')) return;
   clearHistory()
     .then(() => toast('历史记录已清除'))
-    .catch(e => toast('清除失败：' + (e.message || e)));
-};
-
-$('nukeDataBtn').onclick = () => {
-  if (!confirm('确定清除所有数据？历史记录与全部设置都会被删除，且不可恢复。')) return;
-  clearHistory()
-    .then(() => {
-      $('settingsResetBtn').click();
-      toast('所有数据已清除');
-    })
     .catch(e => toast('清除失败：' + (e.message || e)));
 };
 
@@ -499,21 +488,28 @@ window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => {
 });
 
 (async () => {
-  setStatus('就绪', false);
+  renderRunStatus();
   initListAutoScroll();
   await migrateLegacyLocalConfig();
+  // 这四个加载各自读写 /api/config 或 /api/commands。以前它们挂在同一条 await 链上、
+  // 只有一个兜底 catch(console.error)：桌面端窗口和 sidecar 抢跑时哪怕一次 fetch 失败，
+  // 后面的 initRunStatus / renderHistory / updateVersionInfo / 自动开录全部跳过，
+  // 而且没有任何重试，界面就此停在「就绪 + 空列表」。单个失败不该拖垮整个启动。
+  const settle = (name, p) => Promise.resolve(p).catch(e => {
+    console.error(`[startup] ${name} 失败:`, e && (e.message || e));
+  });
   await Promise.all([
-    loadCorrectionRules(),
-    loadASRSettings(),
-    loadTotalDuration(),
-    initLearnedCommands(),
+    settle('correctionRules', loadCorrectionRules()),
+    settle('asrSettings', loadASRSettings()),
+    settle('totalDuration', loadTotalDuration()),
+    settle('learnedCommands', initLearnedCommands()),
   ]);
   if (state.autoPaste) ensurePastePermission();
   updateEngineBadge();
   refreshEngineMenuAvailability();
   setupUpdateUI();
-  updateVersionBadge();
-  initServerUptime();
+  updateVersionInfo();
+  initRunStatus();
   await renderHistory(true);
   $('btn').click();
   // 启动 6 秒后静默检查更新；发现新版本时显示顶部横幅提醒
@@ -523,12 +519,6 @@ window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => {
 });
 
 // ---------- 数据存储位置展示 ----------
-
-function storageBase() {
-  return (location.protocol === 'http:' || location.protocol === 'https:') && location.port === '8931'
-    ? ''
-    : 'http://127.0.0.1:8931';
-}
 
 function fmtBytes(n) {
   if (!n) return '0 B';
@@ -540,7 +530,7 @@ let storagePaths = {};
 
 async function loadStorageInfo() {
   try {
-    const r = await fetch(`${storageBase()}/api/storage`);
+    const r = await fetch(apiUrl('/api/storage'));
     const data = await r.json();
     if (!data || !data.dataRoot) return;
     storagePaths = {
@@ -550,48 +540,57 @@ async function loadStorageInfo() {
       commandsFile: data.commandsFile,
     };
     const st = data.stats || {};
-    $('storageDataRoot').textContent = data.dataRoot;
-    $('storageEvents').textContent =
+    const eventsEl = $('storageEvents');
+    eventsEl.textContent =
       `${data.eventsDir}（共 ${st.eventFiles || 0} 个记录文件 · ${fmtBytes(st.eventBytes)}）`;
-    $('storageConfigFile').textContent =
-      `${data.configFile}${st.configExists ? ' · 已存在' : ' · 尚未创建'}`;
-    $('storageCommandsFile').textContent =
-      `${data.commandsFile}${st.commandsExists ? ' · 已存在' : ' · 尚未创建'}`;
+    eventsEl.dataset.copyKey = 'eventsDir';
+    eventsEl.title = '点击复制路径 · ⌥ 点击在访达中显示';
+    const cmdEl = $('storageCommandsFile');
+    cmdEl.textContent = `${data.commandsFile}${st.commandsExists ? ' · 已存在' : ' · 尚未创建'}`;
+    cmdEl.dataset.copyKey = 'commandsFile';
+    cmdEl.title = '点击复制路径 · ⌥ 点击在访达中显示';
+    refreshGroupSummaries({ storage: `${data.dataRoot} · ${st.eventFiles || 0} 个记录文件` });
   } catch (e) {
-    $('storageDataRoot').textContent = '无法读取（服务未连接）: ' + (e.message || e);
+    const events = $('storageEvents');
+    if (events) events.textContent = '无法读取（服务未连接）: ' + (e.message || e);
+    refreshGroupSummaries({ storage: '服务未连接' });
   }
 }
 
-// 在访达中显示
-function ensureStorageButtons() {
+// 在访达中显示（目录→打开目录，文件→选中文件）
+// 走自定义命令而不是 shell.open：后者对本地路径有 URL 白名单，必然失败
+function revealInFinder(path) {
+  const invoke = window.__TAURI__?.core?.invoke;
+  if (!invoke) {
+    toast('仅桌面版支持在访达中显示');
+    return;
+  }
+  invoke('reveal_in_finder', { path }).catch(error => {
+    console.error('[storage] 在访达中显示失败:', error);
+    toast('打开失败：' + (error && error.message ? error.message : error));
+  });
+}
+
+// 存储路径行：点击复制路径；按住 ⌥ 点击在访达中显示。
+// 比并排两个按钮更省地方，路径本身就是最该被复制的东西。
+function ensureStoragePaths() {
   const container = $('settingsPage');
   if (!container) return;
-  container.querySelectorAll('.storage-open-btn').forEach(btn => {
-    if (btn.dataset.bound) return;
-    btn.dataset.bound = '1';
-    btn.onclick = () => {
-      const path = storagePaths[btn.dataset.open];
+  container.querySelectorAll('.storage-path').forEach(el => {
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.onclick = (e) => {
+      const key = el.dataset.copyKey;
+      const path = storagePaths[key];
       if (!path) return;
-      if (window.__TAURI__ && window.__TAURI__.shell) {
-        window.__TAURI__.shell.open(path).catch(() => {});
-      } else {
-        toast('仅桌面版支持打开文件夹');
-      }
-    };
-  });
-  container.querySelectorAll('.storage-copy-btn').forEach(btn => {
-    if (btn.dataset.bound) return;
-    btn.dataset.bound = '1';
-    btn.onclick = () => {
-      const path = storagePaths[btn.dataset.copy];
-      if (!path) return;
+      if (e.altKey) { revealInFinder(path); return; }
       navigator.clipboard.writeText(path)
         .then(() => toast('路径已复制'))
         .catch(() => toast('复制失败'));
     };
   });
 }
-ensureStorageButtons();
+ensureStoragePaths();
 
 // ---------- 纠错规则模态框控制 ----------
 window.correctionOpenEditor = function correctionOpenEditor() {

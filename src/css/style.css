@@ -28,15 +28,42 @@
   #statusTime{ font-family:var(--mono); font-size:11px; color:#b7ab92;
         font-variant-numeric:tabular-nums; letter-spacing:.04em; }
   #statusTime.up-offline{ color:#f29b8a; }
+  /* 状态机：异常状态（服务未连接/麦克风不可用）文字用既有告警色 */
+  #statusText.up-offline{ color:#f29b8a; }
   #dot{ width:7px; height:7px; border-radius:50%; background:#5c5344; flex-shrink:0; }
   #dot.on{ background:var(--seal); box-shadow:0 0 0 3px rgba(191,58,30,.2); }
+  /* 状态机：异常状态点，复用既有告警色 */
+  #dot.err{ background:#f29b8a; }
   .header-actions{ display:flex; align-items:center; gap:10px; }
-  #settingsBtn{ background:none; border:none; color:#b7ab92; padding:4px;
+  #settingsBtn, #cmdBtn{ background:none; border:none; color:#b7ab92; padding:4px;
         border-radius:var(--radius-sm); cursor:pointer; line-height:0;
         display:inline-flex; align-items:center; justify-content:center; }
-  #settingsBtn svg{ display:block; }
-  #settingsBtn:hover{ color:var(--seal); }
-  #settingsBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  #settingsBtn svg, #cmdBtn svg{ display:block; }
+  #settingsBtn:hover, #cmdBtn:hover{ color:var(--seal); }
+  #settingsBtn:focus-visible, #cmdBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  /* 语音指令面板：右上角图标入口，刻意轻量（测试功能，不强化展示） */
+  .cmdWrap{ position:relative; display:flex; align-items:center; }
+  .cmdMenu{ position:absolute; right:0; top:calc(100% + 10px); z-index:90;
+        width:300px; max-width:calc(100vw - 24px); max-height:min(62vh, 400px); overflow-y:auto;
+        background:var(--paper); border:1px solid var(--rule); border-radius:8px;
+        box-shadow:0 8px 24px rgba(26,22,17,.18); padding:10px 4px 8px;
+        color:var(--ink); font-size:12px; line-height:1.5; text-align:left; cursor:default; }
+  .cmdMenu.hidden{ display:none; }
+  .cmdTitle{ display:flex; align-items:center; gap:6px; padding:0 10px 8px;
+        font-size:12px; font-weight:600; letter-spacing:.06em; border-bottom:1px solid var(--rule); }
+  .cmdTag{ font-size:10px; font-weight:400; color:var(--ink-faint); letter-spacing:0;
+        border:1px solid var(--rule); border-radius:999px; padding:0 6px; }
+  .cmdSec{ padding:8px 0 2px; }
+  .cmdSec + .cmdSec{ border-top:1px solid var(--rule); margin-top:6px; }
+  .cmdSecTitle{ padding:0 10px; font-size:11px; color:var(--ink-soft); letter-spacing:.08em; }
+  .cmdHint{ padding:2px 10px 4px; font-size:11px; color:var(--ink-faint); }
+  .cmdRow{ display:flex; align-items:baseline; gap:6px; padding:3px 10px; }
+  .cmdPhrase{ color:var(--ink); flex-shrink:0; }
+  .cmdAlias{ color:var(--ink-faint); font-size:11px; flex:1; min-width:0;
+        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cmdAct{ color:var(--ink-soft); flex-shrink:0; }
+  .cmdFoot{ padding:8px 10px 2px; border-top:1px solid var(--rule); margin-top:6px;
+        font-size:11px; color:var(--ink-faint); }
   .engineWrap{ position:relative; display:flex; align-items:center; }
   /* 左下胶囊：模型切换（原右上 header 移入 footer actionRow 左侧）；
      盒模型与 .footerToggle 严格对齐：高度/内距/圆角/字体/描边一致 */
@@ -67,8 +94,27 @@
   .engineOption.on{ color:var(--seal-deep); font-weight:700; }
   .engineOption:focus-visible{ outline:2px solid var(--seal); outline-offset:-2px; }
 
+  /* overflow-anchor:none 必须保留：向前翻页时手工补偿 scrollTop，浏览器的
+     自动滚动锚定会再补一次，两者叠加导致视口跳动（实测多减了 26px）。 */
   main{ flex:1; overflow-y:auto; padding:16px 20px 24px; position:relative; z-index:1;
+        overflow-anchor:none;
         scrollbar-width:thin; scrollbar-color:rgba(212,203,182,.6) transparent; }
+
+  /* 列表外层：只给「回到最新」按钮一个定位基准。main 仍占满这个盒子，
+     所以包一层后 main 的尺寸与之前完全一致。 */
+  .listWrap{ flex:1; min-height:0; display:flex; position:relative; }
+  /* 回到最新：聊天式浮层按钮，离开底部一段距离才浮出（显隐由 updateJumpBtn 控制） */
+  #jumpBottom{ position:absolute; right:16px; bottom:16px; z-index:2;
+        width:36px; height:36px; padding:0; border-radius:50%;
+        display:inline-flex; align-items:center; justify-content:center;
+        background:var(--paper); border:1px solid var(--rule); color:var(--ink-soft);
+        box-shadow:0 2px 10px rgba(26,22,17,.14); cursor:pointer;
+        opacity:0; transform:translateY(4px); pointer-events:none;
+        transition:opacity .15s, transform .15s, background-color .15s, border-color .15s, color .15s; }
+  #jumpBottom.show{ opacity:1; transform:none; pointer-events:auto; }
+  #jumpBottom:hover{ background:rgba(26,22,17,.07); border-color:var(--ink-soft); color:var(--ink); }
+  #jumpBottom:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  #jumpBottom svg{ flex-shrink:0; }
 
   /* 不加行分隔线：转写是连续口语流水，不是网格。靠行距区分即可，
      一屏的分隔线从 8 条降到 1 条（只剩 .daysep 的日期区块边界）。 */
@@ -86,6 +132,9 @@
   .interim{ color:var(--ink-soft); font-style:italic; }
   .empty{ color:var(--ink-faint); text-align:center; margin-top:32vh; font-size:14px;
           letter-spacing:.25em; }
+  /* 向前翻页的顶部提示条（加载中 / 已到最早），克制样式，随内容滚走 */
+  .listHint{ color:var(--ink-faint); text-align:center; font-size:11px; padding:8px 0 2px;
+             letter-spacing:.2em; user-select:none; }
   .daysep{ text-align:center; color:var(--ink-soft); font-size:11px; margin:18px 0 6px;
            position:relative; letter-spacing:.25em; font-family:var(--mono); }
   .daysep::before,.daysep::after{ content:""; position:absolute; top:50%;
@@ -105,8 +154,9 @@
   footer{ background:var(--paper-2); border-top:1px solid var(--rule);
           padding:10px 20px 12px; display:grid; gap:8px;
           position:relative; z-index:2; }
-  #versionBadge{ font-size:10px; color:#b7ab92; opacity:0.55; user-select:none;
-                 letter-spacing:.04em; font-weight:400; }
+  /* 这里曾经是 #versionBadge 的样式。删掉它的选择器时留下了没有主人的
+     「letter-spacing / font-weight / }」三个 token，浏览器会因此跳过紧随其后的
+     整条 #btn 规则 —— 症状就是主界面录制按钮退化成系统默认的灰底方按钮。 */
   /* 录音按钮：纯图标圆形按钮（文案走 title/aria-label，不占版面） */
   #btn{ background:var(--ink); color:var(--paper); border:none;
         width:56px; height:56px; flex:none; padding:0; border-radius:50%;
@@ -152,73 +202,200 @@
   .footerToggle.on:hover{ background:var(--ink); border-color:var(--ink); }
 
   .footerToggle:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  /* 看不出含义的控件：悬停/聚焦弹 Tips（纯 CSS，比系统 title 更即时，样式也统一）。
+     目前两处用它：底部两个图标开关（快捷键），电平尺（VAD 刻度含义）。
+     注意：用了 data-tip 就不要再设 title，否则系统提示会跟这套 Tips 叠着弹。
+     footer 已有 z-index:2 > main 的 1，向上弹出的 Tips 不会被列表内容盖住 */
+  [data-tip]{ position:relative; }
+  [data-tip]::after{ content:attr(data-tip);
+        position:absolute; bottom:calc(100% + 8px); left:50%;
+        transform:translateX(-50%) translateY(2px);
+        /* 字体继承 --font（全站统一）。注意：这里不能写 ⌥⌘ 这类 macOS 符号——
+           u2318/u2325 在 SF Mono/PingFang 里都没有字形，会 fallback 成残缺的怪形状；
+           所以快捷键用 ASCII 键名（Opt+Cmd+P）书写 */
+        background:var(--ink); color:var(--paper);
+        font-size:12px; line-height:1.15; letter-spacing:.02em;
+        padding:6px 9px; border-radius:6px; white-space:nowrap;
+        box-shadow:0 2px 8px rgba(26,22,17,.18);
+        opacity:0; pointer-events:none; transition:opacity .12s, transform .12s; z-index:20; }
+  [data-tip]:hover::after,
+  [data-tip]:focus-visible::after{ opacity:1; transform:translateX(-50%) translateY(0); }
+  /* 最右的按钮右对齐，避免 Tips 超出窗口右边缘被切掉 */
+  #ftEnter[data-tip]::after{ left:auto; right:0; transform:translateY(2px); }
+  #ftEnter[data-tip]:hover::after,
+  #ftEnter[data-tip]:focus-visible::after{ transform:translateY(0); }
+  /* 电平尺（VAD 刻度）：文案比快捷键长，左对齐 + 允许换行。
+     刻度条横跨整行、从最左起排，左对齐不会被窗口右边缘切掉（窗口最窄 480px） */
+  #levelMeterBlock[data-tip]::after{ left:0; transform:translateY(2px);
+        width:max-content; max-width:min(300px, 62vw);
+        white-space:normal; text-align:left; line-height:1.5; }
+  #levelMeterBlock[data-tip]:hover::after{ transform:translateY(0); }
+  /* 拖动过程中收起 Tips：它正好压住列表最后几行，而拖着的时候用户不需要再听解释 */
+  #levelMeterBlock.dragging[data-tip]::after{ opacity:0; }
   /* 全页面设置面板 */
   #settingsPage{ position:fixed; inset:0; z-index:100; background:var(--paper);
         display:flex; flex-direction:column; }
   #settingsPage.hidden{ display:none; }
   .settingsPageHeader{ display:flex; justify-content:space-between; align-items:center;
-        padding:14px 20px; border-bottom:2px solid var(--ink); font-size:15px;
+        padding:12px 20px; border-bottom:2px solid var(--ink); font-size:15px;
         font-weight:600; color:var(--ink); letter-spacing:.16em;
         background:var(--paper); flex-shrink:0; }
   #settingsClose{ background:none; border:none; font-size:22px; cursor:pointer;
         color:var(--ink-faint); padding:0 6px; line-height:1; border-radius:var(--radius-sm); }
   #settingsClose:hover{ color:var(--seal); }
   #settingsClose:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
-  .settingsPageBody{ flex:1; overflow-y:auto; padding:6px 20px 12px; }
+  .settingsPageBody{ flex:1; overflow-y:auto; padding:2px 20px 24px; counter-reset:sg; }
   /* 设置面板统一使用系统无衬线常规字体 */
   #settingsPage, #settingsPage button, #settingsPage input, #settingsPage select {
         font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif; }
-  /* ── 方案 A 分组布局 ── */
-  .s-group{ margin-bottom:18px; }
-  .s-group:last-child{ margin-bottom:0; }
-  .s-group .sg-title{ font-size:12px; font-weight:500; color:var(--ink-faint); letter-spacing:.08em;
-        margin-bottom:8px; padding-top:2px; }
-  .s-field{ padding:10px 0; border-bottom:1px dotted var(--rule); }
-  .s-field:last-child{ border-bottom:none; }
-  .s-field .fl{ font-size:13px; font-weight:400; margin-bottom:3px; color:var(--ink); }
-  .s-field .fd{ font-size:11px; color:var(--ink-faint); margin-bottom:6px; line-height:1.5; }
-  .s-field .fn{ font-size:11px; color:var(--ink-faint); margin-top:5px; line-height:1.5; padding:5px 8px; background:var(--paper-2); border-radius:3px; }
+  /* ── 分区：像一份排版好的说明书 ──
+     每个分区带一个等宽编号（01/02/…），由 CSS 计数器生成，不用改 HTML。
+     分区之间画一条实线。以前是每个字段都挂一条虚线，虚线太轻既分不开组，
+     又和行内的按钮、状态文字打架，所以线只留在「更重要的地方」。 */
+  .s-group{ counter-increment:sg; margin:0; }
+  .s-group + .s-group{ margin-top:16px; padding-top:16px; border-top:1px solid var(--rule); }
+  /* 模块标题：层级高于字段标签，用更大字号 + 更重字重 + 编号三者一起拉开 */
+  .s-group > .sg-title{ font-size:13px; font-weight:700; color:var(--ink);
+        letter-spacing:.06em; margin-bottom:9px; padding-top:1px; }
+  /* 编号：等宽浅墨，只做定位用，不抢标题。宽度让标题文字和下面字段的左边界差 2px
+     以内，看起来是「对齐的」，而不是差一点点。 */
+  .s-group > .sg-title::before,
+  .s-group .sg-head > .sg-title::before{ content:counter(sg, decimal-leading-zero);
+        display:inline-block; margin-right:3px;
+        font-family:var(--mono); font-size:10px; font-weight:400;
+        color:var(--ink-faint); }
+  /* 可折叠分组（子流程）：默认收起，标题行右侧显示摘要，点击展开 */
+  .s-group .sg-head{ display:flex; align-items:center; gap:8px; width:100%; padding:1px 0 9px;
+        margin:0; background:none; border:none; cursor:pointer; text-align:left; }
+  .s-group .sg-head .sg-title{ flex:1; min-width:0; margin:0; padding:0;
+        font-size:13px; font-weight:700; letter-spacing:.06em; color:var(--ink);
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .s-group .sg-head .sg-sum{ flex-shrink:0; max-width:46%; font-size:11px; color:var(--ink-faint);
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .s-group .sg-head .sg-caret{ flex-shrink:0; color:var(--ink-faint);
+        transition:transform .22s cubic-bezier(.16,1,.3,1); }
+  .s-group .sg-head[aria-expanded="true"] .sg-caret{ transform:rotate(180deg); }
+  .s-group .sg-head:hover .sg-title{ color:var(--seal-deep); }  .s-group .sg-head:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  .s-group .sg-body{ padding-top:1px; }
+  .s-group .sg-body.hidden{ display:none; }
+
+  /* ── 识别方式：每个引擎一行（名称 + 状态 + 管理操作），百炼可展开填 Key ──
+     三个引擎是同一件事的三个选项，用一条左侧竖脊把这一组圈起来；当前在用的那一个
+     竖脊染红（和右侧「使用中」同一语义），名称同时加粗 —— 不做「只靠颜色区分」的选中态。 */
+  .enginePick{ display:flex; flex-direction:column; gap:0; margin-top:1px; }
+  .enginePick .pick{ border-left:2px solid var(--rule); padding-left:11px;
+        transition:border-color .18s cubic-bezier(.16,1,.3,1); }
+  .enginePick .pick.on{ border-left-color:var(--seal); }
+  .s-group .pickHead{ display:flex; align-items:center; gap:9px; flex:1; min-width:0;
+        padding:7px 0; background:none; border:none; text-align:left;
+        color:var(--ink-soft); font-family:inherit; font-size:13px; }
+  /* 三个表头都是非交互的展示行；配置入口是右侧的图标按钮 */
+  .s-group .iconBtn{ display:inline-flex; align-items:center; justify-content:center;
+        width:26px; height:26px; padding:0; border:none; border-radius:3px;
+        background:none; color:var(--ink-faint); cursor:pointer;
+        transition:background-color .15s, color .15s; }
+  .s-group .iconBtn:hover{ background:var(--paper-2); color:var(--ink); }
+  .s-group .iconBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  .s-group .iconBtn[aria-expanded="true"]{ color:var(--seal); background:var(--paper-2); }
+  .s-group .pickName{ flex:none; }
+  .s-group .pickHead.on .pickName{ color:var(--ink); font-weight:600; }  .s-group .pickState{ margin-left:auto; flex-shrink:0; font-size:11px; color:var(--ink-faint);
+        max-width:52%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* 当前引擎：只有它带「使用中」前缀并标红，且设置页不提供改选 */
+  .s-group .pickHead.on .pickState{ color:var(--seal-deep); }
+  .s-group .pickState.pickStateErr{ color:var(--seal); }
+  /* 展开的配置：跟着竖脊往里缩，和引擎名称对齐 */
+  .s-group .pickBody{ padding:0 0 6px; }
+  .s-group .pickBody.hidden{ display:none; }
+  .s-group .pickBody > .s-field{ padding:2px 0 6px; border-bottom:none; }
+  /* 选项行：左边是表头，右边是本引擎的管理操作 */
+  .s-group .pickRow{ display:flex; align-items:center; gap:12px; }
+  .s-group .pickActions{ display:flex; gap:6px; flex-shrink:0; }
+  .s-group .pickActions:empty{ display:none; }
+  /* 拾音参数：只有本地引擎用得到。缩进到和引擎名称对齐，让它读起来是「本地引擎」的
+     附属设置，而不是第四个引擎；上面的细线也跟着缩进，不跟分区实线抢同一条线。 */
+  .s-group .localTuning{ margin:13px 0 0 13px; padding-top:12px; border-top:1px solid var(--rule); }
+  .s-group .localTuning.hidden{ display:none; }
+  .s-group .localTuning .s-field{ border-bottom:none; }
+  /* ── 字段 ──
+     字段之间只用留白：虚线去掉之后，层级改由「标签字重 + 说明色阶 + 分区实线」承担。 */
+  .s-field{ padding:9px 0 11px; border-bottom:none; }
+  .s-field:last-child{ padding-bottom:1px; }
+  /* 字段标签刻意不加粗：加粗后和分区标题（13/700 + 编号）看起来一样重，就分不出
+     「一组的名字」和「一个设置项的名字」。层级靠分区标题、说明文字、实线三者一起拉。 */
+  .s-field .fl{ font-size:13px; font-weight:400; margin-bottom:5px; color:var(--ink);
+        letter-spacing:.01em; }
+  .s-field .fd{ font-size:11px; color:var(--ink-faint); margin-bottom:7px; line-height:1.55;
+        max-width:62ch; }
+  .s-field .fn{ font-size:11px; color:var(--ink-soft); margin-top:6px; line-height:1.5; padding:6px 9px; background:var(--paper-2); border-radius:3px; }
+  /* 字段右侧的次级信息 + 动作：计数在左，按钮在右，基线居中对齐 */
+  .s-field .s-row-end{ display:flex; align-items:center; gap:10px; flex-shrink:0; }
+  .s-field .s-count{ font-family:var(--mono); font-size:11px; color:var(--ink-faint);
+        font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .s-field .s-actions{ display:flex; gap:6px; margin-top:7px; }
+  /* 窄窗（窗口最小 480px）时「109 条规则 + 管理」会把说明文字挤成两行；
+     把右侧的计数与按钮整块放到下一行，说明文字就能用满整行。 */
+  @media (max-width:560px){
+    .s-field .toggle-row{ flex-wrap:wrap; row-gap:8px; }
+    .s-field .toggle-row .s-row-end{ width:100%; justify-content:flex-start; }
+  }
   .s-field .range-row{ display:flex; align-items:center; gap:10px; }
   .s-field .range-row input[type=range]{ flex:1; -webkit-appearance:none; appearance:none; height:4px; border-radius:2px; background:var(--rule); outline:none; }
   .s-field .range-row input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--seal); border:2px solid var(--paper); cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,.15); }
-  .s-field .range-row .rv{ font-size:12px; min-width:40px; text-align:right; color:var(--ink-soft); }
+  /* 数值用等宽 + 表格数字：拖动滑块时数字不会左右跳 */
+  .s-field .range-row .rv{ font-family:var(--mono); font-size:12px; min-width:46px;
+        text-align:right; color:var(--ink-soft); font-variant-numeric:tabular-nums; }
   .s-field .toggle-row{ display:flex; justify-content:space-between; align-items:center; gap:12px; }
   .s-field .toggle-row .ti{ flex:1; min-width:0; }
-  .s-field .toggle-row .ti .tt{ font-size:13px; font-weight:400; color:var(--ink); }
+  .s-field .toggle-row .ti .tt{ font-size:13px; font-weight:400; color:var(--ink); letter-spacing:.01em; }
   .s-field .toggle-row .ti .ts{ font-size:11px; color:var(--ink-faint); margin-top:2px;
         text-align:left; font-family:inherit; line-height:1.5; min-width:0; flex-shrink:1; }
-  .s-field .toggle{ width:40px; height:22px; border-radius:11px; background:var(--rule); position:relative; cursor:pointer; transition:background .2s; flex-shrink:0; }
+  .s-field .toggle{ width:38px; height:20px; border-radius:10px; background:var(--rule);
+        position:relative; cursor:pointer; flex-shrink:0;
+        transition:background-color .18s cubic-bezier(.16,1,.3,1); }
   .s-field .toggle.on{ background:var(--seal); }
-  .s-field .toggle::after{ content:""; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .2s; box-shadow:0 1px 3px rgba(0,0,0,.15); }
+  .s-field .toggle::after{ content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+        border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(26,22,17,.28);
+        transition:transform .22s cubic-bezier(.16,1,.3,1); }
   .s-field .toggle.on::after{ transform:translateX(18px); }
-  /* 模型管理 */
-  .s-field .model-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
-  .s-field .model-head .fl{ margin-bottom:0; }
-  .s-field .model-progress{ display:flex; align-items:center; gap:8px; width:100%; margin-top:8px; }
-  .s-field .model-progress.hidden{ display:none; }
-  .s-field .model-progress-track{ flex:1; height:6px; background:var(--rule); border-radius:3px; overflow:hidden; }
-  .s-field .model-progress-fill{ height:100%; width:0%; background:var(--seal); border-radius:3px; transition:width .3s; }
-  .s-field .model-progress-text{ font-size:11px; color:var(--ink-soft); min-width:48px; text-align:right; }
+  .s-field .toggle:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  /* 模型管理：进度条跟引擎名称左对齐（引擎行现在有 13px 的竖脊缩进，这里必须跟着走，
+     否则进度条会比它所属的引擎凸出去一截） */
+  .model-progress{ display:flex; align-items:center; gap:8px; margin:0 0 8px; }
+  .model-progress.hidden{ display:none; }
+  .model-progress-track{ flex:1; height:6px; background:var(--rule); border-radius:3px; overflow:hidden; }
+  .model-progress-fill{ height:100%; width:0%; background:var(--seal); border-radius:3px; transition:width .3s; }
+  .model-progress-text{ font-size:11px; color:var(--ink-soft); min-width:48px; text-align:right; }
   /* 解压阶段：总量未知，进度条切不确定态扫动 */
-  .s-field .model-progress.indeterminate .model-progress-fill{ width:35%; animation:update-indeterminate 1.2s ease-in-out infinite; transition:none; }
-  .s-field .model-btns{ display:flex; gap:6px; flex-wrap:wrap; }
-  .s-field .model-btns .sbtn{ padding:4px 12px; font-size:11px; border:1px solid var(--rule); border-radius:3px; background:transparent; cursor:pointer; color:var(--ink-soft); }
-  .s-field .model-btns .sbtn:hover{ border-color:var(--ink); color:var(--ink); }
-  .s-field .model-btns .sbtn.hidden{ display:none; }
-  .s-field .model-btns .sbtn.primary{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  .model-progress.indeterminate .model-progress-fill{ width:35%; animation:update-indeterminate 1.2s ease-in-out infinite; transition:none; }
+  /* 存储路径：整行可点，点击复制 · ⌥ 点击在访达中显示 */
+  .storage-path{ display:block; width:100%; text-align:left; margin:0;
+        padding:7px 9px; border:1px solid var(--rule); border-radius:3px;
+        background:var(--paper-2);
+        font-family:var(--mono); font-size:11px; line-height:1.5; color:var(--ink-soft);
+        cursor:pointer; word-break:break-all;
+        transition:border-color .15s, color .15s; }
+  .storage-path:hover{ border-color:var(--ink-soft); color:var(--ink); }
+  .storage-path:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
   .s-field .select-wrap{ position:relative; }
-  .s-field .select-wrap select{ width:100%; padding:6px 28px 6px 10px; border:1px solid var(--rule); border-radius:3px; background:var(--paper); font-size:12px; color:var(--ink); -webkit-appearance:none; appearance:none; cursor:pointer; }
+  .s-field .select-wrap select{ width:100%; padding:6px 28px 6px 10px; border:1px solid var(--rule); border-radius:3px; background:var(--paper-2); font-size:12px; color:var(--ink); -webkit-appearance:none; appearance:none; cursor:pointer; transition:border-color .15s, box-shadow .15s; }
+  .s-field .select-wrap select:focus{ border-color:var(--seal); box-shadow:0 0 0 3px rgba(191,58,30,.12); }
   .s-field .select-wrap::after{ content:""; position:absolute; right:10px; top:calc(50% - 2px); border-left:4px solid transparent; border-right:4px solid transparent; border-top:5px solid var(--ink-faint); pointer-events:none; }
   .s-field textarea{ width:100%; min-height:80px; padding:6px 8px; border:1px solid var(--rule); border-radius:3px; background:var(--paper); font-size:12px; font-family:var(--mono); color:var(--ink); resize:vertical; outline:none; line-height:1.5; }
   .s-field textarea:focus{ border-color:var(--seal); }
-  .s-field input[type=password], .s-field input[type=text]{ width:100%; padding:6px 8px; border:1px solid var(--rule); border-radius:3px; background:var(--paper); font-size:12px; font-family:var(--mono); color:var(--ink); outline:none; }
-  .s-field input[type=password]:focus, .s-field input[type=text]:focus{ border-color:var(--seal); }
+  /* 输入框底色比纸面深一档：此前和纸面同色，只能靠边框分辨「哪里能写字」 */
+  .s-field input[type=password], .s-field input[type=text]{ width:100%; padding:6px 9px;
+        border:1px solid var(--rule); border-radius:3px; background:var(--paper-2);
+        font-size:12px; font-family:var(--mono); color:var(--ink); outline:none;
+        transition:border-color .15s, box-shadow .15s; }
+  .s-field input[type=password]:focus, .s-field input[type=text]:focus{ border-color:var(--seal);
+        box-shadow:0 0 0 3px rgba(191,58,30,.12); }
+  .s-field input::placeholder{ color:var(--ink-faint); opacity:1; }
   /* API Key 输入：明文切换 + 连接测试 */
   .s-field .key-wrap{ position:relative; }
-  .s-field .key-wrap input{ width:100%; padding:6px 34px 6px 8px; border:1px solid var(--rule);
-        border-radius:3px; background:var(--paper); font-size:12px; font-family:var(--mono);
-        color:var(--ink); outline:none; }
-  .s-field .key-wrap input:focus{ border-color:var(--seal); }
+  .s-field .key-wrap input{ width:100%; padding:6px 34px 6px 9px; border:1px solid var(--rule);
+        border-radius:3px; background:var(--paper-2); font-size:12px; font-family:var(--mono);
+        color:var(--ink); outline:none; transition:border-color .15s, box-shadow .15s; }
+  .s-field .key-wrap input:focus{ border-color:var(--seal); box-shadow:0 0 0 3px rgba(191,58,30,.12); }
   .s-field .key-eye{ position:absolute; right:3px; top:50%; transform:translateY(-50%);
         display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px;
         border:none; background:none; cursor:pointer; color:var(--ink-faint); border-radius:3px; padding:0; }
@@ -237,25 +414,23 @@
   .s-field .key-test-status:empty{ display:none; }
   .s-field .key-test-status.ok{ color:#3f6f4f; }
   .s-field .key-test-status.err{ color:var(--seal); }
-  .s-field .corr-row{ display:flex; justify-content:space-between; align-items:center; margin-top:5px; }
-  .s-field .corr-row .cc{ display:flex; gap:6px; }
-  .s-field .corr-row .cc button{ padding:3px 10px; border:1px solid var(--rule); border-radius:3px; font-size:11px; cursor:pointer; background:transparent; color:var(--ink-soft); }
-  .s-field .corr-row .cc button:hover{ border-color:var(--ink); color:var(--ink); }
-  .s-field .corr-row .cc button:focus-visible{ outline:2px solid var(--seal); outline-offset:1px; }
   /* ── 按钮基类 ──
-     此前只有底栏 / 模态框 / 模型卡片内的 .sbtn 各自定义了样式；数据清理、软件更新
+     此前只有底栏 / 模态框 / 模型卡片内的 .sbtn 各自定义了样式；数据存储位置、软件更新
      里的按钮只有裸 class，会退化成 macOS 原生按钮（灰底、系统字体），和纸质主题脱节。
      这里补齐基类。注意选择器保持最低优先级（单类），底栏/模型等处的尺寸仍由各自
      作用域规则覆盖，不受影响。 */
   .sbtn{ display:inline-flex; align-items:center; justify-content:center; flex:none;
-        padding:5px 14px; border:1px solid var(--rule); border-radius:var(--radius-sm);
+        min-height:26px; padding:4px 13px; border:1px solid var(--rule);
+        border-radius:var(--radius-sm);
         background:transparent; color:var(--ink-soft);
         font-size:12px; line-height:1.4; font-family:inherit; letter-spacing:.04em;
         cursor:pointer; white-space:nowrap;
         -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
-        transition:border-color .15s, color .15s, background-color .15s; }
+        transition:border-color .15s, color .15s, background-color .15s, transform .09s; }
   .sbtn:hover{ border-color:var(--ink); color:var(--ink); }
   .sbtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  /* 按下时下沉 1px：纸面上的按钮要有被按到的实感，不能点下去毫无反应 */
+  .sbtn:active:not(:disabled){ transform:translateY(1px); }
   .sbtn:disabled{ opacity:.5; cursor:default; }
   .sbtn.hidden{ display:none; }
   /* 主操作 / 危险操作 / 行内小号：hover 用复合选择器，避免被 .sbtn:hover 抢走文字色 */
@@ -264,14 +439,29 @@
   .sbtn.danger{ color:var(--seal); border-color:var(--seal); }
   .sbtn.danger:hover{ background:rgba(191,58,30,.08); color:var(--seal-deep); border-color:var(--seal-deep); }
   .sbtn.sm{ padding:3px 10px; font-size:11px; }
-  .s-page-foot{ display:flex; gap:10px; padding:14px 20px 16px; border-top:2px solid var(--ink);
-        background:var(--paper); flex-shrink:0; }
+  /* 底栏：纸面深一档，像装订边，把「保存/取消」和可滚动的正文分开 */
+  .s-page-foot{ display:flex; gap:10px; padding:12px 20px 14px; border-top:2px solid var(--ink);
+        background:var(--paper-2); flex-shrink:0; }
   .s-page-foot .sbtn{ padding:7px 20px; border:1px solid var(--rule); border-radius:var(--radius); font-size:12px; cursor:pointer; letter-spacing:.08em; color:var(--ink-soft); background:transparent; }
   .s-page-foot .sbtn:hover{ border-color:var(--ink); color:var(--ink); }
   .s-page-foot .sbtn.primary{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
   .s-page-foot .sbtn.primary:hover{ background:#2d271f; }
   .s-page-foot .sbtn.danger{ color:var(--seal); border-color:var(--seal); margin-left:auto; }
   .s-page-foot .sbtn.danger:hover{ background:var(--seal-light, rgba(191,58,30,.08)); }
+  /* 打开设置时的入场：分区依次淡入，总时长压在 ~200ms 内，不拖慢操作 */
+  #settingsPage:not(.hidden) .settingsPageBody > .s-group{
+        animation:sg-in .2s cubic-bezier(.16,1,.3,1) both; }
+  #settingsPage:not(.hidden) .settingsPageBody > .s-group:nth-child(2){ animation-delay:.025s; }
+  #settingsPage:not(.hidden) .settingsPageBody > .s-group:nth-child(3){ animation-delay:.05s; }
+  #settingsPage:not(.hidden) .settingsPageBody > .s-group:nth-child(4){ animation-delay:.075s; }
+  #settingsPage:not(.hidden) .settingsPageBody > .s-group:nth-child(n+5){ animation-delay:.1s; }
+  @keyframes sg-in{
+    from{ opacity:0; transform:translateY(4px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+  @media (prefers-reduced-motion:reduce){
+    #settingsPage .settingsPageBody > .s-group{ animation:none; }
+  }
   #err{ color:var(--seal-deep); font-size:12px; padding:5px 20px; display:none;
         background:#f3e3dc; position:relative; z-index:2; font-family:var(--font); }
   #updateBanner{ display:flex; align-items:center; gap:10px; padding:6px 16px;
@@ -324,7 +514,7 @@
     #btn{ width:48px; height:48px; }
     #btn svg{ width:20px; height:20px; }
     .footerToggle{ width:40px; height:40px; padding:0; }
-    #versionBadge{ font-size:9px; }
+    #jumpBottom{ width:32px; height:32px; right:12px; bottom:12px; }
   }
 
   /* 模态框遮罩 */

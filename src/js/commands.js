@@ -1,6 +1,7 @@
 import { toast } from './ui.js';
 import { state } from './state.js';
 import { fetchLocalConfig } from './storage.js';
+import { apiUrl } from './api.js';
 
 // 默认指令表：仅在 commands.json 缺失时作为种子写入。
 // 此后一切以数据目录下的 commands.json 为准（用户或外部 AI Agent 可直接改文件）。
@@ -34,7 +35,7 @@ async function loadCommandMap() {
   let map = {};
   let actions = {};
   try {
-    const r = await fetch('http://127.0.0.1:8931/api/commands');
+    const r = await fetch(apiUrl('/api/commands'));
     const data = await r.json().catch(() => ({}));
     if (data && data.aliases && typeof data.aliases === 'object') map = { ...data.aliases };
     if (data && data.actions && typeof data.actions === 'object') actions = { ...data.actions };
@@ -57,7 +58,7 @@ async function loadCommandMap() {
 /** 写回 commands.json（PUT /api/commands） */
 async function persistCommandMap(map) {
   try {
-    const r = await fetch('http://127.0.0.1:8931/api/commands', {
+    const r = await fetch(apiUrl('/api/commands'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ version: 1, aliases: map, actions: actionCache }),
@@ -75,6 +76,93 @@ export async function initLearnedCommands() {
   actionCache = actions;
   loaded = true;
   console.log(`[command] 指令表已加载 ${Object.keys(commandCache).length} 条别名 / ${Object.keys(actionCache).length} 条动作`);
+  initCommandMenu();
+}
+
+/* ---------------- 语音指令面板（右上角图标入口；测试功能，刻意轻量） ---------------- */
+
+// 动作码 → 人话。未知动作码原样显示，新增动作时面板不会失真
+const ACTION_LABELS = { enter: '按下回车键', meeting_summary: '生成 Markdown 会议纪要' };
+let cmdMenuBound = false;
+
+/** 从别名表反推应用展示名：优先取中文说法作主名，其余英文说法作同义词 */
+function appDisplay(appId) {
+  const keys = Object.keys(commandCache).filter((k) => commandCache[k] === appId);
+  const name = keys.find((k) => /[\u4e00-\u9fff]/.test(k)) || keys[0] || appId;
+  return { name, rest: keys.filter((k) => k !== name) };
+}
+
+/** 用内存里的指令表渲染面板（纯本地，不出网） */
+function renderCommandMenu() {
+  const box = document.getElementById('cmdMenu');
+  if (!box) return;
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const rows = (items) => items.map(([main, rest, act]) =>
+    `<div class="cmdRow"><span class="cmdPhrase">${esc(main)}</span>`
+    + `<span class="cmdAlias">${esc(rest.join(' / '))}</span>`
+    + `<span class="cmdAct">${esc(act)}</span></div>`).join('');
+
+  // 别名按应用归组（保持 commands.json 里的顺序），每组取一个中文说法当主名
+  const byApp = new Map();
+  for (const [phrase, app] of Object.entries(commandCache)) {
+    if (!byApp.has(app)) byApp.set(app, []);
+  }
+  const appItems = [...byApp.keys()].map((app) => {
+    const { name, rest } = appDisplay(app);
+    return [name, rest, `打开 ${app}`];
+  });
+
+  const byAction = new Map();
+  for (const [phrase, action] of Object.entries(actionCache)) {
+    if (!byAction.has(action)) byAction.set(action, []);
+    byAction.get(action).push(phrase);
+  }
+  const actItems = [...byAction].map(([action, list]) => {
+    const [main, ...rest] = list;
+    return [main, rest, ACTION_LABELS[action] || action];
+  });
+
+  box.innerHTML = `
+    <div class="cmdTitle">语音指令<span class="cmdTag">测试功能</span></div>
+    <div class="cmdSec">
+      <div class="cmdSecTitle">打开应用</div>
+      <div class="cmdHint">说「打开 + 名称」，例：打开微信</div>
+      ${rows(appItems)}
+    </div>
+    <div class="cmdSec">
+      <div class="cmdSecTitle">动作</div>
+      <div class="cmdHint">整句说完即触发，不用加前缀</div>
+      ${rows(actItems)}
+    </div>
+    <div class="cmdFoot">指令表存在数据目录的 commands.json，可在「设置 → 指令配置文件」里修改</div>`;
+}
+
+/** 绑定右上角图标入口：点击开合、点外面/ Esc 关闭 */
+function initCommandMenu() {
+  const btn = document.getElementById('cmdBtn');
+  const menu = document.getElementById('cmdMenu');
+  if (!btn || !menu || cmdMenuBound) return;
+  cmdMenuBound = true;
+  const isOpen = () => !menu.classList.contains('hidden');
+  const setOpen = (open) => {
+    menu.classList.toggle('hidden', !open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open) return;
+    renderCommandMenu(); // 先用内存表秒开
+    // 再后台重读 commands.json：文件被外部改过时，面板能立刻反映最新内容
+    void loadCommandMap().then(({ aliases, actions }) => {
+      commandCache = aliases;
+      actionCache = actions;
+      if (isOpen()) renderCommandMenu();
+    });
+  };
+  btn.onclick = (e) => { e.stopPropagation(); setOpen(!isOpen()); };
+  document.addEventListener('click', (e) => {
+    if (!isOpen()) return;
+    if (e.target && e.target.closest && e.target.closest('.cmdWrap')) return;
+    setOpen(false);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) setOpen(false); });
 }
 
 /** 从口述文本提取应用名（"打开微信" → "微信"） */
@@ -112,10 +200,10 @@ function normalizePhrase(text) {
 /** 触发回车（动作 enter）：POST /key/enter，不碰剪贴板 */
 async function executeEnter() {
   try {
-    const r = await fetch('http://127.0.0.1:8931/key/enter', { method: 'POST' });
+    const r = await fetch(apiUrl('/key/enter'), { method: 'POST' });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || data.error) {
-      toast('发送失败：' + (data && data.error) || ('HTTP ' + r.status));
+      toast('发送失败：' + ((data && data.error) || ('HTTP ' + r.status)));
       return;
     }
     if (data.warn) toast('已触发回车（若未发送成功，请检查辅助功能权限）');
@@ -132,7 +220,7 @@ const MEETING_SUMMARY_RE = /会议\s*(纪要|总结|摘要)|(纪要|总结|摘�
 async function executeMeetingSummary() {
   toast('正在总结最近一次会议…');
   try {
-    const r = await fetch('http://127.0.0.1:8931/api/tasks/meeting-summary', {
+    const r = await fetch(apiUrl('/api/tasks/meeting-summary'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -212,7 +300,7 @@ export async function learnSpecialCommand(text) {
   if (!baseUrl || !model) return; // 未配 AI 服务商，跳过学习
 
   try {
-    const response = await fetch('http://127.0.0.1:8931/api/llm/chat', {
+    const response = await fetch(apiUrl('/api/llm/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -1,6 +1,7 @@
 // js/updater.js — 应用内更新（Tauri updater + GitHub Releases）
 // 依赖 withGlobalTauri 注入的 window.__TAURI__.updater / .process / .app
 import { $, toast } from './ui.js';
+import { apiUrl } from './api.js';
 
 export const UPDATE_STATE = {
   checking: false,
@@ -8,17 +9,30 @@ export const UPDATE_STATE = {
   available: null,
 };
 
+/**
+ * 应用版本号。桌面端以 Tauri 为准；网页端向本地服务取（服务端读的是 package.json），
+ * 这样版本号只有 package.json 一处来源，前端不必各写一份。
+ */
 export async function getAppVersion() {
   try {
     return await window.__TAURI__.app.getVersion();
   } catch {
-    return '1.0.20';
+    /* 非 Tauri 环境（浏览器 / 开发网页端），走下面的服务端查询 */
   }
+  try {
+    const r = await fetch(apiUrl('/api/status'));
+    const data = await r.json();
+    if (data && data.version) return data.version;
+  } catch {
+    /* 服务不可达 */
+  }
+  return null;
 }
 
-export async function updateVersionBadge() {
-  const badge = $('versionBadge');
-  if (badge) badge.textContent = 'v' + (await getAppVersion());
+/** 首屏落一次版本信息（唯一显示处是设置页「软件更新」里的状态行） */
+export async function updateVersionInfo() {
+  const version = await getAppVersion();
+  if (version) setUpdateStatus(`当前版本 v${version}`);
 }
 
 function setUpdateStatus(text) {
@@ -107,7 +121,9 @@ export async function checkForUpdates(manual = false) {
     } else {
       hideUpdateBanner();
       resetUpdateProgress();
-      setUpdateStatus(`已是最新版本（v${await getAppVersion()}）`);
+      // 版本号缺失时（服务不可达）不显示 "vnull"
+      const latest = await getAppVersion();
+      setUpdateStatus(latest ? `已是最新版本（v${latest}）` : '已是最新版本');
       if (manual) toast('已是最新版本');
     }
   } catch (e) {

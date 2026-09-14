@@ -13,6 +13,9 @@ export const state = {
   rendered: new Set(),
   lastDay: '',
   stickToBottom: true,   // 列表是否跟随最新内容；用户向上翻阅历史时置 false，不再抢滚动
+  historyFrom: null,     // 已加载窗口的起点（ms）；向前翻页时不断前移，null=今天 00:00
+  historyExhausted: false, // 已经翻到最早，不再尝试向前加载
+  historyLoading: false,   // 向前加载进行中，防止滚动事件并发触发多次请求
   searchQuery: '',
   filterOn: true,
   asrEngine: 'sensevoice',
@@ -21,6 +24,10 @@ export const state = {
   asrWs: null,
   asrTaskId: '',
   asrReady: false,
+  // ---------- 顶栏运行状态（唯一渲染来源在 ui.js 的 renderRunStatus） ----------
+  serverOk: null,         // 本地服务探测结果：null=尚未探测 / true=可达 / false=不可达
+  serverUptime: 0,        // 服务运行时长基准（秒），来自 /api/status.uptime
+  micError: '',           // 麦克风不可用原因（''=可用），由 getUserMedia 失败时写入
   audioDuration: 0,
   asrLastTime: 0,
   asrLastText: '',
@@ -46,6 +53,8 @@ export const state = {
   silenceChunks: 0,
   pcmSendBuffer: [],
   pcmBufferStartTime: 0,
+  // 上行拥塞提示只在一次拥塞里弹一次，恢复后复位（见 asr.js sendPCM）
+  pcmStallNotified: false,
   asrStopHandler: null,
   // AI 服务商配置（OpenAI 兼容）：provider/baseUrl/apiKey/model
   aiConfig: {

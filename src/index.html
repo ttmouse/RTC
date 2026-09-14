@@ -8,9 +8,15 @@
 </head>
 <body>
 <header>
-  <h1>实时逐字稿<span id="versionBadge">v1.0.20</span></h1>
+  <h1>实时逐字稿</h1>
   <div class="header-actions">
     <div id="status"><span id="dot"></span><span id="statusText">就绪</span><span id="statusTime" title="录音中为本次录音时长；空闲时显示本地服务运行时长（服务重启后归零）"></span></div>
+    <div class="cmdWrap">
+      <button id="cmdBtn" title="语音指令（测试功能）" aria-haspopup="dialog" aria-expanded="false">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
+      </button>
+      <div class="cmdMenu hidden" id="cmdMenu" role="dialog" aria-label="语音指令"></div>
+    </div>
     <button id="settingsBtn" title="设置">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
@@ -32,13 +38,22 @@
   <input type="search" id="searchInput" placeholder="搜索全部转写记录" autocomplete="off" spellcheck="false" aria-label="搜索转写记录">
 </div>
 
-<main id="list">
-  <div class="empty">点击下方按钮开始录音</div>
-</main>
+<div class="listWrap">
+  <main id="list">
+    <div class="empty">点击下方按钮开始录音</div>
+  </main>
+  <button id="jumpBottom" title="回到最新" aria-label="回到最新">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/></svg>
+  </button>
+</div>
 
 <footer>
   <div class="meterRow">
-    <div id="levelMeterBlock" title="麦克风音量 / VAD 阈值（可拖动调整灵敏度）">
+    <!-- 电平尺上的刻度＝VAD 灵敏度阈值，设置面板里已没有这个选项，
+         所以刻度含义只能靠悬停 Tips 解释（用 data-tip 后不要再加 title，会叠着弹） -->
+    <div id="levelMeterBlock"
+         data-tip="VAD 灵敏度 · 可拖动调整：值越大越不敏感（噪音不触发），越小越灵敏（轻声也识别）"
+         aria-label="VAD 灵敏度，可拖动调整，值越大越不敏感">
       <div id="levelMeter">
         <div id="levelMeterBg">
           <div id="levelMeterBar"></div>
@@ -50,7 +65,7 @@
   </div>
   <div class="actionRow">
     <div class="engineWrap enginePill">
-      <button id="engineBadge" title="当前引擎：SenseVoice" aria-haspopup="listbox">
+      <button id="engineBadge" aria-haspopup="listbox">
         <span id="engineBadgeText">SenseVoice</span>
         <svg class="caret" width="8" height="6" viewBox="0 0 8 6" aria-hidden="true"><path d="M0 0l4 6 4-6z" fill="currentColor"/></svg>
       </button>
@@ -65,10 +80,10 @@
       <svg id="btnIconPause" class="hidden" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
     </button>
     <div class="footerToggles">
-    <button id="ftPaste" class="footerToggle" title="自动粘贴（Cmd+Shift+V）" aria-label="自动粘贴">
+    <button id="ftPaste" class="footerToggle" data-tip="自动粘贴 · Opt+Cmd+P" aria-label="自动粘贴，快捷键 Option 加 Command 加 P">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
     </button>
-    <button id="ftEnter" class="footerToggle" title="自动发送（Cmd+Shift+E）" aria-label="自动发送">
+    <button id="ftEnter" class="footerToggle" data-tip="自动发送 · Cmd+Shift+E" aria-label="自动发送，快捷键 Command 加 Shift 加 E">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>
     </button>
     </div>
@@ -83,253 +98,188 @@
   </div>
   <div class="settingsPageBody">
 
+    <!-- 识别方式：三个引擎是同一件事的三个选项，各选项的配置（需 Key / 需下载）直接跟在其后展示 -->
     <div class="s-group">
-      <div class="sg-title">API 配置</div>
-      <div class="s-field">
-        <div class="fl">百炼 API Key</div>
-        <div class="fd">用于百炼语音引擎</div>
-        <div class="key-row">
-          <div class="key-wrap">
-            <input type="password" id="apiKey" placeholder="阿里云百炼 API Key" autocomplete="off" spellcheck="false">
-            <button type="button" id="apiKeyToggle" class="key-eye" title="显示 API Key" aria-label="显示 API Key">
-              <svg class="key-eye-open" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              <svg class="key-eye-closed" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-            </button>
+      <div class="sg-title">识别方式</div>
+
+      <div class="enginePick">
+
+        <div class="pick">
+          <div class="pickRow">
+            <div class="pickHead" data-engine="bailian">
+              <span class="pickName">百炼（云端）</span>
+              <span class="pickState" id="bailianState"></span>
+            </div>
+            <div class="pickActions">
+              <button type="button" class="iconBtn" id="bailianConfigBtn" title="配置 API Key" aria-label="配置 API Key" aria-expanded="false" aria-controls="bailianPanel">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              </button>
+            </div>
           </div>
-          <button type="button" class="sbtn key-test-btn" id="apiKeyTestBtn">测试连接</button>
+          <div class="pickBody hidden" id="bailianPanel">
+            <div class="s-field">
+              <div class="key-row">
+                <div class="key-wrap">
+                  <input type="password" id="apiKey" placeholder="阿里云百炼 API Key" autocomplete="off" spellcheck="false">
+                  <button type="button" id="apiKeyToggle" class="key-eye" title="显示 API Key" aria-label="显示 API Key">
+                    <svg class="key-eye-open" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    <svg class="key-eye-closed" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                  </button>
+                </div>
+                <button type="button" class="sbtn key-test-btn" id="apiKeyTestBtn">测试连接</button>
+              </div>
+              <div class="key-test-status" id="apiKeyTestStatus"></div>
+            </div>
+          </div>
         </div>
-        <div class="key-test-status" id="apiKeyTestStatus"></div>
+
+        <div class="pick" data-model="sensevoice">
+          <div class="pickRow">
+            <div class="pickHead" data-engine="sensevoice">
+              <span class="pickName">SenseVoice（本地）</span>
+              <span class="pickState" id="sensevoiceState"></span>
+            </div>
+            <div class="pickActions">
+              <button class="sbtn sm model-download-btn">下载模型</button>
+            </div>
+          </div>
+          <div class="model-progress hidden">
+            <div class="model-progress-track"><div class="model-progress-fill"></div></div>
+            <span class="model-progress-text">0%</span>
+          </div>
+        </div>
+
+        <div class="pick" data-model="qwen3">
+          <div class="pickRow">
+            <div class="pickHead" data-engine="qwen3">
+              <span class="pickName">Qwen3-ASR（本地）</span>
+              <span class="pickState" id="qwen3State"></span>
+            </div>
+            <div class="pickActions">
+              <button class="sbtn sm model-download-btn">下载模型</button>
+            </div>
+          </div>
+          <div class="model-progress hidden">
+            <div class="model-progress-track"><div class="model-progress-fill"></div></div>
+            <span class="model-progress-text">0%</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 拾音参数：仅本地引擎使用，选中本地引擎时直接显示在下方 -->
+      <div class="localTuning" id="localTuningPanel">
+        <div class="s-field">
+          <div class="fl">静音超时</div>
+          <div class="fd">一句话被中途截断调高此值，说完后等太久才出字调低此值</div>
+          <div class="range-row">
+            <input type="range" id="silenceTimeout" min="500" max="5000" step="100" value="2000">
+            <span class="rv" id="silenceTimeoutLabel">2000ms</span>
+          </div>
+        </div>
+        <div class="s-field">
+          <div class="fl">麦克风增益</div>
+          <div class="fd">信号偏弱导致识别不准调高此值（2x~3x 起步）</div>
+          <div class="range-row">
+            <input type="range" id="gainMultiplier" min="1" max="5" step="0.5" value="1">
+            <span class="rv" id="gainMultiplierLabel">1x</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- AI 服务商：默认收起为一个子流程，标题行显示当前服务商/模型；点击展开编辑 -->
+    <div class="s-group collapsible">
+      <button type="button" class="sg-head" id="aiGroupHead" aria-expanded="false" aria-controls="aiGroupBody">
+        <span class="sg-title">AI 服务商（智能助手）</span>
+        <span class="sg-sum" id="aiGroupSummary"></span>
+        <svg class="sg-caret" width="9" height="7" viewBox="0 0 8 6" aria-hidden="true"><path d="M0 0l4 6 4-6z" fill="currentColor"/></svg>
+      </button>
+      <div class="sg-body hidden" id="aiGroupBody">
+        <div class="s-field">
+          <div class="fl">服务商</div>
+          <div class="fd">OpenAI 兼容接口，供智能纠错、纪要、翻译等功能使用；Key 仅保存在本机</div>
+          <div class="select-wrap">
+            <select id="aiProvider">
+              <option value="openai">OpenAI</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="kimi">Kimi · Moonshot</option>
+              <option value="zhipu">智谱 GLM</option>
+              <option value="silicon">硅基流动</option>
+              <option value="opencode">OpenCode Zen Go</option>
+              <option value="ollama">Ollama（本地）</option>
+              <option value="custom">自定义</option>
+            </select>
+          </div>
+        </div>
+        <div class="s-field">
+          <div class="fl">API 地址</div>
+          <div class="fd">base URL，通常以 /v1 结尾；本地服务可填 http://localhost:11434/v1</div>
+          <input type="text" id="aiBaseUrl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="s-field">
+          <div class="fl">API Key</div>
+          <div class="key-row">
+            <div class="key-wrap">
+              <input type="password" id="aiApiKey" placeholder="API Key（空表示免鉴权）" autocomplete="off" spellcheck="false">
+              <button type="button" id="aiApiKeyToggle" class="key-eye" title="显示 API Key" aria-label="显示 API Key">
+                <svg class="key-eye-open" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg class="key-eye-closed" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+            <button type="button" class="sbtn key-test-btn" id="aiTestBtn">测试连接</button>
+          </div>
+          <div class="key-test-status" id="aiTestStatus"></div>
+        </div>
+        <div class="s-field">
+          <div class="fl">模型</div>
+          <div class="fd">Chat Completions 模型名，如 gpt-4o-mini / deepseek-chat / qwen-max</div>
+          <input type="text" id="aiModel" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false">
+        </div>
       </div>
     </div>
 
-    <div class="s-group">
-      <div class="sg-title">AI 服务商（智能助手）</div>
-      <div class="s-field">
-        <div class="fl">服务商</div>
-        <div class="fd">OpenAI 兼容接口，供智能纠错、纪要、翻译等功能使用；Key 仅保存在本机</div>
-        <div class="select-wrap">
-          <select id="aiProvider">
-            <option value="openai">OpenAI</option>
-            <option value="deepseek">DeepSeek</option>
-            <option value="kimi">Kimi · Moonshot</option>
-            <option value="zhipu">智谱 GLM</option>
-            <option value="silicon">硅基流动</option>
-            <option value="ollama">Ollama（本地）</option>
-            <option value="custom">自定义</option>
-          </select>
-        </div>
-      </div>
-      <div class="s-field">
-        <div class="fl">API 地址</div>
-        <div class="fd">base URL，通常以 /v1 结尾；本地服务可填 http://localhost:11434/v1</div>
-        <input type="text" id="aiBaseUrl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false">
-      </div>
-      <div class="s-field">
-        <div class="fl">API Key</div>
-        <div class="key-row">
-          <div class="key-wrap">
-            <input type="password" id="aiApiKey" placeholder="API Key（空表示免鉴权）" autocomplete="off" spellcheck="false">
-            <button type="button" id="aiApiKeyToggle" class="key-eye" title="显示 API Key" aria-label="显示 API Key">
-              <svg class="key-eye-open" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              <svg class="key-eye-closed" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-            </button>
-          </div>
-          <button type="button" class="sbtn key-test-btn" id="aiTestBtn">测试连接</button>
-        </div>
-        <div class="key-test-status" id="aiTestStatus"></div>
-      </div>
-      <div class="s-field">
-        <div class="fl">模型</div>
-        <div class="fd">Chat Completions 模型名，如 gpt-4o-mini / deepseek-chat / qwen-max</div>
-        <input type="text" id="aiModel" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false">
-      </div>
-    </div>
-
-    <div class="s-group">
-      <div class="sg-title">本地模型</div>
-
-      <!-- SenseVoice -->
-      <div class="s-field model-card" data-model="sensevoice">
-        <div class="model-head">
-          <div class="fl">SenseVoice 识别模型</div>
-          <div class="model-btns">
-            <button class="sbtn model-download-btn">下载模型</button>
-            <button class="sbtn model-reload-btn hidden">重载</button>
-            <button class="sbtn model-reveal-btn">在访达中显示</button>
-          </div>
-        </div>
-        <div class="fd model-status">检测中...</div>
-        <div class="model-progress hidden">
-          <div class="model-progress-track"><div class="model-progress-fill"></div></div>
-          <span class="model-progress-text">0%</span>
-        </div>
-      </div>
-
-      <!-- Qwen3-ASR -->
-      <div class="s-field model-card" data-model="qwen3">
-        <div class="model-head">
-          <div class="fl">Qwen3-ASR 识别模型</div>
-          <div class="model-btns">
-            <button class="sbtn model-download-btn">下载模型</button>
-            <button class="sbtn model-reload-btn hidden">重载</button>
-            <button class="sbtn model-reveal-btn">在访达中显示</button>
-          </div>
-        </div>
-        <div class="fd model-status">检测中...</div>
-        <div class="model-progress hidden">
-          <div class="model-progress-track"><div class="model-progress-fill"></div></div>
-          <span class="model-progress-text">0%</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="s-group">
-      <div class="sg-title">降噪与回声</div>
-      <div class="s-field">
-        <div class="toggle-row">
-          <div class="ti">
-            <div class="tt">降噪 / 回声消除</div>
-            <div class="ts">启用浏览器内置降噪和回声消除处理</div>
-          </div>
-          <div class="toggle on" id="filterToggle"></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="s-group">
-      <div class="sg-title">界面</div>
-      <div class="s-field">
-        <div class="toggle-row">
-          <div class="ti">
-            <div class="tt">按钮提示音</div>
-            <div class="ts">开始 / 停止录音、开关自动粘贴等操作播放轻提示音</div>
-          </div>
-          <div class="toggle on" id="sfxToggle"></div>
-        </div>
-      </div>
-    </div>
+    <!-- 降噪 / 回声消除：默认开启且不再暴露开关，故整组移除（行为见 audio.js getAudioConstraints） -->
 
     <div class="s-group">
       <div class="sg-title">纠错规则</div>
       <div class="s-field">
-        <div class="toggle-row" style="padding:0">
+        <div class="toggle-row">
           <div class="ti">
             <div class="tt">关键词替换</div>
             <div class="ts">ASR 识别结果中的关键词自动替换为指定词，点击「管理」进入</div>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;">
-            <span id="corrCount" style="font-size:11px;color:var(--ink-faint);">0 条规则</span>
+          <div class="s-row-end">
+            <span class="s-count" id="corrCount">0 条规则</span>
             <button class="sbtn sm" onclick="correctionOpenEditor()">管理</button>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="s-group">
-      <div class="sg-title">语音检测（本地引擎）</div>
-      <div class="s-field">
-        <div class="fl">VAD 灵敏度</div>
-        <div class="fd">值越大越不敏感（噪音不触发），越小越灵敏（轻声也识别）</div>
-        <div class="range-row">
-          <input type="range" id="vadThreshold" min="0.001" max="0.050" step="0.001" value="0.006">
-          <span class="rv" id="vadThresholdLabel">0.006</span>
-        </div>
-      </div>
-      <div class="s-field">
-        <div class="fl">静音超时</div>
-        <div class="fd">一句话被中途截断调高此值，说完后等太久才出字调低此值</div>
-        <div class="range-row">
-          <input type="range" id="silenceTimeout" min="500" max="5000" step="100" value="2000">
-          <span class="rv" id="silenceTimeoutLabel">2000ms</span>
-        </div>
-      </div>
-      <div class="s-field">
-        <div class="fl">麦克风增益</div>
-        <div class="fd">信号偏弱导致识别不准调高此值（2x~3x 起步）</div>
-        <div class="range-row">
-          <input type="range" id="gainMultiplier" min="1" max="5" step="0.5" value="1">
-          <span class="rv" id="gainMultiplierLabel">1x</span>
-        </div>
-      </div>
-    </div>
+    <!-- 拾音参数（静音超时 / 麦克风增益）已并入上方「识别方式」的本地引擎区 -->
 
-    <div class="s-group">
-      <div class="sg-title">输出（本地引擎）</div>
-      <div class="s-field">
-        <div class="toggle-row">
-          <div class="ti">
-            <div class="tt">自动粘贴</div>
-            <div class="ts">final 结果自动复制并粘贴到光标位置（需辅助功能权限）</div>
-          </div>
-          <div class="toggle" id="autoPasteBtn"></div>
-        </div>
-      </div>
-      <div class="s-field">
-        <div class="toggle-row">
-          <div class="ti">
-            <div class="tt">自动回车发送</div>
-            <div class="ts">粘贴后自动按回车发送（适用于聊天软件）</div>
-          </div>
-          <div class="toggle" id="autoEnterBtn"></div>
-        </div>
-      </div>
-    </div>
+    <!-- 自动粘贴 / 自动回车：唯一入口在主界面底部状态栏，设置页不再保留任何副本或指路块 -->
 
-    <div class="s-group">
-      <div class="sg-title">数据存储位置</div>
-      <div class="s-field">
-        <div class="fl">数据目录</div>
-        <div class="fd" id="storageDataRoot">加载中…</div>
-        <div style="display:flex;gap:6px;margin-top:4px;">
-          <button class="sbtn sm storage-open-btn" data-open="dataRoot">在访达中显示</button>
-          <button class="sbtn sm storage-copy-btn" data-copy="dataRoot">复制路径</button>
-        </div>
-      </div>
+    <div class="s-group collapsible">
+      <button type="button" class="sg-head" id="storageGroupHead" aria-expanded="false" aria-controls="storageGroupBody">
+        <span class="sg-title">数据存储位置</span>
+        <span class="sg-sum" id="storageGroupSummary"></span>
+        <svg class="sg-caret" width="9" height="7" viewBox="0 0 8 6" aria-hidden="true"><path d="M0 0l4 6 4-6z" fill="currentColor"/></svg>
+      </button>
+      <div class="sg-body hidden" id="storageGroupBody">
       <div class="s-field">
         <div class="fl">历史记录</div>
-        <div class="fd" id="storageEvents">加载中…</div>
-        <div style="display:flex;gap:6px;margin-top:4px;">
-          <button class="sbtn sm storage-open-btn" data-open="eventsDir">在访达中显示</button>
-          <button class="sbtn sm storage-copy-btn" data-copy="eventsDir">复制路径</button>
-        </div>
-      </div>
-      <div class="s-field">
-        <div class="fl">配置文件</div>
-        <div class="fd" id="storageConfigFile">加载中…（含 AI 服务商配置与 API Key，勿外发）</div>
-        <div style="display:flex;gap:6px;margin-top:4px;">
-          <button class="sbtn sm storage-open-btn" data-open="configFile">在访达中显示</button>
-          <button class="sbtn sm storage-copy-btn" data-copy="configFile">复制路径</button>
+        <button type="button" class="storage-path" id="storageEvents" title="点击复制路径">本机语音转写记录</button>
+        <div class="s-actions">
+          <button class="sbtn sm danger" id="clearDataBtn">清除历史记录</button>
         </div>
       </div>
       <div class="s-field">
         <div class="fl">指令配置文件</div>
-        <div class="fd" id="storageCommandsFile">加载中…（语音指令映射，可发给外部 AI Agent）</div>
-        <div style="display:flex;gap:6px;margin-top:4px;">
-          <button class="sbtn sm storage-open-btn" data-open="commandsFile">在访达中显示</button>
-          <button class="sbtn sm storage-copy-btn" data-copy="commandsFile">复制路径</button>
-        </div>
+        <button type="button" class="storage-path" id="storageCommandsFile" title="点击复制路径">语音指令映射，可发给外部 AI Agent</button>
       </div>
-    </div>
-
-    <div class="s-group">
-      <div class="sg-title">数据清理</div>
-      <div class="s-field">
-        <div class="toggle-row" style="padding:0">
-          <div class="ti">
-            <div class="tt">清除历史记录</div>
-            <div class="ts">删除全部语音转写记录（不可恢复）</div>
-          </div>
-          <button class="sbtn danger" id="clearDataBtn">清 除</button>
-        </div>
-      </div>
-      <div class="s-field">
-        <div class="toggle-row" style="padding:0">
-          <div class="ti">
-            <div class="tt">清除所有数据</div>
-            <div class="ts">清空历史记录，并恢复 API、AI 服务商、纠错规则等所有设置为默认</div>
-          </div>
-          <button class="sbtn danger" id="nukeDataBtn">清 除</button>
-        </div>
       </div>
     </div>
 
@@ -339,7 +289,7 @@
         <div class="toggle-row">
           <div class="ti">
             <div class="tt">应用更新</div>
-            <div class="ts" id="updateStatus">当前版本 v1.0.20</div>
+            <div class="ts" id="updateStatus"></div>
           </div>
           <button class="sbtn" id="checkUpdateBtn">检查更新</button>
         </div>

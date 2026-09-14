@@ -1,5 +1,5 @@
 import { state, VAD_METER_FULL_SCALE, isLocalEngine, normalizeEngine } from './state.js';
-import { $, setStatus, setRecordBtn } from './ui.js';
+import { $, renderRunStatus, setRecordBtn } from './ui.js';
 import { vadSend, sendPCM, finalizePending, disconnectBailian } from './asr.js';
 import { flushTotalDuration } from './settings.js';
 import { playStop } from './sfx.js';
@@ -115,5 +115,5 @@ export function stopRec() {
   const btn = $('btn');
   btn.className = '';
   setRecordBtn(false);
-  setStatus('就绪', false);
+  renderRunStatus();
 }
