@@ -24,3 +24,8 @@ tauri-plugin-global-shortcut = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 arboard = { version = "3.6.1", default-features = false }
 core-foundation = "0.10"
+# 查「当前最前台的应用」（粘贴目标）。这三个 crate 本来就在依赖树里（tauri 的传递
+# 依赖），这里只是提成直接依赖并显式打开需要的 feature，不引入新的第三方代码。
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWorkspace", "NSRunningApplication", "libc"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSString"] }

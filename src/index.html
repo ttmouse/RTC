@@ -259,7 +259,15 @@
 
     <!-- 拾音参数（静音超时 / 麦克风增益）已并入上方「识别方式」的本地引擎区 -->
 
-    <!-- 自动粘贴 / 自动回车：唯一入口在主界面底部状态栏，设置页不再保留任何副本或指路块 -->
+    <div class="s-group">
+      <div class="sg-title">自动发送</div>
+      <div class="s-field app-rules-field">
+        <div class="fl">允许自动发送的应用</div>
+        <div class="fd">未选中的应用仍会粘贴文字，但不会自动按回车。点击“添加应用”后，从本机应用列表中选择。</div>
+        <div class="app-rule-add"><button type="button" class="sbtn sm" id="autoEnterAppAdd">添加应用</button></div>
+        <div id="autoEnterAppList" class="app-rule-list"></div>
+      </div>
+    </div>
 
     <div class="s-group collapsible">
       <button type="button" class="sg-head" id="storageGroupHead" aria-expanded="false" aria-controls="storageGroupBody">

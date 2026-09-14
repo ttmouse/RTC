@@ -5,9 +5,9 @@ import { ensurePastePermission } from './clipboard.js';
 import { connectASR, setAsrStopHandler } from './asr.js';
 import { getAudioConstraints, startAudio, stopRec } from './audio.js';
 import { clearHistory, loadEarlier, renderHistory } from './history.js';
-import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, syncCollapsibleGroups, refreshGroupSummaries, toggleGroup, AI_PROVIDERS } from './settings.js';
+import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, syncCollapsibleGroups, refreshGroupSummaries, toggleGroup, renderAutoEnterApps, addAutoEnterApp, toggleAutoEnterApp, commitAutoEnterApps, resetAutoEnterAppsDraft, AI_PROVIDERS } from './settings.js';
 import { renderModelStatus, getModelStatus } from './model.js';
-import { initLearnedCommands } from './commands.js';
+import { initLearnedCommands, pickApplication } from './commands.js';
 import { migrateLegacyLocalConfig } from './config-migration.js';
 import { checkForUpdates, setupUpdateUI, updateVersionInfo } from './updater.js';
 import { playStart, playToggle } from './sfx.js';
@@ -137,6 +137,7 @@ function showSettings(show) {
     syncCollapsibleGroups();
     // 「识别方式」的选中态与展开面板由 updateEngineBadge() 内部同步（单一写入点）
     updateEngineBadge();
+    renderAutoEnterApps();
   }
 }
 
@@ -148,6 +149,16 @@ $('settingsPage').addEventListener('click', (e) => {
     toggleGroup(head.id.replace(/GroupHead$/, ''));
     return;
   }
+  const appToggle = e.target.closest('.app-rule-toggle');
+  if (appToggle) {
+    toggleAutoEnterApp(appToggle.dataset.app);
+    return;
+  }
+  const addApp = e.target.closest('#autoEnterAppAdd');
+  if (addApp) {
+    void pickApplication(addApp, '', addAutoEnterApp);
+    return;
+  }
   // 「恢复默认」后所有摘要文案都会变，统一重算一遍
   if (e.target.closest('#settingsResetBtn')) refreshGroupSummaries();
 });
@@ -155,6 +166,7 @@ $('settingsPage').addEventListener('click', (e) => {
 $('settingsBtn').onclick = () => showSettings(true);
 $('settingsClose').onclick = () => showSettings(false);
 $('settingsSaveBtn').onclick = async () => {
+  commitAutoEnterApps();
   state.apiKey = $('apiKey').value.trim();
   readAIForm();
   saveASRSettings();
@@ -183,6 +195,7 @@ $('settingsResetBtn').onclick = async () => {
   $('gainMultiplierLabel').textContent = '1x';
   state.autoPaste = false;
   state.autoEnter = false;
+  resetAutoEnterAppsDraft();
   state.filterOn = true;
   // AI 服务商恢复默认（自定义：清空；预设：保留预设值）
   const prevProvider = state.aiConfig.provider;

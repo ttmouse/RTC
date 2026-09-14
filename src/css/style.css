@@ -356,6 +356,24 @@
         transition:transform .22s cubic-bezier(.16,1,.3,1); }
   .s-field .toggle.on::after{ transform:translateX(18px); }
   .s-field .toggle:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  /* 自动发送应用名单：用与设置项一致的开关，但每行独立表达「允许/不允许」 */
+  .settingsToggle{ width:38px; height:20px; padding:0; border:0; border-radius:10px; background:var(--rule);
+        position:relative; cursor:pointer; flex-shrink:0; transition:background-color .18s cubic-bezier(.16,1,.3,1); }
+  .settingsToggle::after{ content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+        border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(26,22,17,.28);
+        transition:transform .22s cubic-bezier(.16,1,.3,1); }
+  .settingsToggle.on{ background:var(--seal); }
+  .settingsToggle.on::after{ transform:translateX(18px); }
+  .settingsToggle:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  .app-rules-field{ padding-top:2px; }
+  .app-rule-add{ display:flex; gap:8px; margin:8px 0; }
+  .app-rule-add input{ flex:1; min-width:0; }
+  .app-rule-list{ border-top:1px solid var(--rule); }
+  .app-rule-row{ display:flex; align-items:center; justify-content:space-between; min-height:38px;
+        border-bottom:1px solid var(--rule); }
+  .app-rule-row:last-child{ border-bottom:0; }
+  .app-rule-empty{ padding:10px 0; font-size:12px; color:var(--ink-faint); }
+  .app-rule-name{ font-size:13px; color:var(--ink); }
   /* 模型管理：进度条跟引擎名称左对齐（引擎行现在有 13px 的竖脊缩进，这里必须跟着走，
      否则进度条会比它所属的引擎凸出去一截） */
   .model-progress{ display:flex; align-items:center; gap:8px; margin:0 0 8px; }

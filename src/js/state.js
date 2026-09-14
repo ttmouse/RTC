@@ -41,6 +41,9 @@ export const state = {
   gainMultiplier: 1,
   autoPaste: false,
   autoEnter: false,
+  // 「哪些应用可以自动回车」的名单（应用名，取自粘贴目标）。空数组 = 沿用老行为：
+  // 总闸开着就对所有应用回车。判定见 settings.shouldAutoEnter。
+  autoEnterApps: [],
   sfxOn: true,             // 按钮提示音开关（sfx.js）
   noiseFilter: true,
   correctionRules: [],

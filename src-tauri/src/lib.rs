@@ -6,6 +6,10 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use tauri::Manager;
 
+/// 「现在最前面的是哪个应用」——粘贴目标。实现在 mac_frontmost.rs，那里写清了为什么
+/// 不用 osascript 问 System Events。
+mod mac_frontmost;
+
 #[cfg(target_os = "macos")]
 mod mac_accessibility {
     use core_foundation::base::TCFType;
@@ -321,6 +325,19 @@ fn paste_text(text: String, auto_enter: Option<bool>) -> Result<PasteOutcome, St
     log_timing("paste_text.osascript", paste_start.elapsed());
     log_timing("paste_text.total", start.elapsed());
     Ok(outcome)
+}
+
+/// 当前最前台的应用名（`paste_text` 的 Cmd+V 会打到它身上）。
+///
+/// 前端在「这一次定型会真的自动粘贴」时调用，把结果随这句话一起入库，
+/// 于是记录里能看出「这句是发到微信的」。
+///
+/// 返回 `None` 有三种情况，调用方一律当「不知道」，不影响这句话照常入库：
+/// 前台是本程序自己（说明这次 Cmd+V 打回了本窗口，没有任何输入框能接住）、
+/// 非 macOS / 网页版没有系统级能力、以及查询本身失败。
+#[tauri::command]
+fn frontmost_app() -> Option<String> {
+    mac_frontmost::frontmost_name()
 }
 
 /// 激活指定应用。
@@ -848,6 +865,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             paste_text,
+            frontmost_app,
             copy_to_clipboard,
             activate_app,
             reveal_in_finder,

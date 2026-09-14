@@ -3,9 +3,10 @@ import { state, isLocalEngine, normalizeEngine, engineStatusText } from './state
 import { $, esc, toast, addLine, scrollListToBottom, renderRunStatus } from './ui.js';
 import { applyCorrection } from './correction.js';
 import { pasteToCursor } from './clipboard.js';
+import { getFrontmostApp } from './frontmost.js';
 import { tryHandleSpecialCommand, learnSpecialCommand } from './commands.js';
 import { saveEntry } from './history.js';
-import { saveTotalDuration, updateEngineBadge } from './settings.js';
+import { saveTotalDuration, updateEngineBadge, shouldAutoEnter } from './settings.js';
 
 const VAD_RMS = 0.012;
 const VAD_SILENCE_BLOCKS = 10;
@@ -304,7 +305,9 @@ export function disconnectBailian() {
   renderRunStatus();
 }
 
-export function finalizePending() {
+// `targetApp` 由调用方透传给 saveEntry：只有「这句话马上就要粘出去」的调用点
+// 才会传（见下面 handleASRResult 的两处），其余（静音收尾、停录收尾）不传。
+export function finalizePending(targetApp) {
   if (!state.pendingLine) return;
   const txt = state.pendingLine.querySelector('.txt');
   const t = state.pendingLine._ptext || '';
@@ -316,7 +319,20 @@ export function finalizePending() {
   state.finalizedText += t;
   state.sentCount++;
   if ($('count')) $('count').textContent = `本次 ${state.sentCount} 句`;
-  saveEntry(t);
+  saveEntry(t, targetApp);
+}
+
+/**
+ * 粘贴，并按「粘到哪个应用」决定这次要不要跟一个回车。
+ *
+ * 必须等目标应用回来才能发按键：自动发送是按应用配的（见 settings.shouldAutoEnter），
+ * 不知道目标就没法判。这个等待只是一次本机查询（微秒级，见 frontmost.js），不等网络；
+ * 查不到目标就交给 shouldAutoEnter 判（没配名单时沿用老行为）。
+ */
+function pasteWithTargetApps(text, targetApp) {
+  Promise.resolve(targetApp)
+    .then(app => pasteToCursor(text, shouldAutoEnter(app)))
+    .catch(() => pasteToCursor(text, shouldAutoEnter(null)));
 }
 
 function handleASRResult(sentence, browserReceivedAt) {
@@ -397,9 +413,12 @@ function handleASRResult(sentence, browserReceivedAt) {
       }
       state.sentCount++;
       if ($('count')) $('count').textContent = `本次 ${state.sentCount} 句`;
-      saveEntry(corrected);
+      // 会粘出去：提前发起「现在最前面是谁」的查询，把目标随这句话一起记下（见
+      // frontmost.js）。查询与粘贴是并行的两条路，谁也不等谁，粘贴的手感不变。
+      const pasteTarget = state.autoPaste ? getFrontmostApp() : null;
+      saveEntry(corrected, pasteTarget);
       if (state.autoPaste) {
-        pasteToCursor(corrected, state.autoEnter);
+        pasteWithTargetApps(corrected, pasteTarget);
       }
     } else {
       if (lastIsInterim) {
@@ -422,6 +441,11 @@ function handleASRResult(sentence, browserReceivedAt) {
     return;
   }
 
+  // 这次定型马上会整体粘出去（见下面的 isFinal 分支）：提前发起「现在最前面是谁」
+  // 的查询，这一批入库的句子都带上「发给了谁」。粘出去的正文可能横跨多段，目标就
+  // 记在同一批记录上，不另外造一种「粘贴记录」（记录格式保持只有 segment 一种）。
+  const pasteTarget = (isFinal && state.autoPaste) ? getFrontmostApp() : null;
+
   const segs = splitAfterPunctuation(delta);
   const complete = segs.filter(s => /[。！？；]$/.test(s));
   const pending = segs.filter(s => !/[。！？；]$/.test(s)).join('');
@@ -440,7 +464,7 @@ function handleASRResult(sentence, browserReceivedAt) {
       addLine(new Date(), t, false);
     }
     firstComplete = false;
-    saveEntry(t);
+    saveEntry(t, pasteTarget);
     state.sentCount++;
     if ($('count')) $('count').textContent = `本次 ${state.sentCount} 句`;
   }
@@ -464,10 +488,10 @@ function handleASRResult(sentence, browserReceivedAt) {
   }
 
   if (isFinal) {
-    finalizePending();
+    finalizePending(pasteTarget);
     state.finalizedText = corrected;
     if (state.autoPaste) {
-      pasteToCursor(corrected.replace(/[。！？；，、\s]+$/, ''), state.autoEnter);
+      pasteWithTargetApps(corrected.replace(/[。！？；，、\s]+$/, ''), pasteTarget);
     }
   }
   state.asrLastText = corrected;

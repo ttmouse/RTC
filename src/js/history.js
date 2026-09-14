@@ -20,11 +20,29 @@ function todayStart() {
   return d;
 }
 
-export function saveEntry(text) {
+/**
+ * 一条转写记录入库。
+ *
+ * `targetApp` 是「这句话最终粘给了哪个软件」，只在自动粘贴时会传（见 asr.js）。
+ * 它可能是个 Promise —— 「现在最前面是谁」是提前发起、跟语句定型并行跑的查询，
+ * 等它只是为了把目标一起写进去。等不到（网页版 / 前台是本程序自己 / 查询失败）
+ * 就写 null，**绝不因为认不出目标就少记一句话**（产品原则 4：旁路不挡主路径）。
+ */
+export async function saveEntry(text, targetApp) {
   const ts = new Date().toISOString();
-  appendTranscriptEvent(text, ts, state.asrEngine || null).catch(e => {
+  // engine 在 await 之前取好：等待期间用户可能切换引擎，记录该记当时那个。
+  const engine = state.asrEngine || null;
+  let app = null;
+  try {
+    app = (await Promise.resolve(targetApp)) || null;
+  } catch (e) {
+    app = null;
+  }
+  try {
+    await appendTranscriptEvent(text, ts, engine, app);
+  } catch (e) {
     console.error('[transcript] JSONL append failed:', e.message || e);
-  });
+  }
 }
 
 // 无搜索词时取「窗口起点 → 现在」；窗口起点默认今天 00:00，向前翻页后不断上移。

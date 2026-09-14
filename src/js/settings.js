@@ -35,6 +35,78 @@ export function aiProviderLabel(key) {
   return (AI_PROVIDERS[key] && AI_PROVIDERS[key].name) || '自定义';
 }
 
+/**
+ * 这次粘贴要不要跟着按一下回车。
+ *
+ * 回车发出去是收不回的，所以「自动发送」不能对所有应用一视同仁（在编辑器里被
+ * 截断、在聊天框里没发出去，都是烦事）。判定分两层：
+ * - 总闸（底栏那个「自动发送」开关）关着 → 一律不按；
+ * - 总闸开着 → 没配名单就沿用老行为（所有应用都按）；配了名单就只给名单里的按。
+ *
+ * `targetApp` 是这次粘贴的目标应用名（可能为 null：网页版 / 前台是本程序 / 查询失败）。
+ * 拿不到目标时**不按**：宁可让用户伸手按一下，也不能把不知道发去哪的话送出去。
+ */
+export function shouldAutoEnter(targetApp) {
+  if (!state.autoEnter) return false;
+  const apps = state.autoEnterApps;
+  if (!Array.isArray(apps) || !apps.length) return true;
+  return !!targetApp && apps.includes(targetApp);
+}
+
+// 设置页的应用名单先改草稿，点击「保存」才写入 state；取消不会偷偷改变运行中的规则。
+let autoEnterAppsDraft = [];
+const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+
+export function renderAutoEnterApps() {
+  autoEnterAppsDraft = Array.isArray(state.autoEnterApps) ? [...state.autoEnterApps] : [];
+  const list = $('autoEnterAppList');
+  if (!list) return;
+  renderAutoEnterAppRows(list);
+}
+
+export function addAutoEnterApp(app) {
+  app = typeof app === 'string' ? app.trim() : '';
+  if (!app || autoEnterAppsDraft.includes(app)) return;
+  autoEnterAppsDraft = [...autoEnterAppsDraft, app];
+  renderAutoEnterAppsDraft();
+}
+
+export function toggleAutoEnterApp(app) {
+  if (typeof app !== 'string' || !app) return;
+  autoEnterAppsDraft = autoEnterAppsDraft.includes(app)
+    ? autoEnterAppsDraft.filter(name => name !== app)
+    : [...autoEnterAppsDraft, app];
+  renderAutoEnterAppsDraft();
+}
+
+function renderAutoEnterAppRows(list) {
+  const apps = [...new Set(autoEnterAppsDraft)];
+  if (!apps.length) {
+    list.innerHTML = '<div class="app-rule-empty">还没有添加应用</div>';
+    return;
+  }
+  list.innerHTML = apps.map(app => {
+    const on = autoEnterAppsDraft.includes(app);
+    const safeApp = escapeHtml(app);
+    return `<div class="app-rule-row"><span class="app-rule-name">${safeApp}</span><button type="button" class="settingsToggle app-rule-toggle${on ? ' on' : ''}" data-app="${safeApp}" aria-pressed="${on}" aria-label="${on ? '关闭' : '开启'} ${safeApp} 自动发送"></button></div>`;
+  }).join('');
+}
+
+function renderAutoEnterAppsDraft() {
+  const list = $('autoEnterAppList');
+  if (!list) return;
+  renderAutoEnterAppRows(list);
+}
+
+export function commitAutoEnterApps() {
+  state.autoEnterApps = [...autoEnterAppsDraft];
+}
+
+export function resetAutoEnterAppsDraft() {
+  autoEnterAppsDraft = [];
+  renderAutoEnterAppsDraft();
+}
+
 function settingsFromState() {
   return {
     key: state.apiKey,
@@ -45,6 +117,7 @@ function settingsFromState() {
     gainMultiplier: state.gainMultiplier,
     autoPaste: state.autoPaste,
     autoEnter: state.autoEnter,
+    autoEnterApps: state.autoEnterApps,
     filterOn: state.filterOn,
     sfx: state.sfxOn,
     ai: { ...state.aiConfig },
@@ -58,6 +131,10 @@ function applySettings(config) {
   state.gainMultiplier = s.gainMultiplier || 1;
   state.autoPaste = s.autoPaste || false;
   state.autoEnter = s.autoEnter || false;
+  // 只收字符串数组：配置是明文文件，用户和外部工具都会直接改它（原则 5）。
+  state.autoEnterApps = Array.isArray(s.autoEnterApps)
+    ? s.autoEnterApps.filter(a => typeof a === 'string' && a.trim()).map(a => a.trim())
+    : [];
   state.sfxOn = s.sfx !== false;   // 旧配置无此字段 → 默认开启
   state.filterOn = typeof s.filterOn === 'boolean' ? s.filterOn : true;
   state.apiKey = s.key || '';
@@ -212,6 +289,7 @@ export async function loadASRSettings() {
   syncToggleUI();
   updateEngineBadge();
   renderVADThresholdMarker();
+  renderAutoEnterApps();
 }
 
 async function saveASRSettingsNow() {

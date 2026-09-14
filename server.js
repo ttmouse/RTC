@@ -1027,6 +1027,12 @@ const server = http.createServer((req, res) => {
         text,
         ts: ts.toISOString(),
         engine: incoming.engine || null,
+        // 粘贴目标应用（“微信”）：自动粘贴时前端问过「现在最前面是谁」（见
+        // src/js/frontmost.js）；不是自动粘贴、或者没问到就是 null。只收字符串
+        // 并截断：数组/对象这类脏值会让下游读记录的脚本炸掉，宁可不记。
+        targetApp: typeof incoming.targetApp === 'string' && incoming.targetApp.trim()
+          ? incoming.targetApp.trim().slice(0, 64)
+          : null,
       };
       appendTranscriptEvent(event, (writeErr) => {
         if (writeErr) {

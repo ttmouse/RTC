@@ -107,7 +107,7 @@
 | 2 本地优先 | 数据目录 `~/Library/Application Support/com.rtc.transcriber/`；模型外置不入库（README）；`/api/storage` 暴露路径 |
 | 3 单一状态源 | `src/js/ui.js:15-47`（`computeRunStatus` 唯一决定状态点/文案/时间；其它模块只改 state） |
 | 4 不阻塞主路径 | `src/js/asr.js` 用 `void learnSpecialCommand(...)`；`src/js/commands.js` 注释「不阻塞、不吞文本」 |
-| 5 文件即接口 | `events/YYYY-MM-DD.jsonl`（每行一个事件）、`config.json`、`commands.json`；`scripts/transcript.mjs` 直接读文件 |
+| 5 文件即接口 | `events/YYYY-MM-DD.jsonl`（每行一个事件；`targetApp` = 这句话粘给了哪个软件，没粘出去就是 `null`）、`config.json`、`commands.json`；`scripts/transcript.mjs` 直接读文件 |
 | 6 配置合并 | `server.js:357 patchConfig`，注释记录了被否决的 GET-改-PUT 写法导致的丢失更新 |
 | 7 注释即决策 | `src/js/ui.js` `setListTopHint` / `prependEntries`、`src/js/history.js` 文末（为什么删掉轮询）、`src/css/style.css:14-16` |
 | 8 分支规范 | 团队规则 `WORKFLOW.GIT.002` |

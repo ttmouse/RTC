@@ -302,7 +302,7 @@ function closeCommandPicker() {
 }
 
 /** 选应用 / 选动作的浮层（不用原生 select，理由见 style.css） */
-function openCommandPicker(anchor, items, current, { searchable = false, record = false } = {}) {
+function openCommandPicker(anchor, items, current, { searchable = false, record = false, onPick = null } = {}) {
   closeCommandPicker();
   const rect = anchor.getBoundingClientRect();
   const el = document.createElement('div');
@@ -353,10 +353,14 @@ function openCommandPicker(anchor, items, current, { searchable = false, record 
     const item = e.target.closest('.cmdPickItem');
     if (!item) return;
     const expr = item.dataset.value;
-    anchor.dataset.value = expr;
-    anchor.textContent = formatShortcut(expr);
-    anchor.title = expr;
-    anchor.classList.remove('empty');
+    if (onPick) {
+      onPick(expr);
+    } else {
+      anchor.dataset.value = expr;
+      anchor.textContent = formatShortcut(expr);
+      anchor.title = expr;
+      anchor.classList.remove('empty');
+    }
     closeCommandPicker();
   });
 
@@ -401,6 +405,13 @@ function startShortcutRecording(anchor) {
     toast('已录下 ' + formatShortcut(expr));
   };
   document.addEventListener('keydown', onKey, true);
+}
+
+/** 复用语音指令页的应用选择器，供其他设置选择本机应用。 */
+export async function pickApplication(anchor, current, onPick) {
+  const apps = await loadAppList();
+  if (!apps.length) { toast('没能读到本机应用列表，请确认本机服务在跑'); return; }
+  openCommandPicker(anchor, apps.map((a) => ({ value: a.name, label: a.name, sub: a.path })), current, { searchable: true, onPick });
 }
 
 /** 点「选择应用 / 选择动作」 */
