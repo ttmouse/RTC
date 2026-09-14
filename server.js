@@ -56,6 +56,13 @@ const DEFAULT_COMMANDS = {
     'dingtalk': 'DingTalk',
     '企业微信': 'WeCom',
     'wecom': 'WeCom',
+    // 飞书：open -a **只认 .app 的文件名**（Lark），既不认 CFBundleName「Feishu」，
+    // 也不认本地化名「飞书」——已实测。注意 lsregister / AppleScript 的
+    // `path to application` / `id of app` 都能解析「飞书」，但那是另一套解析器，
+    // 照它们配会得到「应用不存在或无法打开」。配其他 app 时同样拿 .app 文件名验证。
+    '飞书': 'Lark',
+    'feishu': 'Lark',
+    'cindy': 'Cindy',
     '浏览器': 'Safari',
     'safari': 'Safari',
     '谷歌浏览器': 'Google Chrome',
@@ -72,12 +79,20 @@ const DEFAULT_COMMANDS = {
     '发送吧': 'enter',
     '发出去': 'enter',
     '回车': 'enter',
+    '下一个': 'arrow_down',
+    '上一个': 'arrow_up',
     '总结会议': 'meeting_summary',
     '会议总结': 'meeting_summary',
     '总结一下会议': 'meeting_summary',
     '生成会议纪要': 'meeting_summary',
     '会议纪要': 'meeting_summary',
     '总结纪要': 'meeting_summary',
+  },
+  // 快捷短语：整句口述 → 把一段预设文本粘贴并发送出去（给正在对话的 AI 用）。
+  // 为什么单开一张表而不是塞进 actions：动作码只装得下「做什么」，装不下「说什么」。
+  // 客户端命中后直接走粘贴通道（同 /paste），不经过 AI。
+  snippets: {
+    '推送一下': '将上下文关联的修改提交 git，只检查刚才提到的文件。',
   },
 };
 const STATIC_ROOT = path.join(__dirname, 'dist');
@@ -525,6 +540,9 @@ const server = http.createServer((req, res) => {
       if (!parsed.actions || typeof parsed.actions !== 'object') {
         parsed.actions = { ...DEFAULT_COMMANDS.actions };
       }
+      if (!parsed.snippets || typeof parsed.snippets !== 'object') {
+        parsed.snippets = { ...DEFAULT_COMMANDS.snippets };
+      }
       if (upgraded) parsed.aliases = { ...DEFAULT_COMMANDS.aliases };
       if (upgraded || JSON.stringify(parsed) !== data.replace(/\s+$/, '')) {
         fs.writeFile(COMMANDS_PATH, JSON.stringify(parsed, null, 2), 'utf-8', () => {});
@@ -565,6 +583,47 @@ const server = http.createServer((req, res) => {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true }));
         });
+      });
+    });
+    return;
+  }
+
+  // POST /key/press — 按一下方向键（语音指令「下一个 / 上一个」用）。
+  // 与 /key/enter 一样需要 macOS 辅助功能权限，失败也只提示、不报错中断。
+  // 为什么用 key code 而不是 keystroke：方向键没有对应的可打印字符，只能走键码
+  // （上 126 / 下 125 / 左 123 / 右 124）。
+  if (req.method === 'POST' && req.url === '/key/press') {
+    readJsonBody(req, (err, parsed) => {
+      const key = (!err && parsed && typeof parsed.key === 'string') ? parsed.key : '';
+      const codes = { up: 126, down: 125, left: 123, right: 124 };
+      const code = codes[key];
+      if (code === undefined) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'unknown key: ' + key }));
+        return;
+      }
+      const as = spawn('osascript', ['-e', `tell application "System Events" to key code ${code}`], {
+        timeout: 2000,
+        env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+      });
+      as.on('exit', (code_) => {
+        if (code_ === 0) {
+          console.log('[key]', key, '已按下');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } else {
+          console.warn('[key]', key, '按下失败 (exit:', code_, ') — 可能缺少辅助功能权限');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            ok: true,
+            warn: 'accessibility_permission_required',
+            message: '已尝试按键，但可能缺少辅助功能权限',
+          }));
+        }
+      });
+      as.on('error', (e) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
       });
     });
     return;

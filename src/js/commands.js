@@ -2,6 +2,7 @@ import { toast } from './ui.js';
 import { state } from './state.js';
 import { fetchLocalConfig } from './storage.js';
 import { apiUrl } from './api.js';
+import { pasteToCursor } from './clipboard.js';
 
 // 默认指令表：仅在 commands.json 缺失时作为种子写入。
 // 此后一切以数据目录下的 commands.json 为准（用户或外部 AI Agent 可直接改文件）。
@@ -28,17 +29,20 @@ const LEARN_KEY = 'commandAliases'; // 旧配置兼容：settings.commandAliases
 // 内存同步表：启动时预载（commands.json + 旧配置合并），此后 tryHandleSpecialCommand 同步命中
 let commandCache = {};
 let actionCache = {}; // 动作指令表：整句说法 → 动作（enter 等）
+let snippetCache = {}; // 快捷短语表：整句说法 → 要粘贴出去的一段文本
 let loaded = false;
 
 /** 读取指令映射：/api/commands（含内置默认，首次自动落盘） + 兼容旧 settings.commandAliases */
 async function loadCommandMap() {
   let map = {};
   let actions = {};
+  let snippets = {};
   try {
     const r = await fetch(apiUrl('/api/commands'));
     const data = await r.json().catch(() => ({}));
     if (data && data.aliases && typeof data.aliases === 'object') map = { ...data.aliases };
     if (data && data.actions && typeof data.actions === 'object') actions = { ...data.actions };
+    if (data && data.snippets && typeof data.snippets === 'object') snippets = { ...data.snippets };
   } catch (e) {
     console.error('[command] 指令表加载失败:', e.message || e);
   }
@@ -52,16 +56,40 @@ async function loadCommandMap() {
       }
     }
   } catch { /* 忽略旧配置读取失败 */ }
-  return { aliases: map, actions };
+  return { aliases: map, actions, snippets };
 }
 
-/** 写回 commands.json（PUT /api/commands） */
+/** 写回 commands.json（PUT /api/commands）
+ *  内存里的表是**启动快照**，而这份文件是允许用户与外部 Agent 直接编辑的
+ *  （设置里的「指令配置文件」就是它）。直接整体写回会把外部改动静默抹掉，
+ *  所以先把磁盘上的最新内容读回来：同名的键以**磁盘为准**（人改的是权威），
+ *  内存里多出来的键（本次刚学到的新说法）才补进去。
+ *  注：因此这里的合并无法表达「删除」——面板是只读的，没有删除入口；
+ *  将来若加删除，需改成按变更集写回。 */
 async function persistCommandMap(map) {
   try {
+    // 1) 读盘，拿外部可能已经改过的最新内容
+    let diskAliases = {};
+    let diskActions = {};
+    let diskSnippets = {};
+    try {
+      const fresh = await fetch(apiUrl('/api/commands'));
+      const disk = await fresh.json().catch(() => ({}));
+      if (disk.aliases && typeof disk.aliases === 'object') diskAliases = disk.aliases;
+      if (disk.actions && typeof disk.actions === 'object') diskActions = disk.actions;
+      if (disk.snippets && typeof disk.snippets === 'object') diskSnippets = disk.snippets;
+    } catch { /* 读不到就退回按内存表写，至少不丢本次学习结果 */ }
+
+    // 2) 合并后写回：磁盘优先，内存补新增
     const r = await fetch(apiUrl('/api/commands'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ version: 1, aliases: map, actions: actionCache }),
+      body: JSON.stringify({
+        version: 1,
+        aliases: { ...map, ...diskAliases },
+        actions: { ...actionCache, ...diskActions },
+        snippets: { ...snippetCache, ...diskSnippets },
+      }),
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
   } catch (e) {
@@ -71,18 +99,19 @@ async function persistCommandMap(map) {
 
 /** 启动时预载指令映射（放入内存同步表） */
 export async function initLearnedCommands() {
-  const { aliases, actions } = await loadCommandMap();
+  const { aliases, actions, snippets } = await loadCommandMap();
   commandCache = aliases;
   actionCache = actions;
+  snippetCache = snippets;
   loaded = true;
-  console.log(`[command] 指令表已加载 ${Object.keys(commandCache).length} 条别名 / ${Object.keys(actionCache).length} 条动作`);
+  console.log(`[command] 指令表已加载 ${Object.keys(commandCache).length} 条别名 / ${Object.keys(actionCache).length} 条动作 / ${Object.keys(snippetCache).length} 条短语`);
   initCommandMenu();
 }
 
 /* ---------------- 语音指令面板（右上角图标入口；测试功能，刻意轻量） ---------------- */
 
 // 动作码 → 人话。未知动作码原样显示，新增动作时面板不会失真
-const ACTION_LABELS = { enter: '按下回车键', meeting_summary: '生成 Markdown 会议纪要' };
+const ACTION_LABELS = { enter: '按下回车键', arrow_down: '按下方向键', arrow_up: '按上方向键', meeting_summary: '生成 Markdown 会议纪要' };
 let cmdMenuBound = false;
 
 /** 从别名表反推应用展示名：优先取中文说法作主名，其余英文说法作同义词 */
@@ -122,6 +151,9 @@ function renderCommandMenu() {
     return [main, rest, ACTION_LABELS[action] || action];
   });
 
+  // 快捷短语：左列是说法，右列提示实际会发出去什么（太长就截断，免得撑破面板）
+  const snipItems = Object.entries(snippetCache).map(([phrase, text]) => [phrase, [], `发送：${clipText(text)}`]);
+
   box.innerHTML = `
     <div class="cmdTitle">语音指令<span class="cmdTag">测试功能</span></div>
     <div class="cmdSec">
@@ -134,6 +166,11 @@ function renderCommandMenu() {
       <div class="cmdHint">整句说完即触发，不用加前缀</div>
       ${rows(actItems)}
     </div>
+    ${snipItems.length ? `<div class="cmdSec">
+      <div class="cmdSecTitle">快捷短语</div>
+      <div class="cmdHint">说这句，就把预设那段话粘贴并发送出去</div>
+      ${rows(snipItems)}
+    </div>` : ''}
     <div class="cmdFoot">指令表存在数据目录的 commands.json，可在「设置 → 指令配置文件」里修改</div>`;
 }
 
@@ -150,9 +187,10 @@ function initCommandMenu() {
     if (!open) return;
     renderCommandMenu(); // 先用内存表秒开
     // 再后台重读 commands.json：文件被外部改过时，面板能立刻反映最新内容
-    void loadCommandMap().then(({ aliases, actions }) => {
+    void loadCommandMap().then(({ aliases, actions, snippets }) => {
       commandCache = aliases;
       actionCache = actions;
+      snippetCache = snippets;
       if (isOpen()) renderCommandMenu();
     });
   };
@@ -213,6 +251,26 @@ async function executeEnter() {
   }
 }
 
+/** 按一下方向键（动作 arrow_down / arrow_up）：POST /key/press */
+async function executeArrowKey(key, label) {
+  try {
+    const r = await fetch(apiUrl('/key/press'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.error) {
+      toast('按键失败：' + ((data && data.error) || ('HTTP ' + r.status)));
+      return;
+    }
+    if (data.warn) toast(`已${label}（若没反应，请检查辅助功能权限）`);
+    else toast(`已${label}`);
+  } catch (e) {
+    toast('按键失败：本机服务未连接');
+  }
+}
+
 /** 会议总结触发词：要求「会议」与「总结/纪要/摘要」同现，避免误吃普通句子 */
 const MEETING_SUMMARY_RE = /会议\s*(纪要|总结|摘要)|(纪要|总结|摘要)\s*会议/;
 
@@ -236,10 +294,31 @@ async function executeMeetingSummary() {
   }
 }
 
+/** 过长的短语在面板里截断显示，避免把浮层撑宽 */
+function clipText(s, n = 20) {
+  const t = String(s || '');
+  return t.length > n ? t.slice(0, n) + '…' : t;
+}
+
+/**
+ * 执行快捷短语：把预设文本粘贴到光标处并回车发出去。
+ * 不论「自动粘贴」开关是否开着都照发——说这句话的意图就是发出去，不是记下来；
+ * 与 enter 动作保持一致（同样不看开关）。
+ */
+function executeSnippet(text) {
+  toast(`发送短语：${clipText(text, 24)}`);
+  void pasteToCursor(text, true);
+}
+
 /** 执行动作指令，命中返回 true */
 function runActionCommand(action, phrase) {
   if (action === 'enter') {
     void executeEnter();
+    return true;
+  }
+  if (action === 'arrow_down' || action === 'arrow_up') {
+    const key = action === 'arrow_down' ? 'down' : 'up';
+    void executeArrowKey(key, key === 'down' ? '按下方向键' : '按上方向键');
     return true;
   }
   if (action === 'meeting_summary') {
@@ -260,6 +339,12 @@ export function tryHandleSpecialCommand(text) {
   if (phrase && phrase.length <= 20) {
     const action = actionCache[phrase];
     if (action && runActionCommand(action, phrase)) return true;
+  }
+
+  // 1.5) 快捷短语：整句匹配 → 把预设那段话粘贴并发送（如「推送一下」）
+  if (phrase && snippetCache[phrase]) {
+    executeSnippet(snippetCache[phrase]);
+    return true;
   }
 
   // 2) 打开应用："打开/启动/开启 + 别名"
