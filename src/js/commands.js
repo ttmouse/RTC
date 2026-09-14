@@ -136,7 +136,7 @@ function commandRowHtml(section, key, value) {
     target = `<button type="button" class="cmdTargetBtn${value ? '' : ' empty'}" data-value="${escHtml(value)}">${escHtml(label)}</button>`;
   }
   return `<div class="cmdEditRow" data-section="${section}">`
-    + `<input class="cmdInput cmdPhraseIn" value="${escHtml(key)}" placeholder="说法" spellcheck="false">`
+    + `<input class="cmdInput cmdPhraseIn" value="${escHtml(key)}" placeholder="说法，多个用 ｜ 隔开" spellcheck="false">`
     + `<span class="cmdArrowTxt">→</span>${target}`
     + `<button type="button" class="cmdIconBtn" data-act="try" title="试一下" aria-label="试一下">${CMD_ICON_PLAY}</button>`
     + `<button type="button" class="cmdIconBtn cmdDelBtn" data-act="del" title="删除这条" aria-label="删除这条">${CMD_ICON_TRASH}</button>`
@@ -169,6 +169,14 @@ function setMainHidden(hidden) {
   if (footer) footer.style.display = display;
 }
 
+/**
+ * 说法里的「或者」：`飞出|飞速|飞书` 各算一条。
+ * 同音误识别这类场景一次要加三四个说法，逐个加行太啰嗦；全角半角竖线都认。
+ */
+function splitPhraseKeys(raw) {
+  return raw.split(/[|｜]/).map((s) => s.trim()).filter(Boolean);
+}
+
 /** 读界面上的当前内容。没填全的行不丢弃，收进 problems，保存时一并提示 */
 function collectCommandPage() {
   const problems = [];
@@ -177,15 +185,19 @@ function collectCommandPage() {
     const box = document.getElementById(CMD_ROW_BOX[section]);
     if (!box) continue;
     for (const row of box.querySelectorAll('.cmdEditRow')) {
-      const key = row.querySelector('.cmdPhraseIn').value.trim();
+      const raw = row.querySelector('.cmdPhraseIn').value.trim();
       const input = row.querySelector('.cmdValueIn');
       const target = row.querySelector('.cmdTargetBtn');
       const value = ((input ? input.value : (target ? target.dataset.value : '')) || '').trim();
-      if (!key && !value) continue;                       // 整行空着：当没这条
-      if (!key) { problems.push('有一行只填了右边，没写「说法」'); continue; }
-      if (!value) { problems.push(`「${key}」还没选目标`); continue; }
-      if (tables[section][key] !== undefined) { problems.push(`「${key}」在同一个分组里出现了两次`); continue; }
-      tables[section][key] = value;
+      // 一行可以写好几个说法，保存时各成一条（之后能单独改、单独删）
+      const keys = splitPhraseKeys(raw);
+      if (!keys.length && !value) continue;               // 整行空着：当没这条
+      if (!keys.length) { problems.push('有一行只填了右边，没写「说法」'); continue; }
+      if (!value) { problems.push(`「${keys[0]}」还没选目标`); continue; }
+      for (const key of keys) {
+        if (tables[section][key] !== undefined) { problems.push(`「${key}」在同一个分组里出现了两次`); continue; }
+        tables[section][key] = value;
+      }
     }
   }
   return { tables, problems };
@@ -284,7 +296,8 @@ async function pickCommandTarget(btn) {
 /** 试一下：把这一行当成刚说出口的话触发一次 */
 function tryCommandRow(row) {
   const section = row.dataset.section;
-  const key = row.querySelector('.cmdPhraseIn').value.trim();
+  // 一行可能写了多个说法（飞出｜飞速｜飞书），试一下用第一个就够了
+  const key = splitPhraseKeys(row.querySelector('.cmdPhraseIn').value)[0] || '';
   const input = row.querySelector('.cmdValueIn');
   const target = row.querySelector('.cmdTargetBtn');
   const value = ((input ? input.value : (target ? target.dataset.value : '')) || '').trim();
