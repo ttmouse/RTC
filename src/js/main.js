@@ -22,11 +22,27 @@ setAsrStopHandler(stopRec);
 // ---------- 开关类行为（唯一入口） ----------
 // 音效挂在「行为」而不是「按钮点击」上：footer 按钮、设置页开关、⌘⇧V/⌘⇧E、
 // Tauri 全局热键 ⌥⌘P 全都走下面这两个函数，新增入口也不会再漏掉提示音。
+//
+// 切换确认同样挂在这里：开关自己做一下短促的「按下」脉冲（样式见
+// style.css 的 .footerToggle.toggled），不再往顶部写一行字。反馈落在
+// 手指按下的那个按钮上，连续切换也不会在标题下方反复闪字。
+const toggleFlashTimers = new WeakMap();
+
+function flashToggle(el) {
+  if (!el) return;
+  el.classList.remove('toggled');
+  void el.offsetWidth;   // 读一次布局，连点两次时动画也能重新播
+  el.classList.add('toggled');
+  clearTimeout(toggleFlashTimers.get(el));
+  toggleFlashTimers.set(el, setTimeout(() => el.classList.remove('toggled'), 340));
+}
+
 function setAutoPaste(on) {
   state.autoPaste = on;
   syncToggleUI();
   saveASRSettings();
   playToggle(on);
+  flashToggle($('ftPaste'));
   if (on) ensurePastePermission();
 }
 
@@ -39,6 +55,7 @@ function setAutoEnter(on) {
   syncToggleUI();
   saveASRSettings();
   playToggle(on);
+  flashToggle($('ftEnter'));
 }
 
 function toggleAutoEnter() {
@@ -483,11 +500,10 @@ document.addEventListener('keydown', (e) => {
 });
 
 // 系统级全局热键（⌥⌘P，由 Rust 侧注册并 emit）：窗口不在前台也能切换自动粘贴。
-// 与上面的 ⌘⇧V 同一条路径（都走 toggleAutoPaste）；多一句 toast——窗口不在前台时看不到 footer 按钮的填充状态。
-window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => {
-  toggleAutoPaste();
-  toast(state.autoPaste ? '自动粘贴已开启（⌥⌘P）' : '自动粘贴已关闭（⌥⌘P）');
-});
+// 与上面的 ⌘⇧V 完全同一条路径（都走 toggleAutoPaste），反馈也由那条路径统一给出：
+// 开关脉冲 + playToggle 的音（开=高音、关=低音）。窗口不在前台时听声音即可，
+// 不再在这里补顶部提示——那行字既离操作位置远，又会连续切换时反复闪。
+window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => toggleAutoPaste());
 
 (async () => {
   renderRunStatus();
