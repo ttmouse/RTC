@@ -66,7 +66,37 @@ export const state = {
 };
 
 export const ASR_PRICE = 0.00033;
-export const VAD_METER_FULL_SCALE = 0.01;
+
+// ---------- 电平尺刻度 ----------
+// 尺子的显示范围 = VAD 阈值的可调范围，所以刻度能一路拖到尺子两端，两个概念不会打架。
+// 映射走 dBFS（20·log10(rms)）而不是线性 RMS：麦克风电平和人耳都是对数的，线性刻度下
+// 正常说话就顶格（旧版满量程 0.01 就是这样：原始麦克风说句话 RMS 就已经到 0.01 了），
+// 而轻声、气声全挤在最左边几个像素里，看不见也拖不准。
+export const VAD_THRESHOLD_MIN = 0.001;
+export const VAD_THRESHOLD_MAX = 0.05;
+
+const METER_DB_MIN = 20 * Math.log10(VAD_THRESHOLD_MIN); // -60 dBFS
+const METER_DB_MAX = 20 * Math.log10(VAD_THRESHOLD_MAX); // -26 dBFS
+
+/** RMS（线性幅度）→ 电平尺百分比（0~100）。非正数、超范围都夹到端点 */
+export function rmsToMeterPct(rms) {
+  if (!(rms > 0)) return 0;
+  const db = 20 * Math.log10(rms);
+  const pct = (db - METER_DB_MIN) / (METER_DB_MAX - METER_DB_MIN) * 100;
+  return Math.max(0, Math.min(100, pct));
+}
+
+/** 电平尺百分比（0~100）→ RMS；拖动刻度时用它反解阈值，与 rmsToMeterPct 严格互逆 */
+export function meterPctToRms(pct) {
+  const db = METER_DB_MIN + (METER_DB_MAX - METER_DB_MIN) * (pct / 100);
+  return Math.pow(10, db / 20);
+}
+
+/** 夹到合法阈值区间：保证阈值永远落在尺子范围内，刻度不会被算出界 */
+export function clampVADThreshold(v) {
+  if (!Number.isFinite(v)) return VAD_THRESHOLD_MIN;
+  return Math.min(VAD_THRESHOLD_MAX, Math.max(VAD_THRESHOLD_MIN, Number(v)));
+}
 
 // ---------- 引擎辅助 ----------
 

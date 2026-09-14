@@ -108,6 +108,10 @@
 **滚动阈值** — `ui.js`：贴底判定 `BOTTOM_SLACK = 40`、「回到最新」浮出 `JUMP_SLACK = 120`、顶部翻页 `TOP_SLACK = 120`。
 顶部前插必须记录插入前后的 `scrollHeight` 差值并补偿 `scrollTop`（`setListTopHint` / `prependEntries` 的注释解释了为什么不能按提示条自身高度补、为什么贴底时不补偿）。滚动监听必须 `{ passive: true }`，翻页判断用 rAF 合并。
 
+**电平尺刻度** — `state.js`：尺子范围 = VAD 阈值可调范围（`VAD_THRESHOLD_MIN/MAX = 0.001 / 0.05`），所以刻度能一路拖到尺子两端。
+「画电平条」「画刻度」「拖动刻度反解阈值」三处必须共用 `rmsToMeterPct` / `meterPctToRms` 这对互逆函数（dBFS 刻度，-60 ~ -26 dBFS）。
+**不要退回线性映射**：满量程 0.01 的线性尺下，原始麦克风正常说话就顶格（用户看到的「声音稍大就 100%」），轻声则挤在最左边几像素里。
+
 **性能硬约束** — 背景噪点与渐变两层必须 `position:fixed` + `transform:translateZ(0)` + `will-change:transform`（`style.css:14-16`）。缺了这三个属性，WKWebView 下每次滚动都会重绘整屏噪点，表现为卡顿。
 
 **控件规范** — 图标内联 SVG，`24x24 viewBox`、`stroke-width:2`、`round` 端点（项目内 0 emoji）。**禁原生 `<select>`** 做浮层（WKWebView 弹层闪烁抖动），照 `.engineMenu` / `.engineOption` 写自定义下拉；设置页表单里的服务商下拉是唯一保留的原生 select。纯图标按钮必须同时有 `title` 和 `aria-label`。悬停提示统一走 `data-tip`（快捷键、电平尺刻度含义）；

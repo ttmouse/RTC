@@ -1,5 +1,5 @@
 import { $, renderRunStatus, initRunStatus, toast, setRecordBtn, initListAutoScroll, listNearTop } from './ui.js';
-import { state, VAD_METER_FULL_SCALE } from './state.js';
+import { state, meterPctToRms, clampVADThreshold } from './state.js';
 import { DEFAULT_RULES, flushCorrectionRules, loadCorrectionRules, saveCorrectionRules } from './correction.js';
 import { ensurePastePermission } from './clipboard.js';
 import { connectASR, setAsrStopHandler } from './asr.js';
@@ -302,8 +302,10 @@ refreshEngineMenuAvailability();
   function setThresholdFromClientX(clientX) {
     const r = bg.getBoundingClientRect();
     const ratio = (clientX - r.left) / r.width;
-    const clamped = Math.max(0.001, Math.min(0.05, ratio * VAD_METER_FULL_SCALE));
-    state.vadThreshold = Math.round(clamped * 1000) / 1000;
+    const clamped = clampVADThreshold(meterPctToRms(ratio * 100));
+    // 4 位小数：dB 刻度下阈值在低端变化极慢（0.001→0.002 就占了尺子 18%），
+    // 按 3 位取整会让拖动在左边一路跳格，留 4 位拖动才连续
+    state.vadThreshold = Math.round(clamped * 10000) / 10000;
     renderVADThresholdMarker();
     saveASRSettings();
   }

@@ -1,4 +1,4 @@
-import { state, ASR_PRICE, VAD_METER_FULL_SCALE, normalizeEngine, engineLabel } from './state.js';
+import { state, ASR_PRICE, rmsToMeterPct, clampVADThreshold, normalizeEngine, engineLabel } from './state.js';
 import { $ } from './ui.js';
 import { fetchLocalConfig, patchLocalConfig } from './storage.js';
 import { apiUrl, wsProxyUrl } from './api.js';
@@ -11,7 +11,7 @@ export function renderVADThresholdMarker() {
   const text = $('levelMeterText');
   const threshold = state.vadThreshold || 0.006;
   if (tick) {
-    const pct = Math.min(100, threshold / VAD_METER_FULL_SCALE * 100);
+    const pct = rmsToMeterPct(threshold);
     tick.style.left = pct.toFixed(1) + '%';
   }
   if (text) text.textContent = `0.0000 / ${threshold.toFixed(4)}`;
@@ -53,7 +53,7 @@ function settingsFromState() {
 
 function applySettings(config) {
   const s = config.settings || {};
-  state.vadThreshold = (s.vadThreshold != null && s.vadThreshold <= 0.05) ? s.vadThreshold : 0.006;
+  state.vadThreshold = s.vadThreshold != null ? clampVADThreshold(s.vadThreshold) : 0.006;
   state.silenceTimeout = s.silenceTimeout || 2000;
   state.gainMultiplier = s.gainMultiplier || 1;
   state.autoPaste = s.autoPaste || false;

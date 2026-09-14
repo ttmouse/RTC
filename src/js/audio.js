@@ -1,4 +1,4 @@
-import { state, VAD_METER_FULL_SCALE, isLocalEngine, normalizeEngine } from './state.js';
+import { state, rmsToMeterPct, isLocalEngine, normalizeEngine } from './state.js';
 import { $, renderRunStatus, setRecordBtn } from './ui.js';
 import { vadSend, sendPCM, finalizePending, disconnectBailian } from './asr.js';
 import { flushTotalDuration } from './settings.js';
@@ -54,7 +54,7 @@ export async function startAudio() {
 
       const bar = $('levelMeterBar');
       if (bar) {
-        const pct = Math.min(100, rms / VAD_METER_FULL_SCALE * 100);
+        const pct = rmsToMeterPct(rms);
         bar.style.width = pct.toFixed(0) + '%';
         bar.className = rms >= state.vadThreshold
           ? (rms >= state.vadThreshold * 3 ? 'loud' : 'speech')
