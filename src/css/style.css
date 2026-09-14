@@ -506,6 +506,17 @@
   .cmdPickItem .pickSub{ font-size:10px; color:var(--ink-faint); overflow:hidden;
         text-overflow:ellipsis; white-space:nowrap; }
   .cmdPickNone{ padding:8px 10px; font-size:12px; color:var(--ink-faint); }
+  /* 选择器底部的「直接按一个键…」：从预设键跳到现场录制 */
+  .cmdPickRecord{ flex-shrink:0; margin:4px 2px 2px; padding:6px 10px; border:1px dashed var(--rule);
+        border-radius:4px; background:none; color:var(--ink-soft);
+        font-family:inherit; font-size:12px; text-align:left; cursor:pointer; }
+  .cmdPickRecord:hover{ border-color:var(--ink-soft); color:var(--ink); }
+  .cmdPickRecord:focus-visible{ outline:2px solid var(--seal); outline-offset:-2px; }
+  /* 录制中：这一行在等键盘。用墨色不用印章红——红色是「录音中」这个状态本身，不当装饰 */
+  .cmdTargetBtn.recording{ border-color:var(--ink); color:var(--ink); font-style:italic; }
+  /* 功能块的目标不可改：它对应的是程序里的功能，不是可选项 */
+  .cmdTargetBtn.locked{ color:var(--ink-soft); background:none; border-style:dashed; cursor:default; }
+  .cmdTargetBtn.locked:hover{ border-color:var(--rule); }
   /* 打开设置时的入场：分区依次淡入，总时长压在 ~200ms 内，不拖慢操作 */
   #settingsPage:not(.hidden) .settingsPageBody > .s-group{
         animation:sg-in .2s cubic-bezier(.16,1,.3,1) both; }

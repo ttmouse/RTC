@@ -89,8 +89,46 @@ export async function initLearnedCommands() {
 
 /* ---------------- 语音指令面板（右上角图标入口；测试功能，刻意轻量） ---------------- */
 
-// 动作码 → 人话。未知动作码原样显示，新增动作时面板不会失真
-const ACTION_LABELS = { enter: '按下回车', arrow_down: '按下 ↓', arrow_up: '按下 ↑', meeting_summary: '生成会议纪要' };
+// 动作值 → 人话。两种值：按键表达式（Enter / Meta+Shift+KeyK）和功能码（meeting_summary）。
+// 未知值原样显示，新增动作时面板不会失真。
+const FUNCTION_LABELS = { meeting_summary: '生成会议纪要' };
+// 老表里存的是动作码，显示和执行前都先翻译成表达式
+const LEGACY_KEY_ALIAS = { enter: 'Enter', arrow_down: 'ArrowDown', arrow_up: 'ArrowUp' };
+const MOD_SYMBOLS = { Meta: '⌘', Ctrl: '⌃', Alt: '⌥', Shift: '⇧' };
+const KEY_SYMBOLS = {
+  Enter: '↩', Escape: 'esc', Tab: '⇥', Space: '空格', Backspace: '⌫', Delete: '⌦',
+  ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+  Home: '↖', End: '↘', PageUp: '⇞', PageDown: '⇟',
+};
+
+/** `Meta+Shift+KeyK` → `⌘⇧K`；`ArrowDown` → `↓` */
+function formatShortcut(expr) {
+  return String(expr || '').split('+').filter(Boolean).map((p) => {
+    if (MOD_SYMBOLS[p]) return MOD_SYMBOLS[p];
+    if (KEY_SYMBOLS[p]) return KEY_SYMBOLS[p];
+    const letter = /^Key([A-Z])$/.exec(p);
+    if (letter) return letter[1];
+    const digit = /^Digit(\d)$/.exec(p);
+    if (digit) return digit[1];
+    return p;
+  }).join('');
+}
+
+/** 动作值 → 界面上显示的名字 */
+function actionLabel(value) {
+  if (!value) return '选择按键';
+  if (FUNCTION_LABELS[value]) return FUNCTION_LABELS[value];
+  return formatShortcut(LEGACY_KEY_ALIAS[value] || value);
+}
+
+// 点开就能选的常用键（要组合键或冷门键就现场录一个）
+const KEY_PRESETS = [
+  'Enter', 'Escape', 'Tab', 'Space', 'Backspace', 'Delete',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Home', 'End', 'PageUp', 'PageDown',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+  'Meta+KeyS', 'Meta+KeyC', 'Meta+KeyV', 'Meta+KeyZ', 'Meta+Shift+KeyZ',
+];
 
 /* ---------------- 语音指令管理页（整页；增删改查都在这） ---------------- */
 // 以前这里是个只读小面板：想改指令得自己去编辑 commands.json，而 open -a 认的是
@@ -103,7 +141,6 @@ const ACTION_GROUPS = [
   { id: 'keys', order: ['enter', 'arrow_down', 'arrow_up'] },
   { id: 'features', order: ['meeting_summary'] },
 ];
-const ACTION_ORDER = ACTION_GROUPS.flatMap((g) => g.order);
 const ACTION_GROUP_BOX = { keys: 'cmdRowsKeys', features: 'cmdRowsFeatures' };
 const CMD_ROW_BOX = {                                // section → 它在页面上占的容器（动作有两个）
   aliases: ['cmdRowsAliases'],
@@ -143,10 +180,14 @@ function commandRowHtml(section, key, value) {
   if (section === 'snippets') {
     target = `<input class="cmdInput cmdValueIn" value="${escHtml(value)}" placeholder="要发出去的话" spellcheck="false">`;
   } else {
-    const label = section === 'actions' ? (ACTION_LABELS[value] || value || '选择动作') : (value || '选择应用');
+    const label = section === 'actions' ? actionLabel(value) : (value || '选择应用');
+    // 功能块的目标不能改：值是程序里的功能码，换一个等于换个不存在的功能。做成不可点的
+    // 样子，而不是「点下去才知道不行」；开了新功能就把它加进 FUNCTION_LABELS。
+    const locked = section === 'actions' && !!FUNCTION_LABELS[value];
+    const tip = locked ? `这个功能由程序实现，只能改左边的说法（${label}）` : label;
     // title：右边这一栏窄，长应用名（如 Karabiner-VirtualHIDDevice-Manager）会被截断，
     // 鼠标停留一下能看到全名
-    target = `<button type="button" class="cmdTargetBtn${value ? '' : ' empty'}" data-value="${escHtml(value)}" title="${escHtml(label)}">${escHtml(label)}</button>`;
+    target = `<button type="button" class="cmdTargetBtn${value ? '' : ' empty'}${locked ? ' locked' : ''}" data-value="${escHtml(value)}" title="${escHtml(tip)}"${locked ? ' aria-disabled="true"' : ''}>${escHtml(label)}</button>`;
   }
   return `<div class="cmdEditRow" data-section="${section}">`
     + `<input class="cmdInput cmdPhraseIn" value="${escHtml(key)}" placeholder="说法，多个用 ｜ 隔开" spellcheck="false">`
@@ -270,13 +311,14 @@ function closeCommandPicker() {
 }
 
 /** 选应用 / 选动作的浮层（不用原生 select，理由见 style.css） */
-function openCommandPicker(anchor, items, current, { searchable = false } = {}) {
+function openCommandPicker(anchor, items, current, { searchable = false, record = false } = {}) {
   closeCommandPicker();
   const rect = anchor.getBoundingClientRect();
   const el = document.createElement('div');
   el.className = 'cmdPicker';
   el.innerHTML = (searchable ? '<input class="cmdPickerSearch" placeholder="搜索应用…" spellcheck="false">' : '')
-    + '<div class="cmdPickerList"></div>';
+    + '<div class="cmdPickerList"></div>'
+    + (record ? '<button type="button" class="cmdPickRecord">直接按一个键…（可带 ⌘⇧⌥⌃）</button>' : '');
   document.body.appendChild(el);
   cmdPickerEl = el;
 
@@ -319,11 +361,55 @@ function openCommandPicker(anchor, items, current, { searchable = false } = {}) 
   list.addEventListener('click', (e) => {
     const item = e.target.closest('.cmdPickItem');
     if (!item) return;
-    anchor.dataset.value = item.dataset.value;
-    anchor.textContent = item.querySelector('span').textContent;
+    const expr = item.dataset.value;
+    anchor.dataset.value = expr;
+    anchor.textContent = formatShortcut(expr);
+    anchor.title = expr;
     anchor.classList.remove('empty');
     closeCommandPicker();
   });
+
+  const rec = el.querySelector('.cmdPickRecord');
+  if (rec) rec.addEventListener('click', () => { closeCommandPicker(); startShortcutRecording(anchor); });
+}
+
+/**
+ * 录一个快捷键：按下什么就记什么，Esc 取消。
+ * 光按修饰键不算数（那没意义）。左右修饰键在这里会被合并——这条发键通道本来就发不出
+ * 左右，录下来也执行不了，不如当场就不给这个错觉。
+ */
+function startShortcutRecording(anchor) {
+  const original = { value: anchor.dataset.value || '', text: anchor.textContent, title: anchor.title };
+  anchor.classList.add('recording');
+  anchor.textContent = '请按一个键…（Esc 取消）';
+  const stop = () => {
+    document.removeEventListener('keydown', onKey, true);
+    anchor.classList.remove('recording');
+  };
+  const restore = () => {
+    anchor.dataset.value = original.value;
+    anchor.textContent = original.text;
+    anchor.title = original.title;
+  };
+  const onKey = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') { restore(); stop(); return; }
+    if (['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) return;   // 光按修饰键不算
+    const mods = [];
+    if (e.metaKey) mods.push('Meta');
+    if (e.ctrlKey) mods.push('Ctrl');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    const expr = mods.concat(e.code).join('+');
+    anchor.dataset.value = expr;
+    anchor.textContent = formatShortcut(expr);
+    anchor.title = expr;
+    anchor.classList.remove('empty');
+    stop();
+    toast('已录下 ' + formatShortcut(expr));
+  };
+  document.addEventListener('keydown', onKey, true);
 }
 
 /** 点「选择应用 / 选择动作」 */
@@ -331,7 +417,12 @@ async function pickCommandTarget(btn) {
   const row = btn.closest('.cmdEditRow');
   const current = btn.dataset.value || '';
   if (row.dataset.section === 'actions') {
-    openCommandPicker(btn, ACTION_ORDER.map((v) => ({ value: v, label: ACTION_LABELS[v] || v })), current);
+    // 功能块的值是程序里的功能码，换一个等于换个不存在的功能——只让改说法
+    if (row.parentElement && row.parentElement.id === 'cmdRowsFeatures') {
+      toast('这个功能由程序实现，只能改左边的说法');
+      return;
+    }
+    openCommandPicker(btn, KEY_PRESETS.map((v) => ({ value: v, label: formatShortcut(v) })), current, { record: true });
     return;
   }
   const apps = await loadAppList();
@@ -514,21 +605,22 @@ async function executeEnter() {
   }
 }
 
-/** 按一下方向键（动作 arrow_down / arrow_up）：POST /key/press */
-async function executeArrowKey(key, label) {
+/** 按一下某个键（按键类动作）：POST /key/press，值是一个按键表达式 */
+async function executeKey(expr) {
   try {
     const r = await fetch(apiUrl('/key/press'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key }),
+      body: JSON.stringify({ key: expr }),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || data.error) {
       toast('按键失败：' + ((data && data.error) || ('HTTP ' + r.status)));
       return;
     }
-    if (data.warn) toast(`已${label}（若没反应，请检查辅助功能权限）`);
-    else toast(`已${label}`);
+    const name = formatShortcut(LEGACY_KEY_ALIAS[expr] || expr);
+    if (data.warn) toast(`已按 ${name}（若没反应，请检查辅助功能权限）`);
+    else toast(`已按 ${name}`);
   } catch (e) {
     toast('按键失败：本机服务未连接');
   }
@@ -575,21 +667,19 @@ function executeSnippet(text) {
 
 /** 执行动作指令，命中返回 true */
 function runActionCommand(action, phrase) {
-  if (action === 'enter') {
+  if (!action) return false;
+  if (action === 'enter') {          // 保留老路：/key/enter 是个已经写进文档的接口
     void executeEnter();
     return true;
   }
-  if (action === 'arrow_down' || action === 'arrow_up') {
-    const key = action === 'arrow_down' ? 'down' : 'up';
-    void executeArrowKey(key, key === 'down' ? '按下方向键' : '按上方向键');
-    return true;
+  if (FUNCTION_LABELS[action]) {
+    if (action === 'meeting_summary') { void executeMeetingSummary(); return true; }
+    console.warn('[command] 未知功能:', action, '(', phrase, ')');
+    return false;
   }
-  if (action === 'meeting_summary') {
-    void executeMeetingSummary();
-    return true;
-  }
-  console.warn('[command] 未知动作:', action, '(', phrase, ')');
-  return false;
+  // 其余全当按键表达式（含老表里的 arrow_down / arrow_up，服务端会翻译）
+  void executeKey(action);
+  return true;
 }
 
 /**

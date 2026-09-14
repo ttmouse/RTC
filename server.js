@@ -433,6 +433,50 @@ function patchConfig(partial, callback) {
   }, callback);
 }
 
+// ---------- 按键表达式（语音指令里「按键」类动作的值）----------
+// 长这样：`Enter`、`ArrowDown`、`Meta+Shift+KeyK`、`Ctrl+Alt+Delete`。键名直接用浏览器
+// 的 KeyboardEvent.code（前端录制拿到的就是它），修饰符用 Meta/Ctrl/Alt/Shift。
+// 为什么存名字不存数字：commands.json 用户和外部工具都会直接改，`Meta+Shift+KeyK` 一眼
+// 能看懂，`55+56+40` 不能。
+//
+// 已知限制：走 AppleScript 发键，**它不区分左右修饰键**——表达式里没有左右的概念，
+// `Meta` 永远按成左边那个 ⌘。要区分得改成原生发 CGEvent，那是另一件事。
+const KEY_CODES = {
+  Enter: 36, Escape: 53, Tab: 48, Space: 49, Backspace: 51, Delete: 117,
+  ArrowUp: 126, ArrowDown: 125, ArrowLeft: 123, ArrowRight: 124,
+  Home: 115, End: 119, PageUp: 116, PageDown: 121,
+  F1: 122, F2: 120, F3: 99, F4: 118, F5: 96, F6: 97, F7: 98, F8: 100, F9: 101,
+  F10: 109, F11: 103, F12: 111,
+  KeyA: 0, KeyB: 11, KeyC: 8, KeyD: 2, KeyE: 14, KeyF: 3, KeyG: 5, KeyH: 4, KeyI: 34,
+  KeyJ: 38, KeyK: 40, KeyL: 37, KeyM: 46, KeyN: 45, KeyO: 31, KeyP: 35, KeyQ: 12,
+  KeyR: 15, KeyS: 1, KeyT: 17, KeyU: 32, KeyV: 9, KeyW: 13, KeyX: 7, KeyY: 16, KeyZ: 6,
+  Digit0: 29, Digit1: 18, Digit2: 19, Digit3: 20, Digit4: 21, Digit5: 23, Digit6: 22,
+  Digit7: 26, Digit8: 28, Digit9: 25,
+  Minus: 27, Equal: 24, BracketLeft: 33, BracketRight: 30, Backslash: 42,
+  Semicolon: 41, Quote: 39, Comma: 43, Period: 47, Slash: 44, Backquote: 50,
+};
+const MODIFIER_AS = { Meta: 'command down', Ctrl: 'control down', Alt: 'option down', Shift: 'shift down' };
+// 老表里写的是动作码（enter / arrow_down），不迁移也要能跑
+const LEGACY_ACTION_KEYS = {
+  enter: 'Enter', arrow_down: 'ArrowDown', arrow_up: 'ArrowUp',
+  up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
+};
+
+/** 「Meta+Shift+KeyK」→ { keycode: 40, using: 'command down, shift down' }；认不出返回 null */
+function parseShortcut(expr) {
+  const parts = String(expr || '').split('+').map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  const using = [];
+  let keycode;
+  for (const part of parts) {
+    if (MODIFIER_AS[part]) { using.push(MODIFIER_AS[part]); continue; }
+    if (KEY_CODES[part] === undefined) return null;
+    if (keycode !== undefined) return null;    // 一个表达式只能有一个非修饰键
+    keycode = KEY_CODES[part];
+  }
+  return keycode === undefined ? null : { keycode, using };
+}
+
 // ---------- commands.json 写入队列 ----------
 // 与 config.json 同一套姿势：读-改-写整体串行 + 原子替换。
 // 为什么不用「读整表 → 改 → 整体写回」：这张文件允许用户和外部 Agent 直接编辑，
@@ -750,21 +794,24 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // POST /key/press — 按一下方向键（语音指令「下一个 / 上一个」用）。
+  // POST /key/press — 按一下某个键（语音指令里「按键」类动作用）。
+  // 接受按键表达式（`Enter` / `Meta+Shift+KeyK`），也认旧的动作码（enter / arrow_up）。
   // 与 /key/enter 一样需要 macOS 辅助功能权限，失败也只提示、不报错中断。
-  // 为什么用 key code 而不是 keystroke：方向键没有对应的可打印字符，只能走键码
-  // （上 126 / 下 125 / 左 123 / 右 124）。
+  // 为什么用 key code 而不是 keystroke：方向键这类没有可打印字符，只能走键码。
   if (req.method === 'POST' && req.url === '/key/press') {
     readJsonBody(req, (err, parsed) => {
       const key = (!err && parsed && typeof parsed.key === 'string') ? parsed.key : '';
-      const codes = { up: 126, down: 125, left: 123, right: 124 };
-      const code = codes[key];
-      if (code === undefined) {
+      const spec = parseShortcut(LEGACY_ACTION_KEYS[key] || key);
+      if (!spec) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: false, error: 'unknown key: ' + key }));
         return;
       }
-      const as = spawn('osascript', ['-e', `tell application "System Events" to key code ${code}`], {
+      // 组合键用 AppleScript 的 using；注意它不区分左右修饰键（见 KEY_CODES 上方注释）
+      const script = spec.using.length
+        ? `tell application "System Events" to key code ${spec.keycode} using {${spec.using.join(', ')}}`
+        : `tell application "System Events" to key code ${spec.keycode}`;
+      const as = spawn('osascript', ['-e', script], {
         timeout: 2000,
         env: { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
       });
