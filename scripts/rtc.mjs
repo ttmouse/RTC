@@ -47,6 +47,26 @@ function fail(msg, code = 1) {
   process.exit(code);
 }
 
+// 以下两个 helper 与 server.js 的 chatEndpoint / providerHeaders 是同一套规则。
+// CLI 是 ESM、server.js 是 CJS，共享模块会连带改动 Tauri 资源清单，因此刻意重复；
+// 改一边记得同步另一边，否则「GUI 可用、CLI 报 400」这种不一致极难定位。
+
+/** 兼容带/不带 /chat/completions 后缀的 baseUrl */
+function vendorEndpoint(baseUrl) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  return /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
+}
+
+/** OpenCode Zen Go 网关强制要求 x-opencode-session，缺失会直接 400 MissingSessionID */
+function vendorHeaders(baseUrl) {
+  let host = '';
+  try { host = new URL(baseUrl).hostname; } catch { /* 非法地址交给 fetch 报错 */ }
+  if (host === 'opencode.ai' || host.endsWith('.opencode.ai')) {
+    return { 'x-opencode-session': 'rtc-cli-' + process.pid, 'User-Agent': 'rtc-transcriber-cli/1.0' };
+  }
+  return {};
+}
+
 function loadConfig() {
   if (!existsSync(CONFIG_PATH)) return {};
   try {
@@ -204,9 +224,9 @@ async function cmdLlmChat(args) {
     // server 不可达时直连上游（CLI 独立于 GUI 运行）
     try {
       data = await callUpstream(
-        `${ai.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+        vendorEndpoint(ai.baseUrl),
         { model: ai.model, messages, stream: false, max_tokens: 4096 },
-        ai.apiKey ? { Authorization: `Bearer ${ai.apiKey}` } : {}
+        { ...(ai.apiKey ? { Authorization: `Bearer ${ai.apiKey}` } : {}), ...vendorHeaders(ai.baseUrl) }
       );
     } catch (e2) {
       fail(`LLM 调用失败: ${e2.message}`);
