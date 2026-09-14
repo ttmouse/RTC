@@ -309,8 +309,19 @@ function filterEvents(events, opts) {
       }
     }
   } else if (opts.date) {
+    // 必须校验格式：`new Date('2026-9-4T00:00:00')` 得到的是 Invalid Date，
+    // 而后面的过滤是 `ts < fromDate` / `ts > toDate`——拿 NaN 比较永远为 false，
+    // 于是 --date 打错一个数字，命令不会报错，而是安静地把**全部历史**都吐出来。
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date)) {
+      console.error(`--date 格式错误: "${opts.date}"（应为 YYYY-MM-DD，例如 2026-09-04）`);
+      exit(1);
+    }
     fromDate = new Date(`${opts.date}T00:00:00`);
     toDate = new Date(`${opts.date}T23:59:59`);
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      console.error(`--date 不是有效日期: "${opts.date}"`);
+      exit(1);
+    }
   } else {
     // 默认今天
     const today = todayStr();

@@ -120,6 +120,7 @@ src/index.html        # HTML 骨架与 module entry
 src/css/style.css     # 全部样式
 src/js/                # 前端 ES 模块
   main.js             # 事件绑定与启动入口
+  api.js              # 后端地址的唯一来源（HTTP/WS 都从这里取，别各处硬编码端口）
   state.js            # 共享状态
   ui.js               # DOM/UI 工具
   history.js          # 历史存储与渲染
@@ -129,13 +130,30 @@ src/js/                # 前端 ES 模块
   audio.js            # 录音管道
   settings.js         # 设置持久化与状态同步
 server.js             # Node 后端（HTTP + WebSocket 代理）
-scripts/proxy.py      # 阿里云百炼 ASR WebSocket 代理
-asr_local/server.py   # 本地 SenseVoice 引擎服务
-scripts/              # 启动、模型与检查脚本
-docs/                 # 产品分析报告
+asr_local/server.py   # 本地 ASR 引擎服务（SenseVoice / Qwen3，含 8933 模型管理 HTTP）
+scripts/              # 启动、模型、打包与检查脚本
+  check-static.mjs    # npm test 的全部内容（语法 / 导入 / 资源 / JSON）
+  dev.mjs             # npm run dev:web：热更新开发服务器
+  build-sidecar.sh    # 重新编译 Tauri 打包用的 node-server / asr-server 二进制
+docs/                 # 文档中心（索引见 docs/README.md）
+  README.md           # 文档索引：改代码前先读这里
+  product-rules/      # 产品原则与界面交互约束（刻意为之、不能顺手改的部分）
+  product-direction/  # 行业研究 + 创新清单
 src-tauri/            # Tauri 桌面端
 dist/                 # 构建产物（不入库）
 ```
+
+## 打包桌面版（sidecar 二进制）
+
+`src-tauri/binaries/` 下的两个 sidecar（`node-server` / `asr-server`）**不入库**（单个数十 MB 到数百 MB），
+但 `tauri.conf.json` 的 `bundle.externalBin` 依赖它们，缺了就无法打包：
+
+```bash
+npm run build:sidecar   # 需要 bun（编译 server.js）+ pyinstaller（打包 asr_local/server.py）
+```
+
+**改了 `server.js` 或 `asr_local/server.py` 后必须重新执行这一步**，否则打进 App 的仍是旧后端
+（曾出现「仓库里的 server.js 已经加了 /api/status，但 App 里那个二进制还是老的、接口返回 404」）。
 
 ## 许可
 

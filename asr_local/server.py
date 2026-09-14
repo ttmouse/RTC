@@ -41,7 +41,8 @@ PIP_NAMES = {"sherpa_onnx": "sherpa-onnx", "numpy": "numpy", "websockets": "webs
 # ---------- 配置 ----------
 PORT = int(os.environ.get("ASR_PORT", "8932"))
 ENGINE = os.environ.get("ASR_ENGINE", "sensevoice")   # sensevoice | qwen3
-QWEN3_DIR = os.environ.get("ASR_QWEN3_DIR") or os.path.join(os.path.dirname(__file__), "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25")
+# Qwen3 模型目录不做模块级快照：唯一的解析入口是 default_qwen3_dir()（见下），
+# 旧的 QWEN3_DIR 常量只服务已删除的 LocalASR，且缺少数据目录回落，留着就是第二个真相来源。
 NUM_THREADS = int(os.environ.get("ASR_NUM_THREADS", "4"))
 # 首次使用时的模型下载地址（GitHub Releases 资产）。
 # 注意：固定指向 v1.0.18 的资产 URL，不随「最新版」变动——
@@ -131,6 +132,7 @@ def ensure_sensevoice_model() -> str:
     """确保 SenseVoice 模型可用并返回模型目录；缺失时自动从 GitHub Releases 下载到约定目录。
 
     返回 (model_dir, downloaded)。下载约 228MB，仅首次使用触发。
+    注意：这个函数会阻塞几分钟（下载 + 解压），绝不能在 import 期或事件循环里调用。
     """
     model_dir = default_sensevoice_dir()
     model_path = os.path.join(model_dir, "model.int8.onnx")
@@ -165,18 +167,61 @@ def ensure_sensevoice_model() -> str:
         print(f"[asr_local] 模型就绪: {model_dir}")
         return model_dir, True
     except Exception as e:
+        # 失败时把半截的 .tmp 清掉：228MB 的残包既占地方，又会让下次「文件已存在」的
+        # 判断产生误导（同名 .tmp 直接覆盖，但用户看到一个巨大的可疑文件会以为是模型）。
+        try:
+            if os.path.exists(tmp_zip):
+                os.remove(tmp_zip)
+        except OSError:
+            pass
         print(f"[asr_local] 模型下载失败: {e}（请联网后重启应用，或手动将模型放到 {model_dir}）")
         raise
 
 
-try:
-    MODEL_DIR, _MODEL_DOWNLOADED = ensure_sensevoice_model()
-except Exception as _e:
-    print(f"[asr_local] 模型初始化失败: {_e}（可在应用设置面板中下载模型）")
-    MODEL_DIR = default_sensevoice_dir()
-    _MODEL_DOWNLOADED = False
+# 模型路径是「可能随时间变化」的：首次启动时模型还没下载完，路径只能先按约定目录填上，
+# 等后台下载线程完成后由 _apply_sensevoice_dir() 重新落定。引擎加载前必须显式读一次
+# （见 _ENGINE_MODEL_LOCK 的用法），不能把 import 期的快照当成最终答案。
+MODEL_DIR = default_sensevoice_dir()
 MODEL_PATH = os.path.join(MODEL_DIR, "model.int8.onnx")
 TOKENS_PATH = os.path.join(MODEL_DIR, "tokens.txt")
+_MODEL_DOWNLOADED = False
+
+# 保证「首次下载」和「引擎加载」不会同时动同一份模型目录。
+_ENGINE_MODEL_LOCK = threading.Lock()
+# 首次模型下载完成后置位；EngineManager.load 在加载 SenseVoice 前等它。
+_SENSEVOICE_READY = threading.Event()
+
+
+def _apply_sensevoice_dir(model_dir: str) -> None:
+    """按给定目录重算模块级模型路径（下载完成后、或引擎加载前同步一次）。"""
+    global MODEL_DIR, MODEL_PATH, TOKENS_PATH
+    MODEL_DIR = model_dir
+    MODEL_PATH = os.path.join(model_dir, "model.int8.onnx")
+    TOKENS_PATH = os.path.join(model_dir, "tokens.txt")
+
+
+def _bootstrap_sensevoice_model() -> None:
+    """后台线程：首次使用下载 SenseVoice 模型。
+
+    为什么不能在 import 期做这件事：原来这段是模块级 `ensure_sensevoice_model()`，
+    首次启动要先下载 228MB 才轮到 `main()` 绑定 8932（识别 WS）和 8933（模型管理 HTTP）。
+    结果是 Rust 侧 30 秒的 `wait_for_tcp(8932)` 必然超时、整个 App 判定「本地 ASR 未就绪」，
+    而 8933 也没起来，用户在设置面板里连「正在下载」都看不到，只能干等一个白屏。
+    放到线程里之后：两个端口立刻可用，下载进度走 8933 上报，界面能如实显示。
+    """
+    global _MODEL_DOWNLOADED
+    try:
+        with _ENGINE_MODEL_LOCK:
+            model_dir, downloaded = ensure_sensevoice_model()
+            _apply_sensevoice_dir(model_dir)
+            _MODEL_DOWNLOADED = downloaded
+    except Exception as e:
+        print(f"[asr_local] 模型初始化失败: {e}（可在应用设置面板中下载模型）")
+        _apply_sensevoice_dir(default_sensevoice_dir())
+    finally:
+        # 无论成功失败都要放行：失败时 load() 会走到「模型缺失」的清晰报错，
+        # 比让录音请求永远挂在一个永远不会置位的事件上强。
+        _SENSEVOICE_READY.set()
 
 # VAD 参数
 FRAME_MS = 32                      # 帧长（32ms ≈ 512 样本 @16k）
@@ -336,11 +381,37 @@ def _parse_query(path: str) -> dict:
     return {k: v[0] for k, v in parse_qs(parsed.query).items()}
 
 
+def _origin_allowed(origin: str) -> bool:
+    """8933 模型管理接口的来源校验。
+
+    这个端口没有鉴权（本机工具，靠回环地址当边界），而老代码对所有来源回
+    `Access-Control-Allow-Origin: *`：用户浏览器里任意一个网页都能跨域
+    POST /model/download 把 228MB~987MB 的模型写进磁盘，或者拿
+    GET /model/status?qwen3_dir=/任意路径 当目录探测器用。
+    现在只认「本机来源」和「没有 Origin 的原生调用」，其余一律 403。
+    """
+    if not origin:
+        return True
+    from urllib.parse import urlparse
+    host = (urlparse(origin).hostname or "").lower()
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
 class ModelHTTPHandler(BaseHTTPRequestHandler):
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # 只回显可信来源；不可信来源在 _reject_bad_origin 里已经被拒绝。
+        origin = self.headers.get("Origin")
+        if origin and _origin_allowed(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def _reject_bad_origin(self) -> bool:
+        if _origin_allowed(self.headers.get("Origin")):
+            return False
+        self._json({"error": "origin not allowed"}, 403)
+        return True
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -366,6 +437,8 @@ class ModelHTTPHandler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
+        if self._reject_bad_origin():
+            return
         q = _parse_query(self.path)
         if self.path.startswith("/model/status"):
             self._json(get_model_status(q.get("qwen3_dir", "")))
@@ -376,6 +449,8 @@ class ModelHTTPHandler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        if self._reject_bad_origin():
+            return
         body = self._read_body()
         if self.path.startswith("/model/download"):
             mtype = body.get("type", "sensevoice")
@@ -461,10 +536,23 @@ class EngineManager:
                 seed=42,
             )
         else:
-            print(f"[asr_local] 加载 SenseVoice 模型: {MODEL_PATH}")
+            # 每次加载都重新解析路径：首次下载是在后台线程里完成的，
+            # import 期的 MODEL_PATH 只是「按约定目录先填上」的快照，可能还没落地。
+            model_path = os.path.join(default_sensevoice_dir(), "model.int8.onnx")
+            tokens_path = os.path.join(default_sensevoice_dir(), "tokens.txt")
+            if not (os.path.isfile(model_path) and os.path.isfile(tokens_path)):
+                # 模型确实缺失。抛 RuntimeError 之外还要给出可操作的指引，
+                # 且必须是明确异常而不是让 sherpa 自己报「File doesn't exist」——
+                # 上层 handle() 只捕获 ConnectionClosed，其它异常会让整条 WS 带着
+                # traceback 断开，前端只看到「连接被关闭」而不知道是没下模型。
+                raise FileNotFoundError(
+                    f"SenseVoice 模型缺失: {model_path}。\n"
+                    "请在本应用「设置」→「本地模型」点击「下载模型」安装后重试。"
+                )
+            print(f"[asr_local] 加载 SenseVoice 模型: {model_path}")
             return _sherpa_onnx.OfflineRecognizer.from_sense_voice(
-                model=MODEL_PATH,
-                tokens=TOKENS_PATH,
+                model=model_path,
+                tokens=tokens_path,
                 use_itn=True,
                 debug=False,
                 num_threads=NUM_THREADS,
@@ -498,6 +586,13 @@ class EngineManager:
         # 依赖缺失时给出可操作的错误，而不是底层 AttributeError/ImportError
         if _sherpa_onnx is None or np is None:
             raise RuntimeError(environment_issue())
+        if engine == "sensevoice":
+            # 首次启动时 SenseVoice 模型由后台线程下载（见 _bootstrap_sensevoice_model）。
+            # 这里等它结束：不等的话，用户在下载完成前点录音只会拿到「模型缺失」的报错，
+            # 而实际上再等几分钟就好。非首次时事件早已置位，是零成本判断。
+            # 必须丢到线程池里 wait()：直接调用会阻塞事件循环，把 8933 的进度查询和
+            # 整条 WebSocket 服务一起冻住，恰好是最需要它们活着的那几分钟。
+            await asyncio.get_running_loop().run_in_executor(None, _SENSEVOICE_READY.wait)
         if engine == "qwen3":
             qwen3_dir = qwen3_dir or default_qwen3_dir()
             self.check_qwen3_dir(qwen3_dir)
@@ -534,63 +629,6 @@ class EngineManager:
         stream.accept_waveform(16000, audio)
         rec.decode_stream(stream)
         return stream.result.text.strip()
-
-
-class LocalASR:
-    """SherpaONNX 推理封装 — 兼容旧接口（单引擎，启动即加载）"""
-
-    def __init__(self, engine: str = ENGINE):
-        self.engine = engine
-        t0 = time.time()
-        import concurrent.futures
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-        self.rec = None
-        self._engine_build(engine)
-        print(f"[asr_local] 模型就绪 ({time.time()-t0:.1f}s) [{engine}]")
-
-    def _engine_build(self, engine: str):
-        if engine == "qwen3":
-            print(f"[asr_local] 加载 Qwen3-ASR 模型: {QWEN3_DIR}")
-            self.rec = _sherpa_onnx.OfflineRecognizer.from_qwen3_asr(
-                conv_frontend=str(os.path.join(QWEN3_DIR, "conv_frontend.onnx")),
-                encoder=str(os.path.join(QWEN3_DIR, "encoder.int8.onnx")),
-                decoder=str(os.path.join(QWEN3_DIR, "decoder.int8.onnx")),
-                tokenizer=str(os.path.join(QWEN3_DIR, "tokenizer")),
-                num_threads=NUM_THREADS,
-                sample_rate=16000,
-                feature_dim=128,
-                decoding_method="greedy_search",
-                debug=False,
-                provider="cpu",
-                max_total_len=1024,
-                max_new_tokens=256,
-                temperature=1e-6,
-                top_p=0.8,
-                seed=42,
-            )
-        else:
-            print(f"[asr_local] 加载 SenseVoice 模型: {MODEL_PATH}")
-            self.rec = _sherpa_onnx.OfflineRecognizer.from_sense_voice(
-                model=MODEL_PATH,
-                tokens=TOKENS_PATH,
-                use_itn=True,
-                debug=False,
-                num_threads=NUM_THREADS,
-            )
-
-    async def recognize(self, pcm: bytes) -> str:
-        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-        if len(audio) == 0:
-            return ""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self.executor, self._infer, audio)
-
-    def _infer(self, audio: np.ndarray) -> str:
-        stream = self.rec.create_stream()
-        stream.accept_waveform(16000, audio)
-        self.rec.decode_stream(stream)
-        text = stream.result.text
-        return text.strip()
 
 
 class Session:
@@ -663,6 +701,15 @@ class Session:
     # ---------- 音频 ----------
 
     async def feed_audio(self, data: bytes):
+        # int16 是 2 字节元素，奇数长度的 buffer 会让 np.frombuffer 抛
+        # ValueError("buffer size must be a multiple of element size")。
+        # 这不是纯理论：handle() 只捕获 ConnectionClosed，任何其它异常都会让整个
+        # 识别会话带着 traceback 断开，前端只看到「连接被关闭」。截掉末尾那半个样本
+        # （损失 0.03ms 音频）比整条会话崩掉划算得多。
+        if len(data) % 2:
+            data = data[:-1]
+            if not data:
+                return
         raw = np.frombuffer(data, dtype=np.int16)
         if len(raw) == 0:
             return
@@ -852,19 +899,38 @@ engine_mgr = EngineManager(initial_engine=ENGINE)
 
 
 def _free_port(port: int):
-    """释放指定 TCP 端口上的遗留进程"""
+    """释放指定 TCP 端口上的遗留监听进程。
+
+    两个限定条件都是必要的：
+      - `-sTCP:LISTEN`：不带这个标志时 lsof 会连「正在连接该端口的客户端」一起列出来，
+        于是 node server.js 只要持有到 8932 的已建立连接就会被一起 kill -9；
+      - 进程名匹配：只清理本项目自己的 pid，别去动别人恰好占了这个端口的服务。
+    """
     import subprocess
     try:
-        pid = subprocess.run(
-            ["lsof", "-ti", f"tcp:{port}"],
+        out = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
             capture_output=True, text=True, timeout=5
         ).stdout.strip()
-        if pid:
-            print(f"[asr_local] 释放端口 {port} (PID: {pid})")
-            subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
-            time.sleep(0.3)
     except Exception:
-        pass
+        return
+    for pid in [p for p in out.splitlines() if p.strip()]:
+        try:
+            comm = subprocess.run(
+                ["ps", "-p", pid, "-o", "comm="],
+                capture_output=True, text=True, timeout=5
+            ).stdout.strip()
+        except Exception:
+            continue
+        if not any(marker in comm for marker in ("python", "asr-server", "server.py")):
+            print(f"[asr_local] 端口 {port} 被非本项目进程占用 (PID: {pid} {comm})，跳过")
+            continue
+        print(f"[asr_local] 释放端口 {port} (PID: {pid})")
+        try:
+            subprocess.run(["kill", "-9", pid], capture_output=True, timeout=5)
+        except Exception:
+            pass
+    time.sleep(0.3)
 
 
 async def main():
@@ -877,6 +943,13 @@ async def main():
 
     # 先起模型管理 HTTP（8933）：即使推理依赖缺失，用户仍能下载模型 / 查看状态
     start_model_http_server()
+
+    # 再把「首次下载 SenseVoice 模型」丢到后台线程。必须晚于 8933 绑定：
+    # 下载进度就是通过 8933 上报给设置面板的，先下载会让用户在整个下载期间
+    # 既连不上 8932（识别）也连不上 8933（进度），只能看到「服务未连接」。
+    threading.Thread(
+        target=_bootstrap_sensevoice_model, name="sensevoice-bootstrap", daemon=True
+    ).start()
 
     issue = environment_issue()
     if issue:

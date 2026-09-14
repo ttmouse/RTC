@@ -253,6 +253,9 @@ fn write_clipboard_with_osascript(text: &str) -> Result<(), String> {
 }
 
 /// 复制文本到剪贴板，不模拟按键。
+///
+/// 与 `paste_text` 同理保持同步：`write_clipboard` 碰的是 NSPasteboard，
+/// macOS 要求主线程访问。不要为了省那点阻塞改成 async。
 #[tauri::command]
 fn copy_to_clipboard(text: String) -> Result<String, String> {
     let start = Instant::now();
@@ -268,6 +271,12 @@ fn copy_to_clipboard(text: String) -> Result<String, String> {
 /// （微信、Codex、浏览器、甚至本软件自己的控制台），自绘 UI 不暴露
 /// AX 焦点，白名单式判断只会误拦截。`ok` 只表示按键已发出；是否真正
 /// 写入目标输入框由目标应用决定。
+///
+/// 保持同步（Blocking）执行，**不能**改成 `#[tauri::command(async)]`：
+/// `write_clipboard` 走的是 arboard/NSPasteboard，而 macOS 要求在主线程访问它。
+/// 挪到线程池会引入无提示的剪贴板写入失败（表现为「粘贴出来还是旧内容」）。
+/// 这里确实会阻塞主线程约 0.1~0.5 秒，但那是一次明确、有限、用户主动触发的操作，
+/// 比一个只在某些机器上复现的剪贴板竞态好得多。
 #[tauri::command]
 fn paste_text(text: String, auto_enter: Option<bool>) -> Result<PasteOutcome, String> {
     let start = Instant::now();
@@ -344,6 +353,43 @@ fn activate_app(app: String) -> Result<String, String> {
     {
         let _ = app;
         Err("应用指令目前仅支持 macOS".into())
+    }
+}
+
+/// 在访达中显示指定路径（目录→打开该目录，文件→在父目录中选中）。
+///
+/// 为什么不用 tauri-plugin-shell 的 `open`：该命令对 JS 侧传入路径做 scope 校验，
+/// 默认只放行 `http(s)://`、`mailto:`、`tel:`，本地路径必然返回 Validation 错误
+/// （且错误被前端 catch 吞掉，表现为「点了没反应」）。这里直接调 /usr/bin/open，
+/// 以参数形式传路径，无 shell 拼接，不做 URL schema 限制。
+#[tauri::command]
+fn reveal_in_finder(path: String) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if path.is_empty() || path.len() > 1024 {
+            return Err("无效的路径".into());
+        }
+        let p = std::path::Path::new(&path);
+        if !p.exists() {
+            return Err(format!("路径不存在：{}", path));
+        }
+        let status = if p.is_dir() {
+            Command::new("/usr/bin/open").arg(&path).status()
+        } else {
+            Command::new("/usr/bin/open").args(["-R", &path]).status()
+        }
+        .map_err(|e| format!("调用 open 失败: {}", e))?;
+        if status.success() {
+            Ok("ok".into())
+        } else {
+            Err(format!("打开失败：{}", path))
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Err("在访达中显示目前仅支持 macOS".into())
     }
 }
 
@@ -442,25 +488,57 @@ fn find_binary(name: &str) -> Option<String> {
     None
 }
 
-/// 杀掉占用指定端口的遗留进程（防止上次异常退出后端口残留）
-fn kill_previous_processes(port: u16) {
-    use std::process::Command;
-    let output = Command::new("lsof")
+/// 本项目自己的进程特征。只清理这些，别去动别人的服务。
+const OWN_PROCESS_MARKERS: [&str; 5] = [
+    "node-server",
+    "asr-server",
+    "server.js",
+    "dev.mjs",
+    "rtc-transcriber",
+];
+
+/// 取出占用指定端口的 PID 列表（lsof 不可用时返回空）。
+fn pids_on_port(port: u16) -> Vec<String> {
+    Command::new("lsof")
         .args(["-ti", &format!("tcp:{}", port)])
         .output()
         .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        });
-    if let Some(pids) = output {
-        for pid in pids.lines().filter(|l| !l.is_empty()) {
-            println!("[tauri] 释放端口 {port} (PID: {pid})");
-            let _ = Command::new("kill").args(["-9", pid]).status();
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| {
+            s.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 该 PID 是否属于本项目（ps comm= 里含项目特征串）。
+fn is_own_process(pid: &str) -> bool {
+    let comm = Command::new("ps")
+        .args(["-p", pid, "-o", "comm="])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    OWN_PROCESS_MARKERS.iter().any(|m| comm.contains(m))
+}
+
+/// 释放上一轮残留的自家进程。
+///
+/// 关键在 `is_own_process` 这道闸：老实现是 `lsof -ti tcp:PORT` 拿到什么就 `kill -9` 什么，
+/// 用户自己在 8931 上跑的任何服务都会被 App 启动时无声打死。现在只清本项目自己的进程，
+/// 别人的进程留着——端口冲突让 Node 自己报错，比静默谋杀强。
+fn kill_previous_processes(port: u16) {
+    for pid in pids_on_port(port) {
+        if !is_own_process(&pid) {
+            println!("[tauri] 端口 {port} 被非本项目进程占用 (PID: {pid})，跳过清理");
+            continue;
         }
+        println!("[tauri] 释放端口 {port} (PID: {pid})");
+        let _ = Command::new("kill").args(["-9", &pid]).status();
     }
 }
 
@@ -690,8 +768,23 @@ fn wait_for_tcp(host: &str, port: u16, timeout_secs: u64) -> bool {
     false
 }
 
+/// 应用数据目录。
+///
+/// 明确用 `com.rtc.transcriber` 覆盖 Tauri 的默认值：Tauri 的 `app_config_dir()` 由
+/// bundle identifier 推导，而 identifier 是反向域名 `io.rtc.transcriber`，于是窗口状态
+/// 落在 `~/Library/Application Support/io.rtc.transcriber/`，而 config.json、commands.json、
+/// transcripts、两个模型目录全在 `com.rtc.transcriber/`（server.js、asr_local/server.py、
+/// scripts/*.mjs 都写死这个）。同一个 App 在磁盘上摊成两个目录，用户「重置配置」时
+/// 只能清掉一半。
+///
+/// 不能改 identifier（会切断自动更新的既有签名/产物匹配），所以这里显式覆盖。
+fn rtc_support_dir(handle: &tauri::AppHandle) -> Option<PathBuf> {
+    let base = handle.path().app_config_dir().ok()?;
+    Some(base.parent()?.join("com.rtc.transcriber"))
+}
+
 fn window_state_path(handle: &tauri::AppHandle) -> Option<PathBuf> {
-    let dir = handle.path().app_config_dir().ok()?;
+    let dir = rtc_support_dir(handle)?;
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join("window-state.json"))
 }
@@ -757,12 +850,39 @@ pub fn run() {
             paste_text,
             copy_to_clipboard,
             activate_app,
+            reveal_in_finder,
             accessibility_permission,
             request_accessibility_permission
         ])
         .setup(|app| {
             let handle = app.handle().clone();
             restore_window_state(&handle);
+
+            // 系统级全局热键 ⌥⌘P：切换「自动粘贴」。
+            // 为什么需要全局：典型场景是在别的应用里打字时临时开/关粘贴，
+            // 切回本窗口会打断输入（应用内已有的 ⌘⇧V 只在窗口聚焦时有效）。
+            // 注册失败（被别的进程占用等）不影响启动，只打印警告。
+            {
+                use tauri::Emitter;
+                use tauri_plugin_global_shortcut::{
+                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                };
+                let toggle_paste = Shortcut::new(Some(Modifiers::ALT | Modifiers::META), Code::KeyP);
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_handler(move |app, _shortcut, event| {
+                            // 按下触发一次（松开不再触发）
+                            if event.state() == ShortcutState::Pressed {
+                                let _ = app.emit("rtc:toggle-auto-paste", ());
+                            }
+                        })
+                        .build(),
+                )?;
+                match app.global_shortcut().register(toggle_paste) {
+                    Ok(()) => println!("[tauri] 全局热键已注册: ⌥⌘P = 切换自动粘贴"),
+                    Err(e) => eprintln!("[tauri] 全局热键 ⌥⌘P 注册失败: {e}"),
+                }
+            }
 
             let is_dev = cfg!(debug_assertions);
 
@@ -783,6 +903,7 @@ pub fn run() {
                 kill_previous_processes(8933);
                 (start_node_server(&handle), false)
             };
+            let node_started = node_child.is_some();
             if let Some(child) = node_child {
                 let state = app.state::<AppState>();
                 *state.node_server.lock().unwrap() = Some(child);
@@ -804,12 +925,25 @@ pub fn run() {
                 *state.asr_server.lock().unwrap() = Some(child);
             }
 
-            // 轮询等待 Node.js 服务就绪（最多 15 秒）
-            let node_ready = if node_reused { true } else { wait_for_http("http://127.0.0.1:8931", 15) };
-            if node_ready {
-                println!("[tauri] Node.js 服务就绪");
+            // 轮询等待 Node.js 服务就绪。
+            //
+            // 15 秒是不够的：node-server 是 bun 编译的单文件，首次启动要先解包，
+            // 冷启动实测可到十几秒。原来的 15 秒会在正常启动路径上误判成「未就绪」，
+            // 而它打印的只是一行 eprintln——Finder 启动的 .app 根本没有 stderr，
+            // 于是用户看到的是「服务未连接」却没有任何原因。
+            let node_ready = if node_reused || !node_started {
+                true
             } else {
-                eprintln!("[tauri] 警告: Node.js 服务未在 15 秒内就绪，继续启动窗口");
+                wait_for_http("http://127.0.0.1:8931", 45)
+            };
+            if node_ready {
+                if !node_started {
+                    eprintln!("[tauri] 警告: Node 服务未能启动（sidecar/node/server.js 均不可用）");
+                } else {
+                    println!("[tauri] Node.js 服务就绪");
+                }
+            } else {
+                eprintln!("[tauri] 警告: Node.js 服务未在 45 秒内就绪，继续启动窗口");
             }
 
             // 轮询等待本地 ASR 就绪（最多 30 秒，模型加载约 2-3 秒）
@@ -840,6 +974,8 @@ pub fn run() {
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
+            // 先杀 sidecar，再存窗口状态：⌘Q 也要清干净，别留孤儿进程和占用端口。
+            cleanup_all_servers(&handle.state::<AppState>());
             if let Some((label, _window)) = handle.webview_windows().into_iter().next() {
                 persist_window_state(handle, &label);
             }
@@ -859,5 +995,22 @@ fn cleanup_server(window: &tauri::Window, which: &str) {
     if let Some(mut c) = child {
         let _ = c.kill();
         let _ = c.wait();
+    }
+}
+
+/// 退出时杀掉两个 sidecar。
+///
+/// 原来只有 `CloseRequested`（红叉 / ⌘W）会走到 `cleanup_server`；macOS 的 ⌘Q、
+/// 菜单里的「退出」、更新后的 `process.relaunch()` 走的都是
+/// `RunEvent::ExitRequested` / `Exit`，那条路径只保存了窗口状态。结果是退出 App 后
+/// node-server 和 434MB 的 asr-server 变成孤儿进程，8931/8932/8933 三个端口一直被占着，
+/// 下次启动只能靠 `kill -9` 抢回来。这里按 `AppState` 取句柄，两条退出路径都能用。
+fn cleanup_all_servers(state: &AppState) {
+    for slot in [&state.node_server, &state.asr_server] {
+        let child = slot.lock().map(|mut guard| guard.take()).ok().flatten();
+        if let Some(mut c) = child {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
     }
 }

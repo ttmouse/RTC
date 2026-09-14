@@ -26,9 +26,21 @@ const portInUse = (p) => new Promise((resolve) => {
   const srv = net.createServer();
   srv.once('error', () => resolve(true));
   srv.once('listening', () => srv.close(() => resolve(false)));
-  // 不带 host 默认绑 '::'（IPv6 双栈），与 server.js 的 listen 姿势一致，才能真实反映可监听性
-  srv.listen(p);
+  // 绑回环，与 server.js 的 `server.listen(PORT, '127.0.0.1')` 口径一致。
+  // 原来不带 host（等于绑全网卡）比真实服务更宽：别的进程只占 [::1]:8931 时这里会误报
+  // 「端口被占用」并直接 exit(1)，而实际服务是起得来的。
+  srv.listen(p, '127.0.0.1');
 });
+
+/** 等端口真正释放：SIGTERM 之后 socket 不会立刻消失，紧接着探测会误判成「被别的进程占用」。 */
+const waitPortFree = async (p, timeoutMs = 3000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await portInUse(p))) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return !(await portInUse(p));
+};
 
 function cleanupPorts() {
   for (const p of [port, reloadPort]) {
@@ -40,17 +52,21 @@ function cleanupPorts() {
     for (const pid of pids) {
       try {
         const cmd = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf8' }).trim();
-        if (/server\.js|dev\.mjs|rtc|node-serv/.test(cmd)) {
+        // cmd 为空 = ps 本身失败（被测环境禁止 ps、或进程刚退出）。这种「认不出是谁」的情况
+        // 仍然清理：端口就在这里，能占到本开发端口的极可能就是上一轮的自己。
+        if (!cmd || /server\.js|dev\.mjs|rtc|node-serv/.test(cmd)) {
           process.kill(Number(pid), 'SIGTERM');
-          console.log(`[dev] 已清理占用端口 ${p} 的旧进程 (pid=${pid} ${cmd.slice(0, 60)})`);
+          console.log(`[dev] 已清理占用端口 ${p} 的旧进程 (pid=${pid} ${cmd.slice(0, 60) || '身份未知'})`);
         }
       } catch (_) { /* 进程已退出 */ }
     }
   }
 }
 
-// 先清理本项目残留进程，再探测：若仍被其他服务占用则给指引并退出
+// 先清理本项目残留进程，再等端口释放，最后探测：仍被其他服务占用才给指引并退出。
+// 顺序很重要：清理后不等就直接探测，等于自己把自己刚 SIGTERM 的进程算成「占用者」。
 cleanupPorts();
+await Promise.all([waitPortFree(port), waitPortFree(reloadPort)]);
 const busy = (await Promise.all([portInUse(port), portInUse(reloadPort)]))
   .map((b, i) => b ? (i === 0 ? port : reloadPort) : null).filter(Boolean);
 if (busy.length) {
@@ -113,19 +129,24 @@ try {
 // ── 拉起后端（开发模式）──
 const server = spawn('node', ['server.js'], {
   cwd: root,
-  env: { ...process.env, RTC_DEV: '1', RELOAD_PORT: String(reloadPort) },
+  // PORT 必须显式传：server.js 只认 PORT，不认 RTC_PORT（后者是 scripts/rtc.mjs 的约定）。
+  // 不传的话 `PORT=9000 npm run dev:web` 会出现「热更新服务在 9000、后端仍在 8931」
+  // 的错位，页面加载正常但所有接口都打不通。
+  env: { ...process.env, PORT: String(port), RTC_DEV: '1', RELOAD_PORT: String(reloadPort) },
   stdio: 'inherit',
 });
 
 server.on('exit', (code, sig) => {
   console.log(`[dev] 后端已退出 (${sig || code})`);
-  shutdown();
+  // 把后端的退出码传出去。原来无条件 exit(0)，server.js 因端口占用退出 1（或任何崩溃）时，
+  // `npm run dev:web` 依然报成功，tauri.conf.json 的 beforeDevCommand 也看不出问题。
+  shutdown(sig ? 1 : (code ?? 1));
 });
 
-const shutdown = () => {
+const shutdown = (exitCode = 0) => {
   try { wss.close(); } catch (_) {}
   if (!server.killed) server.kill('SIGTERM');
-  process.exit(0);
+  process.exit(exitCode);
 };
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => shutdown(0));
+process.on('SIGTERM', () => shutdown(0));

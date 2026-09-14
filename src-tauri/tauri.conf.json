@@ -21,7 +21,7 @@
                 "minHeight": 360,
                 "resizable": true,
                 "center": true,
-                "devtools": true
+                "devtools": false
             }
         ],
         "security": {

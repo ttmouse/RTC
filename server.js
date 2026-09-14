@@ -19,7 +19,6 @@ const WebSocket = require('ws');
 // ========== HTTP 服务（前端页面） ==========
 
 const PORT = Number(process.env.PORT || 8931);
-const PORT_CHECK_RETRIES = 3; // 端口被占时最多重试次数
 const TIMING_LOGS = process.env.ASR_TIMING_LOGS === '1' || process.env.RTC_TIMING_LOGS === '1';
 const DEV = process.env.RTC_DEV === '1'; // 开发模式：直接服务 src/（免 build），并提供 livereload 探针
 const RELOAD_PORT = Number(process.env.RELOAD_PORT || 8935);
@@ -34,6 +33,16 @@ const CONFIG_PATH = path.join(DATA_ROOT, 'config.json');
 const COMMANDS_PATH = path.join(DATA_ROOT, 'commands.json');
 const SCHEMA_VERSION = 1;
 const SEARCH_LIMIT = 300; // 搜索命中上限：只回最新的一批，避免把全部历史一次发给前端
+
+// 应用版本号的单一来源：package.json。前端不再各写一份（曾出现 HTML 里两处硬编码）。
+// 读取失败时不抛错，回落 null，由 /api/status 如实返回。
+const APP_VERSION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf-8')).version || null;
+  } catch {
+    return null;
+  }
+})();
 
 // 指令映射默认表：口述说法 → 应用标识（首次访问 /api/commands 时写入数据目录，
 // 之后以 commands.json 为准——用户或外部 AI Agent 可直接修改该文件）。
@@ -82,6 +91,30 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
+/**
+ * 允许直接访问本服务的来源。
+ *
+ * 之前这里是 `Access-Control-Allow-Origin: *` + 监听 `::`（全网卡），等于把
+ * 「读 API Key、清空转写、往剪贴板写任意文本、拿本机当跳板发 HTTP 请求」的全部能力
+ * 开放给局域网内任何一台机器，以及用户浏览器里任何一个网页（网页能跨域读 /api/config，
+ * 里面存着百炼 API Key）。这是一个本机工具，不是公共服务。
+ *
+ * 规则：无 Origin 头（curl / 原生 fetch / Tauri webview 的自定义协议）放行；
+ * 有 Origin 则必须是本服务自己的地址。前端改用同源相对路径后，正常链路根本不发跨域请求。
+ */
+const ALLOWED_ORIGIN_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true; // 非浏览器发起，或同源 GET 不带 Origin
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return true; // tauri:// 等 webview 自定义协议
+    return ALLOWED_ORIGIN_HOSTS.has(u.hostname) && (!u.port || Number(u.port) === PORT);
+  } catch {
+    return false; // 畸形 Origin 一律按不可信处理
+  }
+}
+
 function localDateStamp(input) {
   const d = input instanceof Date ? input : new Date(input);
   const p = n => String(n).padStart(2, '0');
@@ -100,6 +133,36 @@ const pad2 = n => String(n).padStart(2, '0');
 function chatEndpoint(baseUrl) {
   const base = String(baseUrl || '').replace(/\/+$/, '');
   return /\/chat\/completions$/i.test(base) ? base : base + '/chat/completions';
+}
+
+// 进程级稳定会话 ID：OpenCode Zen Go 要求每个「对话」带固定的 x-opencode-session，
+// 网关据此做路由与 prompt cache 优化。语音指令解析是同一套 system prompt 的连续调用，
+// 复用同一个 ID 才能命中缓存；会议总结按会议段各用一个（见 meetingSessionId）。
+const LLM_SESSION_ID = 'rtc-' + crypto.randomUUID();
+
+/**
+ * 部分服务商的专属请求头。
+ * OpenCode Zen Go 网关强制要求 x-opencode-session，缺失直接 400 MissingSessionID；
+ * 同时要求客户端用自带 UA 标识自己，而不是 undici / node 这类通用 HTTP 库名。
+ * 按 baseUrl 主机名判定而非 provider 字段，这样「预设 / 自定义 / 脚本直连」三条路径
+ * 都自动命中，不必让每个调用方各自传参（漏传就是难查的 400）。
+ */
+function providerHeaders(baseUrl, sessionId) {
+  let host = '';
+  try { host = new URL(baseUrl).hostname; } catch { /* 非法地址交给 fetch 报错 */ }
+  if (host === 'opencode.ai' || host.endsWith('.opencode.ai')) {
+    return {
+      'x-opencode-session': sessionId || LLM_SESSION_ID,
+      'User-Agent': 'rtc-transcriber/1.0',
+    };
+  }
+  return {};
+}
+
+/** 每个会议段一个稳定会话 ID（同一场会议重复总结时走同一条路由） */
+function meetingSessionId(start) {
+  const t = start instanceof Date ? start.getTime() : Date.parse(start);
+  return 'rtc-meeting-' + (Number.isFinite(t) ? Math.floor(t / 1000) : 'x');
 }
 
 /**
@@ -220,7 +283,11 @@ async function runMeetingSummary() {
   try {
     const upRes = await fetch(chatEndpoint(baseUrl), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...providerHeaders(baseUrl, meetingSessionId(s.start)),
+      },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(120000),
     });
@@ -319,11 +386,35 @@ function writeConfig(config, callback) {
   enqueueConfigTask(() => writeConfigFile(config), callback);
 }
 
+/**
+ * 嵌套对象的深合并：PATCH 的语义是「只更新指定字段」，所以嵌套对象（如 settings.ai）
+ * 必须逐层合并。浅合并会把整个子对象替换掉，让未提及的同级字段静默丢失。
+ * 数组按值整体替换，不当成可合并对象。
+ *
+ * 注意：PATCH 的 body 是外部传入的任意 JSON，`{"__proto__":{"x":1}}` 这类键在
+ * 递归赋值时会走 Object.prototype 的 setter 污染全局原型。这里的字段名全部来自
+ * 白名单式的应用配置，本机低风险，但一个 sanitize 就能堵住，不值得留口子。
+ */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function deepMerge(base, patch) {
+  const out = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (UNSAFE_KEYS.has(key)) continue;
+    const prev = base[key];
+    const mergeable = value && prev &&
+      typeof value === 'object' && typeof prev === 'object' &&
+      !Array.isArray(value) && !Array.isArray(prev);
+    out[key] = mergeable ? deepMerge(prev, value) : value;
+  }
+  return out;
+}
+
 /** 只合并指定字段（PATCH）：read-modify-write 在队列里完成 */
 function patchConfig(partial, callback) {
   enqueueConfigTask(async () => {
     const current = await readConfigFile();
-    await writeConfigFile({ ...current, ...partial });
+    await writeConfigFile(deepMerge(current, partial));
   }, callback);
 }
 
@@ -345,13 +436,25 @@ function readJsonBody(req, callback) {
 }
 
 const server = http.createServer((req, res) => {
-  // 允许 Tauri webview（tauri:// 协议）回退调用本机 HTTP 服务
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  // 允许 Tauri webview（tauri:// 协议）回退调用本机 HTTP 服务。
+  // 只回显可信来源，不再用 `*`：`*` 会让任意网页跨域读到 /api/config 里的 API Key。
+  const origin = req.headers.origin;
+  if (origin && isAllowedOrigin(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
+    return;
+  }
+  // 写操作与读配置：来源不可信直接拒绝，别指望 CORS 拦得住（CORS 只拦「读响应」，
+  // 拦不住「请求已生效」——清空转写、改配置这类副作用必须在服务端拒绝）。
+  if (!isAllowedOrigin(origin)) {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'origin not allowed' }));
     return;
   }
 
@@ -372,7 +475,7 @@ const server = http.createServer((req, res) => {
   // GET /api/status — 服务运行状态（uptime 单位秒），供前端判断服务是否正常
   if (req.method === 'GET' && req.url === '/api/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, uptime: Math.floor(process.uptime()), pid: process.pid }));
+    res.end(JSON.stringify({ ok: true, uptime: Math.floor(process.uptime()), pid: process.pid, version: APP_VERSION }));
     return;
   }
 
@@ -515,7 +618,10 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: false, error: 'baseUrl / model / messages are required' }));
         return;
       }
-      const endpoint = baseUrl.replace(/\/+$/, '') + '/chat/completions';
+      // 用 chatEndpoint 而非裸拼后缀：设置页允许直接粘贴带 /chat/completions 的完整
+      // 地址，裸拼会变成 .../chat/completions/chat/completions → 404，
+      // 再被 prettifyAIError 误报成「API 地址是否以 /v1 结尾」，把用户带偏。
+      const endpoint = chatEndpoint(baseUrl);
       const payload = {
         model,
         messages,
@@ -528,6 +634,7 @@ const server = http.createServer((req, res) => {
           headers: {
             'Content-Type': 'application/json',
             ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            ...providerHeaders(baseUrl),
           },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(30000),
@@ -791,90 +898,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // GET /api/settings — 读取本地配置文件
-  if (req.method === 'GET' && req.url === '/api/settings') {
-    const settingsPath = path.join(__dirname, 'settings.json');
-    fs.readFile(settingsPath, 'utf-8', (err, data) => {
-      if (err) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({}));
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(data);
-    });
-    return;
-  }
-
-  // POST /api/settings — 保存设置到本地配置文件
-  if (req.method === 'POST' && req.url === '/api/settings') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      const settingsPath = path.join(__dirname, 'settings.json');
-      fs.writeFile(settingsPath, body, 'utf-8', (err) => {
-        if (err) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: err.message }));
-          return;
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
-        console.log('[settings] saved');
-      });
-    });
-    return;
-  }
-
-  // GET /api/history — 读取本地历史记录
-  if (req.method === 'GET' && req.url === '/api/history') {
-    const historyPath = path.join(__dirname, 'history.json');
-    fs.readFile(historyPath, 'utf-8', (err, data) => {
-      if (err) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end('[]');
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(data);
-    });
-    return;
-  }
-
-  // POST /api/history — 保存/追加历史记录
-  if (req.method === 'POST' && req.url === '/api/history') {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      const historyPath = path.join(__dirname, 'history.json');
-      fs.writeFile(historyPath, body, 'utf-8', (err) => {
-        if (err) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: err.message }));
-          return;
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
-      });
-    });
-    return;
-  }
-
-  // DELETE /api/history — 清空历史记录
-  if (req.method === 'DELETE' && req.url === '/api/history') {
-    const historyPath = path.join(__dirname, 'history.json');
-    fs.writeFile(historyPath, '[]', 'utf-8', (err) => {
-      if (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: err.message }));
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true }));
-      console.log('[history] cleared');
-    });
-    return;
-  }
+  // 已删除：/api/settings 与 /api/history（5 个 handler，约 85 行）。
+  // 它们把 settings.json / history.json 写进 __dirname，也就是安装后的
+  // Contents/Resources 或仓库根目录——打包后是只读路径，写入必然失败；开发时则往仓库里
+  // 拉屎（实测 POST /api/settings 直接生成 RTC/settings.json）。前端从来不调用它们：
+  // 历史在 localStorage，设置在 /api/config。留着就是纯粹的负担。
+  // 如果确实需要「往数据目录写任意 JSON」，用 /api/config 或 /api/transcripts/events。
 
   // POST /paste — 服务端 pbcopy + osascript 模拟粘贴
   if (req.method === 'POST' && req.url === '/paste') {
@@ -977,6 +1006,34 @@ const server = http.createServer((req, res) => {
     res.end(data);
   });
 });
+
+/**
+ * 只给本地 Python 引擎看的参数，不能出现在发给百炼的 parameters 里。
+ *
+ * 前端用同一段代码构造 run-task：`engine` / `vad_threshold` / `silence_timeout` /
+ * `auto_paste` 是「本地引擎切换 + 本地 VAD 调参」用的，百炼那边没有任何对应概念。
+ * 用户可见的 auto_paste 保留（前端要读回），其余在百炼分支剥掉。
+ */
+const LOCAL_ONLY_PARAMS = ['engine', 'qwen3_model_dir', 'vad_threshold', 'silence_timeout'];
+
+/** 百炼分支的 run-task 清洗：剥掉本地专用参数，其余字段原样保留。 */
+function sanitizeBailianTask(text) {
+  try {
+    const parsed = JSON.parse(text);
+    const params = parsed && parsed.payload && parsed.payload.parameters;
+    if (!params || typeof params !== 'object') return text;
+    let changed = false;
+    for (const key of LOCAL_ONLY_PARAMS) {
+      if (key in params) {
+        delete params[key];
+        changed = true;
+      }
+    }
+    return changed ? JSON.stringify(parsed) : text;
+  } catch (e) {
+    return text; // 非 JSON 一律原样转发，别在代理层引入新的失败点
+  }
+}
 
 // ========== WebSocket 代理（引擎分流） ==========
 
@@ -1132,9 +1189,10 @@ wss.on('connection', (ws) => {
       } catch (e) {}
 
       // 发送给上游（字符串 → 文本帧）
-      console.log(`[server] forward to ${engine}: ${text.slice(0, 60)}...`);
+      const outgoing = isLocal ? text : sanitizeBailianTask(text);
+      console.log(`[server] forward to ${engine}: ${outgoing.slice(0, 60)}...`);
       try {
-        upstream.send(text);
+        upstream.send(outgoing);
       } catch (e) {
         console.log('[server] upstream.send error:', e.message);
       }
@@ -1153,42 +1211,27 @@ wss.on('connection', (ws) => {
 });
 
 /**
- * 释放指定 TCP 端口上的遗留进程
+ * 启动监听。
+ *
+ * 两处刻意的改动：
+ * 1) 只绑 127.0.0.1。原来绑 `::`（所有网卡），配合 `Access-Control-Allow-Origin: *`
+ *    等于把一个能读 API Key、能操作剪贴板的服务暴露给整个局域网。Node 的 127.0.0.1
+ *    在 macOS 上同时接受 IPv4/IPv6 回环连接，`localhost` 解析成 ::1 也能连上。
+ * 2) 不再自动抢端口。原来端口被占时会 `lsof -ti tcp:PORT | kill -9` 无条件杀掉占用者——
+ *    那是别人的进程。端口冲突应该报错让人看见，而不是静默谋杀。Tauri 侧已经在启动前
+ *    清理自己上一轮的残留进程（kill_previous_processes），这里不需要第二把刀。
  */
-function freePort(port) {
-  try {
-    const pid = require('child_process').execSync(
-      `lsof -ti tcp:${port} 2>/dev/null`,
-      { encoding: 'utf-8', timeout: 5000 }
-    ).trim();
-    if (pid) {
-      console.log(`[server] 释放端口 ${port} (PID: ${pid})`);
-      require('child_process').execSync(`kill -9 ${pid}`, { timeout: 3000 });
-    }
-  } catch (e) {
-    // lsof 无匹配或 kill 失败都忽略
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[server] 端口 ${PORT} 已被占用。请先退出正在运行的 RTC / 开发服务，或换端口：PORT=8933 node server.js`);
+  } else {
+    console.error(`[server] 启动失败: ${err.message}`);
   }
-}
+  process.exit(1);
+});
 
-// 监听 '::' 双栈：同时接受 IPv4 (127.0.0.1) 与 IPv6 (::1) 连接。
-// 前端 WebSocket 使用 localhost，在 Tauri WKWebView 中可能解析为 ::1，
-// 只绑 0.0.0.0 会导致 WebView 连不上（连接被拒）。
-function listenWithRetry(server, port, retries) {
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE' && retries > 0) {
-      console.log(`[server] 端口 ${port} 被占用，尝试释放...`);
-      freePort(port);
-      setTimeout(() => listenWithRetry(server, port, retries - 1), 500);
-    } else {
-      console.error(`[server] 启动失败: ${err.message}`);
-      process.exit(1);
-    }
-  });
-  server.listen(port, '::', () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-    console.log(`WebSocket proxy at ws://localhost:${PORT}`);
-    console.log(`Engines: bailian (cloud) / local (SenseVoice @ ${LOCAL_ASR_URL})`);
-  });
-}
-
-listenWithRetry(server, PORT, PORT_CHECK_RETRIES);
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`WebSocket proxy at ws://localhost:${PORT}`);
+  console.log(`Engines: bailian (cloud) / local (SenseVoice @ ${LOCAL_ASR_URL})`);
+});

@@ -2,11 +2,12 @@
     "name": "rtc-transcriber",
     "version": "1.0.20",
     "description": "实时语音转文字工具：本地 SenseVoice 引擎（完全离线）/ 阿里云百炼 ASR / 浏览器 Web Speech，支持网页与 Tauri 桌面端。",
-    "main": "index.js",
+    "main": "server.js",
     "scripts": {
-        "build": "rm -rf dist && mkdir -p dist/css dist/js && cp src/index.html dist/index.html && cp -R src/css/. dist/css/ && cp -R src/js/. dist/js/",
-    "dev": "cd src-tauri && tauri dev",
-    "dev:web": "node scripts/dev.mjs",
+        "build": "npm test && rm -rf dist && mkdir -p dist/css dist/js && cp src/index.html dist/index.html && cp -R src/css/. dist/css/ && cp -R src/js/. dist/js/",
+        "build:sidecar": "bash scripts/build-sidecar.sh",
+        "dev": "cd src-tauri && tauri dev",
+        "dev:web": "node scripts/dev.mjs",
         "test": "node scripts/check-static.mjs",
         "rtc": "node scripts/rtc.mjs",
         "rtc:transcript": "node scripts/transcript.mjs"
@@ -15,7 +16,6 @@
     "author": "",
     "license": "MIT",
     "dependencies": {
-        "vercel": "^59.11.2",
         "ws": "^8.21.3"
     }
 }
