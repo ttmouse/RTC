@@ -121,15 +121,6 @@ function actionLabel(value) {
   return formatShortcut(LEGACY_KEY_ALIAS[value] || value);
 }
 
-// 点开就能选的常用键（要组合键或冷门键就现场录一个）
-const KEY_PRESETS = [
-  'Enter', 'Escape', 'Tab', 'Space', 'Backspace', 'Delete',
-  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
-  'Home', 'End', 'PageUp', 'PageDown',
-  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
-  'Meta+KeyS', 'Meta+KeyC', 'Meta+KeyV', 'Meta+KeyZ', 'Meta+Shift+KeyZ',
-];
-
 /* ---------------- 语音指令管理页（整页；增删改查都在这） ---------------- */
 // 以前这里是个只读小面板：想改指令得自己去编辑 commands.json，而 open -a 认的是
 // .app 包名（写显示名「飞书」会报「应用不存在」），改错了还不好自查。
@@ -422,7 +413,8 @@ async function pickCommandTarget(btn) {
       toast('这个功能由程序实现，只能改左边的说法');
       return;
     }
-    openCommandPicker(btn, KEY_PRESETS.map((v) => ({ value: v, label: formatShortcut(v) })), current, { record: true });
+    // 按键目标不是下拉选择器：点进去就等待用户直接按键。
+    startShortcutRecording(btn);
     return;
   }
   const apps = await loadAppList();
