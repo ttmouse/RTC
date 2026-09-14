@@ -99,7 +99,6 @@ const ACTION_LABELS = { enter: '按下回车键', arrow_down: '按下方向键',
 
 const ACTION_ORDER = ['enter', 'meeting_summary', 'arrow_down', 'arrow_up'];
 const CMD_ROW_BOX = { aliases: 'cmdRowsAliases', actions: 'cmdRowsActions', snippets: 'cmdRowsSnippets' };
-const CMD_ICON_PLAY = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
 const CMD_ICON_TRASH = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>';
 
 let cmdMenuBound = false;   // 图标入口只绑一次
@@ -140,7 +139,6 @@ function commandRowHtml(section, key, value) {
   return `<div class="cmdEditRow" data-section="${section}">`
     + `<input class="cmdInput cmdPhraseIn" value="${escHtml(key)}" placeholder="说法，多个用 ｜ 隔开" spellcheck="false">`
     + `<span class="cmdArrowTxt">→</span>${target}`
-    + `<button type="button" class="cmdIconBtn" data-act="try" title="试一下" aria-label="试一下">${CMD_ICON_PLAY}</button>`
     + `<button type="button" class="cmdIconBtn cmdDelBtn" data-act="del" title="删除这条" aria-label="删除这条">${CMD_ICON_TRASH}</button>`
     + `</div>`;
 }
@@ -311,20 +309,6 @@ async function pickCommandTarget(btn) {
   openCommandPicker(btn, apps.map((a) => ({ value: a.name, label: a.name, sub: a.path })), current, { searchable: true });
 }
 
-/** 试一下：把这一行当成刚说出口的话触发一次 */
-function tryCommandRow(row) {
-  const section = row.dataset.section;
-  // 一行可能写了多个说法（飞出｜飞速｜飞书），试一下用第一个就够了
-  const key = splitPhraseKeys(row.querySelector('.cmdPhraseIn').value)[0] || '';
-  const input = row.querySelector('.cmdValueIn');
-  const target = row.querySelector('.cmdTargetBtn');
-  const value = ((input ? input.value : (target ? target.dataset.value : '')) || '').trim();
-  if (!value) { toast('先把右边选好或填好'); return; }
-  if (section === 'aliases') void activate(value, key || value);
-  else if (section === 'actions') runActionCommand(value, key);
-  else executeSnippet(value);
-}
-
 function ensureEmptyHint(box) {
   if (!box) return;
   const hasRow = !!box.querySelector('.cmdEditRow');
@@ -422,11 +406,13 @@ function bindCommandPage() {
     if (add) { addCommandRow(add.dataset.section); return; }
     const targetBtn = e.target.closest('.cmdTargetBtn');
     if (targetBtn) { void pickCommandTarget(targetBtn); return; }
+    // 行尾只剩「删除」一个图标按钮
     const icon = e.target.closest('.cmdIconBtn');
     if (icon) {
       const row = icon.closest('.cmdEditRow');
-      if (icon.dataset.act === 'del') { const box = row.parentElement; row.remove(); ensureEmptyHint(box); }
-      else tryCommandRow(row);
+      const box = row.parentElement;
+      row.remove();
+      ensureEmptyHint(box);
     }
   });
 
