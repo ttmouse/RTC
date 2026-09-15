@@ -6,7 +6,7 @@
     --font:"SF Mono","Menlo","Consolas","Noto Sans Mono CJK SC","Sarasa Mono SC","PingFang SC",monospace;
   }
   * { margin:0; padding:0; box-sizing:border-box; }
-  html,body { height:100%; }
+  html,body { height:100%; overflow:hidden; }
   body { font-family:var(--font); background:var(--paper); color:var(--ink);
          height:100dvh; display:flex; flex-direction:column; position:relative;
          -webkit-font-smoothing:antialiased; }
