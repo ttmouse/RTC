@@ -8,13 +8,11 @@ let settingsWriteTimer = null;
 
 export function renderVADThresholdMarker() {
   const tick = $('levelMeterTick');
-  const text = $('levelMeterText');
   const threshold = state.vadThreshold || 0.006;
   if (tick) {
     const pct = rmsToMeterPct(threshold);
     tick.style.left = pct.toFixed(1) + '%';
   }
-  if (text) text.textContent = `0.0000 / ${threshold.toFixed(4)}`;
 }
 
 // OpenAI 兼容服务商预设（选预设自动填 baseUrl/model，也可切「自定义」手动填）

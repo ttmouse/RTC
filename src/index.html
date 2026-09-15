@@ -10,7 +10,6 @@
 <header>
   <h1>实时逐字稿</h1>
   <div class="header-actions">
-    <div id="status"><span id="dot"></span><span id="statusText">就绪</span><span id="statusTime" title="录音中为本次录音时长；空闲时显示本地服务运行时长（服务重启后归零）"></span></div>
     <div class="cmdWrap">
       <button id="cmdBtn" title="语音指令" aria-haspopup="dialog" aria-expanded="false">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
@@ -48,10 +47,13 @@
 
 <footer>
   <div class="meterRow">
+    <!-- 运行状态（唯一渲染来源仍是 ui.js 的 renderRunStatus）：
+         点 + 说法 + 时长。放在电平尺左侧，靠近下方操作区，避免和最新历史记录混在一起。 -->
+    <div id="status"><span id="dot"></span><span id="statusText">就绪</span></div>
     <!-- 电平尺上的刻度＝VAD 灵敏度阈值，设置面板里已没有这个选项，
          所以刻度含义只能靠悬停 Tips 解释（用 data-tip 后不要再加 title，会叠着弹） -->
     <div id="levelMeterBlock"
-         data-tip="VAD 灵敏度 · 可拖动调整：值越大越不敏感（噪音不触发），越小越灵敏（轻声也识别）"
+         data-tip="实时音量；刻度线是识别阈值。音量低于刻度，可能被判定为静音；超过刻度，才会触发语音识别。拖动刻度可调整灵敏度。"
          aria-label="VAD 灵敏度，可拖动调整，值越大越不敏感">
       <div id="levelMeter">
         <div id="levelMeterBg">
@@ -60,7 +62,7 @@
         </div>
       </div>
     </div>
-    <span id="levelMeterText">0.0000 / 0.0060</span>
+    <span id="statusTime" title="录音中为本次录音时长；空闲时显示本地服务运行时长（服务重启后归零）"></span>
   </div>
   <div class="actionRow">
     <div class="engineWrap enginePill">

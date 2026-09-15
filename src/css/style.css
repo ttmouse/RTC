@@ -23,17 +23,20 @@
   header{ position:relative; z-index:30; background:var(--ink); color:var(--paper);
          padding:12px 20px; display:flex; justify-content:space-between; align-items:center; }
   header h1{ font-size:16px; font-weight:700; letter-spacing:.12em; display:flex; align-items:center; gap:10px; }
-  #status{ font-size:11px; display:flex; align-items:center; gap:6px; color:#b7ab92;
-           font-family:var(--mono); letter-spacing:.04em; }
-  #statusTime{ font-family:var(--mono); font-size:11px; color:#b7ab92;
+  /* 运行状态区：放在 footer 电平尺左侧，靠近下方操作区，也不和最新历史记录混在一起。
+     纸色底上的文字使用 --ink-soft；点仍是三态：空闲灰点 / 录音印章红（带一圈光晕）/ 异常深红。 */
+  #status{ font-size:11px; display:flex; align-items:center; gap:6px; color:var(--ink-soft);
+           font-family:var(--mono); letter-spacing:.04em; white-space:nowrap; flex:none;
+           padding-right:10px; }
+  #statusTime{ font-family:var(--mono); font-size:11px; color:inherit;
         font-variant-numeric:tabular-nums; letter-spacing:.04em; }
-  #statusTime.up-offline{ color:#f29b8a; }
+  #statusTime.up-offline{ color:var(--seal-deep); }
   /* 状态机：异常状态（服务未连接/麦克风不可用）文字用既有告警色 */
-  #statusText.up-offline{ color:#f29b8a; }
-  #dot{ width:7px; height:7px; border-radius:50%; background:#5c5344; flex-shrink:0; }
+  #statusText.up-offline{ color:var(--seal-deep); }
+  #dot{ width:7px; height:7px; border-radius:50%; background:var(--ink-faint); flex-shrink:0; }
   #dot.on{ background:var(--seal); box-shadow:0 0 0 3px rgba(191,58,30,.2); }
   /* 状态机：异常状态点，复用既有告警色 */
-  #dot.err{ background:#f29b8a; }
+  #dot.err{ background:var(--seal-deep); }
   .header-actions{ display:flex; align-items:center; gap:10px; }
   #settingsBtn, #cmdBtn{ background:none; border:none; color:#b7ab92; padding:4px;
         border-radius:var(--radius-sm); cursor:pointer; line-height:0;
@@ -150,20 +153,20 @@
   #btn:disabled{ opacity:.35; cursor:not-allowed; }
   #btn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
   /* 底部开关图标按钮 */
+  /* 一行三列：运行状态（左）＋ 电平尺（flex:1）＋ 电平数值。
+     状态块靠近下方操作区，电平尺仍占据剩余空间。 */
   .meterRow{ display:flex; align-items:center; gap:12px; min-width:0; }
   #levelMeterBlock{ flex:1; min-width:0; display:block; }
-  #levelMeter{ display:block; width:100%; height:12px; }
+  #levelMeter{ display:flex; align-items:center; width:100%; height:12px; }
   #levelMeterBg{ position:relative; width:100%; height:6px; background:var(--rule);
-        border-radius:2px; overflow:hidden; }
+        border-radius:999px; overflow:hidden; }
   #levelMeterBar{ position:absolute; left:0; top:0; height:100%; width:0%;
-        border-radius:2px;
+        border-radius:999px;
         background:var(--ink-faint); transition:width .08s; }
   #levelMeterBar.speech{ background:var(--seal); }
   #levelMeterBar.loud{ background:var(--seal-deep); }
   #levelMeterTick{ position:absolute; top:-3px; bottom:-3px; width:1px;
         background:var(--seal-deep); z-index:2; }
-  #levelMeterText{ font-family:var(--mono); font-size:10px; line-height:1.2;
-        color:var(--ink-faint); white-space:nowrap; letter-spacing:0; }
   /* 底部三段式：左=模型胶囊，中=录音按钮（窗口正中），右=两个开关（贴右）；
      左右两段等宽弹性(flex:1 1 0)，中间按钮就落在窗口几何中心 */
   .actionRow{ display:flex; align-items:center;

@@ -60,10 +60,6 @@ export async function startAudio() {
           ? (rms >= state.vadThreshold * 3 ? 'loud' : 'speech')
           : '';
       }
-      const levelText = $('levelMeterText');
-      if (levelText) {
-        levelText.textContent = `${rms.toFixed(4)} / ${state.vadThreshold.toFixed(4)}`;
-      }
 
       if (state.asrEngine === 'bailian') {
         const pcm = floatToInt16(down);
@@ -109,8 +105,6 @@ export function stopRec() {
     bar.style.width = '0%';
     bar.className = '';
   }
-  const levelText = $('levelMeterText');
-  if (levelText) levelText.textContent = `0.0000 / ${state.vadThreshold.toFixed(4)}`;
   flushTotalDuration();
   // 按钮的常态/录音中状态统一由 setRecordBtn 切（它顺带播一下脉冲），
   // 这里不再单独改 className，否则状态就有了两个来源。
