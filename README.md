@@ -1,3 +1,5 @@
+<img width="573" height="1037" alt="RTC 截图" src="https://github.com/user-attachments/assets/4df6538d-f774-4a9c-a303-657945cc2b3f" />
+
 # RTC
 
 实时语音转文字工具，支持**本地 SenseVoice 引擎**（完全离线）和**阿里云百炼 ASR**。可作为网页运行，也可打包为 macOS 桌面应用（Tauri）。
