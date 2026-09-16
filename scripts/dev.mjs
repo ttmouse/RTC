@@ -21,6 +21,13 @@ const watchDir = path.join(root, 'src');
 const reloadPort = Number(process.env.RELOAD_PORT || 8935);
 const port = Number(process.env.PORT || 8931);
 
+// 白板是独立 Vite 项目，桌面开发模式也需要先有可服务的构建产物。
+const boardEntry = path.join(root, 'dist', 'meeting-board', 'index.html');
+if (!fs.existsSync(boardEntry)) {
+  console.log('[dev] 首次启动，先构建会议白板');
+  execSync('npm install && npx vite build', { cwd: path.join(root, 'meeting-board'), stdio: 'inherit' });
+}
+
 // ── 端口清理与检测 ──
 const portInUse = (p) => new Promise((resolve) => {
   const srv = net.createServer();

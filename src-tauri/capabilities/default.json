@@ -1,12 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for main & meeting-board windows",
+  "windows": ["main", "meeting-board"],
   "permissions": [
     "core:default",
+    "core:window:default",
     "core:window:allow-start-dragging",
     "core:window:allow-set-title",
+    "core:window:allow-close",
+    "core:webview:allow-create-webview-window",
     "updater:default",
     "process:default"
   ]

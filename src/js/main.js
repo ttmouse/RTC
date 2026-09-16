@@ -163,6 +163,30 @@ $('settingsPage').addEventListener('click', (e) => {
   if (e.target.closest('#settingsResetBtn')) refreshGroupSummaries();
 });
 
+// 会议白板
+// 会议白板 — 新开独立窗口，与主界面并存
+$('meetingBoardBtn').onclick = () => {
+  const tauri = window.__TAURI__;
+  if (tauri && tauri.webviewWindow) {
+    try {
+      new tauri.webviewWindow.WebviewWindow('meeting-board', {
+        url: '/meeting-board/',
+        title: '会议白板',
+        width: 900,
+        height: 650,
+        center: true,
+      });
+      return;
+    } catch (e) {
+      console.warn('[board] Tauri window failed, fallback to popup:', e);
+    }
+  }
+  // 网页/Dev 模式回退
+  const w = window.open('/meeting-board/', 'rtc-meeting-board',
+    'width=900,height=650,scrollbars=yes');
+  if (!w) toast('弹窗被拦截，请允许弹出窗口或手动打开 http://localhost:8931/meeting-board/');
+};
+
 $('settingsBtn').onclick = () => showSettings(true);
 $('settingsClose').onclick = () => showSettings(false);
 $('settingsSaveBtn').onclick = async () => {

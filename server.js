@@ -953,22 +953,410 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // PUT /api/config — 整体覆盖本地配置（保留兼容；新代码请用 PATCH）
-  if (req.method === 'PUT' && req.url === '/api/config') {
+  // ========== 会议白板（Meeting Board） ==========
+
+  const MEETING_BOARD_PATH = path.join(DATA_ROOT, 'meeting-board.json');
+
+  function readMeetingBoard() {
+    try { return JSON.parse(fs.readFileSync(MEETING_BOARD_PATH, 'utf-8')) || {}; } catch { return {}; }
+  }
+
+  function writeMeetingBoard(data) {
+    return new Promise((resolve, reject) => {
+      fs.mkdir(DATA_ROOT, { recursive: true }, (err) => {
+        if (err) { reject(err); return; }
+        const tmp = MEETING_BOARD_PATH + '.tmp';
+        fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8', (writeErr) => {
+          if (writeErr) { reject(writeErr); return; }
+          fs.rename(tmp, MEETING_BOARD_PATH, (renameErr) => renameErr ? reject(renameErr) : resolve());
+        });
+      });
+    });
+  }
+
+  const boardUrl = new URL(req.url, 'http://127.0.0.1');
+  const boardPath = boardUrl.pathname;
+  const defaultDefinition = { background: '', expectedOutput: '', roles: '', boundary: '' };
+
+  function readBoardDayEvents(date) {
+    try {
+      const raw = fs.readFileSync(path.join(EVENTS_DIR, `${date}.jsonl`), 'utf-8');
+      const events = raw.split('\n').filter(Boolean).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+      return events.filter((ev) => ev.type === 'segment' && typeof ev.text === 'string' && ev.text.trim());
+    } catch { return []; }
+  }
+
+  function sessionInfo(session) {
+    const id = meetingSessionId(session.start);
+    return { id, start: session.start.toISOString(), end: session.end.toISOString(), count: session.count };
+  }
+
+  // GET /api/meeting-board/sessions?date=YYYY-MM-DD — 按静默间隔整理当天会议场次
+  if (req.method === 'GET' && boardPath === '/api/meeting-board/sessions') {
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(boardUrl.searchParams.get('date') || '')
+      ? boardUrl.searchParams.get('date') : localDateStamp(new Date());
+    const sessions = detectSessions(readBoardDayEvents(date), MEETING_SILENCE_SEC);
+    const board = readMeetingBoard();
+    const stored = board.sessions || {};
+    const latestId = sessions.length ? sessionInfo(sessions.at(-1)).id : '';
+    // 兼容第一阶段的单会议数据：首次加载时把旧数据归档到当天最新场次。
+    if (latestId && !stored[latestId] && (board.analysis || board.document || board.definition)) {
+      board.sessions = board.sessions || {};
+      board.sessions[latestId] = { definition: board.definition || defaultDefinition, analysis: board.analysis || null, document: board.document || '' };
+      board.activeSessionId = latestId;
+      stored[latestId] = board.sessions[latestId];
+      void writeMeetingBoard(board);
+    }
+    const result = sessions.map((session) => {
+      const info = sessionInfo(session);
+      const saved = stored[info.id] || {};
+      return { ...info, title: saved.title || saved.analysis?.title || `会议 ${formatLocal(session.start).slice(11)}`, hasAnalysis: !!saved.analysis, hasDocument: typeof saved.document === 'string' && !!saved.document.trim() };
+    });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, date, sessions: result }));
+    return;
+  }
+
+  // GET /api/meeting-board/definition?sessionId=... — 读取当前会议场次
+  if (req.method === 'GET' && boardPath === '/api/meeting-board/definition') {
+    const board = readMeetingBoard();
+    const id = boardUrl.searchParams.get('sessionId');
+    const saved = id && board.sessions && board.sessions[id];
+    const legacy = !id || (!saved && id === board.activeSessionId);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: true,
+      definition: (saved && saved.definition) || (legacy ? board.definition : defaultDefinition),
+      analysis: (saved && saved.analysis) || (legacy ? board.analysis : null),
+      document: (saved && saved.document) || (legacy ? board.document : ''),
+    }));
+    return;
+  }
+
+  // PUT /api/meeting-board/definition — 保存会前定义
+  if (req.method === 'PUT' && boardPath === '/api/meeting-board/definition') {
     readJsonBody(req, (err, parsed) => {
-      if (err || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      if (err || !parsed || typeof parsed !== 'object') {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'invalid config' }));
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
         return;
       }
-      writeConfig(parsed, (writeErr) => {
-        if (writeErr) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: writeErr.message }));
+      const board = readMeetingBoard();
+      const id = boardUrl.searchParams.get('sessionId');
+      if (id) {
+        board.sessions = board.sessions || {};
+        board.sessions[id] = { ...(board.sessions[id] || {}), definition: parsed };
+        board.activeSessionId = id;
+      } else board.definition = parsed;
+      writeMeetingBoard(board).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }).catch((e) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      });
+    });
+    return;
+  }
+
+  // PUT /api/meeting-board/document — 保存白板文档内容
+  if (req.method === 'PUT' && boardPath === '/api/meeting-board/document') {
+    readJsonBody(req, (err, parsed) => {
+      if (err || !parsed || typeof parsed !== 'object') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      const board = readMeetingBoard();
+      const id = boardUrl.searchParams.get('sessionId');
+      const document = typeof parsed.document === 'string' ? parsed.document : '';
+      if (id) {
+        board.sessions = board.sessions || {};
+        board.sessions[id] = { ...(board.sessions[id] || {}), document };
+        board.activeSessionId = id;
+      } else board.document = document;
+      writeMeetingBoard(board).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }).catch((e) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      });
+    });
+    return;
+  }
+
+  // POST /api/meeting-board/infer-definition — 从逐字稿推断会前定义
+  // 会议已在进行了，用户没有提前定义，让 AI 从当前内容反推
+  if (req.method === 'POST' && req.url === '/api/meeting-board/infer-definition') {
+    readJsonBody(req, (err) => {
+      if (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      // 整个流程用 Promise 链串行，外层统一兜底，防止 async 回调的未捕获拒绝
+      Promise.resolve().then(async () => {
+        // 读取最近一段时间的逐字稿（最后 30 分钟或最近 200 条）
+        const LIMIT_EVENTS = 200;
+        const CUTOFF_MS = 30 * 60 * 1000;
+        const cutoff = Date.now() - CUTOFF_MS;
+        let events = [];
+        try {
+          const files = fs.readdirSync(EVENTS_DIR)
+            .filter(f => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+            .sort().reverse().slice(0, 3);
+          for (const f of files) {
+            const data = fs.readFileSync(path.join(EVENTS_DIR, f), 'utf-8');
+            const parsedLines = data.split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+            events.push(...parsedLines);
+          }
+          events = events.filter(ev => {
+            const ts = Date.parse(ev.ts);
+            return ev.type === 'segment' && typeof ev.text === 'string' && ev.text.trim() && Number.isFinite(ts) && ts >= cutoff;
+          });
+          events.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+          if (events.length > LIMIT_EVENTS) events = events.slice(-LIMIT_EVENTS);
+        } catch { /* 没有历史记录 */ }
+
+        const transcript = events.map(ev => `[${new Date(ev.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}] ${ev.text}`).join('\n');
+
+        if (!transcript.trim()) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: '暂无近期会议记录，请先开始录音' }));
+          return;
+        }
+
+        // 读取 AI 配置
+        let ai = null;
+        try {
+          const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+          ai = cfg.settings && cfg.settings.ai;
+        } catch { /* 未配置 */ }
+        const baseUrl = ai && typeof ai.baseUrl === 'string' ? ai.baseUrl.trim() : '';
+        const apiKey = ai && typeof ai.apiKey === 'string' ? ai.apiKey.trim() : '';
+        const model = ai && typeof ai.model === 'string' ? ai.model.trim() : '';
+
+        if (!baseUrl || !model) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: '未配置 AI 服务商（设置 → AI 接入）' }));
+          return;
+        }
+
+        const system = `你是一位会议分析专家。给你一段会议逐字稿，请推断这场会议的「会前定义」。
+
+输出 JSON 格式，包含以下四个字段：
+1. background — 讨论背景：发生了什么，为什么这些人被召集在一起。从发言中推测触发这场讨论的具体变化、问题或决策压力。
+2. expectedOutput — 预期产出：从对话内容看，大家希望这次会议结束时得到什么？是做出决策、对齐信息、还是制定方案。
+3. roles — 参与角色：根据发言内容和表达方式，推测每个参与者的角色（谁在提供事实、谁在评估、谁在做决策）。
+4. boundary — 讨论边界：从发言范围和被打断/叫停的内容，推测本次讨论的主题范围是什么、哪些事情被排除在外。
+
+注意：只输出 JSON，不要任何包裹文字。如果无法从逐字稿推断某个字段，用合理的推测填空并加"（推测）"后缀。`;
+
+        const payload = {
+          model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: `以下是会议逐字稿：\n${transcript}` },
+          ],
+          stream: false,
+          max_tokens: 4096,
+        };
+
+        const upRes = await fetch(chatEndpoint(baseUrl), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            ...providerHeaders(baseUrl),
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(60000),
+        });
+        const data = await upRes.json().catch(() => ({}));
+        if (!upRes.ok) {
+          const detail = (data.error && (data.error.message || data.error.code)) || `HTTP ${upRes.status}`;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: `AI 推断失败：${typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 200)}` }));
+          return;
+        }
+        let content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+        content = content.replace(/^```(?:json)?\s*|```\s*$/g, '').trim();
+        let definition = null;
+        try { definition = JSON.parse(content); } catch { /* 解析失败保留原文 */ }
+        if (!definition || typeof definition !== 'object') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'AI 返回格式异常', raw: content }));
           return;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ ok: true, definition }));
+      }).catch(e => {
+        // 兜底：async 流程中任何未捕获错误都转成 JSON 响应，不抛 HTML 500
+        const msg = e && (e.name === 'TimeoutError' ? 'AI 推断超时，请稍后重试' : (e.message || String(e)));
+        console.error('[board] infer-definition error:', msg);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: msg }));
+      });
+    });
+    return;
+  }
+
+  // POST /api/meeting-board/analyze — 用 AI 分析会议进展
+  if (req.method === 'POST' && req.url === '/api/meeting-board/analyze') {
+    readJsonBody(req, (err, parsed) => {
+      if (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      Promise.resolve().then(async () => {
+        // 1. 读取会前定义（优先用请求中传入的，回落本地存储）
+        const board = readMeetingBoard();
+        const def = (parsed && parsed.definition) || board.definition || {};
+
+        // 2. 读取最近一段时间的逐字稿（最后 30 分钟或最近 200 条）
+        const LIMIT_EVENTS = 200;
+        const CUTOFF_MS = 30 * 60 * 1000;
+        const cutoff = Date.now() - CUTOFF_MS;
+        let events = [];
+        try {
+          const files = fs.readdirSync(EVENTS_DIR)
+            .filter(f => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+            .sort()
+            .reverse()
+            .slice(0, 3);
+          for (const f of files) {
+            const data = fs.readFileSync(path.join(EVENTS_DIR, f), 'utf-8');
+            const parsedLines = data.split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+            events.push(...parsedLines);
+          }
+          events = events.filter(ev => {
+            const ts = Date.parse(ev.ts);
+            return ev.type === 'segment' && typeof ev.text === 'string' && ev.text.trim() && Number.isFinite(ts) && ts >= cutoff;
+          });
+          events.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+          if (events.length > LIMIT_EVENTS) events = events.slice(-LIMIT_EVENTS);
+        } catch { /* 没有历史记录 */ }
+
+        const transcript = events.map(ev => `[${new Date(ev.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}] ${ev.text}`).join('\n');
+
+        if (!transcript.trim()) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: '暂无近期会议记录，请先开始录音' }));
+          return;
+        }
+
+        // 3. 读取 AI 配置
+        let ai = null;
+        try {
+          const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+          ai = cfg.settings && cfg.settings.ai;
+        } catch { /* 未配置 */ }
+        const baseUrl = ai && typeof ai.baseUrl === 'string' ? ai.baseUrl.trim() : '';
+        const apiKey = ai && typeof ai.apiKey === 'string' ? ai.apiKey.trim() : '';
+        const model = ai && typeof ai.model === 'string' ? ai.model.trim() : '';
+
+        if (!baseUrl || !model) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: '未配置 AI 服务商（设置 → AI 接入）' }));
+          return;
+        }
+
+        // 4. 构建分析 prompt
+        const system = `你是一位会议分析专家，正在使用「认知对齐」框架分析会议进展。
+你的任务是基于会前定义和逐字稿，评估会议当前状态。
+
+分析维度：
+1. 当前话题（currentTopic）—— 现在在讨论什么
+2. 已形成结论（decisionsReached）—— 已经确认了什么
+3. 待决问题（openQuestions）—— 还有什么没定
+4. 对齐状态（alignmentStatus）—— 逐项评估：
+   - 讨论是否在定义的背景框架内（backgroundCovered）
+   - 离预期产出还有多远（expectedOutputProgress）
+   - 是否遵守了讨论边界（boundaryRespected）
+   - 参与者的角色分工是否清晰（roleClarity）
+5. 行动项（actionItems）—— 谁要在什么时间做什么
+6. 一句话总结（summary）
+
+只返回 JSON，不要任何包裹文字。`;
+
+        const userPrompt = `## 会前定义\n- 讨论背景：${def.background || '（未定义）'}\n- 预期产出：${def.expectedOutput || '（未定义）'}\n- 参与角色：${def.roles || '（未定义）'}\n- 讨论边界：${def.boundary || '（未定义）'}\n\n## 逐字稿\n${transcript}`;
+
+        const payload = {
+          model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: userPrompt },
+          ],
+          stream: false,
+          max_tokens: 4096,
+        };
+
+        const upRes = await fetch(chatEndpoint(baseUrl), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            ...providerHeaders(baseUrl),
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(60000),
+        });
+        const data = await upRes.json().catch(() => ({}));
+        if (!upRes.ok) {
+          const detail = (data.error && (data.error.message || data.error.code)) || `HTTP ${upRes.status}`;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: `AI 分析失败：${typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 200)}` }));
+          return;
+        }
+        let content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+        content = content.replace(/^```(?:json)?\s*|```\s*$/g, '').trim();
+        let analysis = null;
+        try { analysis = JSON.parse(content); } catch { /* 解析失败时保留原文 */ }
+        if (!analysis || typeof analysis !== 'object') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'AI 返回格式异常', raw: content }));
+          return;
+        }
+        // 5. 保存分析结果并返回
+        analysis._updatedAt = new Date().toISOString();
+        board.analysis = analysis;
+        writeMeetingBoard(board).catch(() => {});
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, analysis }));
+      }).catch(e => {
+        const msg = e && (e.name === 'TimeoutError' ? 'AI 分析超时，请稍后重试' : (e.message || String(e)));
+        console.error('[board] analyze error:', msg);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: msg }));
+      });
+    });
+    return;
+  }
+
+  // PUT /api/meeting-board/analysis — 外部 AI 写入分析结果；APP 只读取和展示，不调用 AI
+  if (req.method === 'PUT' && boardPath === '/api/meeting-board/analysis') {
+    readJsonBody(req, (err, parsed) => {
+      if (err || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid analysis' }));
+        return;
+      }
+      const board = readMeetingBoard();
+      const id = boardUrl.searchParams.get('sessionId');
+      const analysis = { ...parsed, _updatedAt: parsed._updatedAt || new Date().toISOString() };
+      if (id) {
+        board.sessions = board.sessions || {};
+        board.sessions[id] = { ...(board.sessions[id] || {}), analysis };
+        board.activeSessionId = id;
+      } else board.analysis = analysis;
+      writeMeetingBoard(board).then(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, analysis: board.analysis }));
+      }).catch((writeErr) => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: writeErr.message }));
       });
     });
     return;
@@ -1249,15 +1637,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const filePath = req.url === '/' ? '/index.html' : req.url;
+  const filePath = req.url === '/' ? '/index.html' : req.url.replace(/\/$/, '/index.html');
   if (DEV && req.url === '/__dev_reload.js') {
     // 开发模式热更新探针：连接 dev.mjs 的 WebSocket，收到 reload 即刷新页面
     res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(`(()=>{if(!window.WebSocket)return;let ws=null,retry=0;const host=location.hostname||'localhost';function connect(){try{ws=new WebSocket('ws://'+host+':'+${RELOAD_PORT});ws.onopen=()=>{retry=0};ws.onmessage=e=>{if(e.data==='reload')location.reload()};ws.onclose=()=>{ws=null;setTimeout(connect,Math.min(1000*Math.pow(2,retry++),5000))};ws.onerror=()=>{try{ws.close()}catch(_){}}}catch(_){}}connect();})();`);
     return;
   }
-  const staticRoot = DEV ? SOURCE_ROOT
-    : (fs.existsSync(path.join(STATIC_ROOT, 'index.html')) ? STATIC_ROOT : SOURCE_ROOT);
+  // 开发模式的主界面直接读 src/；白板由独立 Vite 项目构建到 dist/meeting-board，
+  // 否则桌面开发模式打开 /meeting-board/ 会命中不存在的 src/meeting-board/。
+  const isMeetingBoard = req.url === '/meeting-board' || req.url.startsWith('/meeting-board/');
+  const staticRoot = isMeetingBoard && fs.existsSync(path.join(STATIC_ROOT, 'meeting-board/index.html'))
+    ? STATIC_ROOT
+    : (DEV ? SOURCE_ROOT : (fs.existsSync(path.join(STATIC_ROOT, 'index.html')) ? STATIC_ROOT : SOURCE_ROOT));
   const fullPath = path.join(staticRoot, filePath);
 
   if (!fullPath.startsWith(staticRoot)) {
