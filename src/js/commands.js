@@ -171,8 +171,11 @@ function commandRowHtml(section, key, value) {
   } else {
     const label = section === 'actions' ? actionLabel(value) : (value || '选择应用');
     // 功能块的目标不能改：值是程序里的功能码，换一个等于换个不存在的功能。做成不可点的
-    // 样子，而不是「点下去才知道不行」；开了新功能就把它加进 FUNCTION_LABELS。
-    const locked = section === 'actions' && !!FUNCTION_LABELS[value];
+    // 样子，而不是「点下去才知道不行」；新功能加进 ACTION_GROUPS 的 features 里就会自动锁上。
+    // 症状备忘（别再写回来）：这里曾经是 !!FUNCTION_LABELS[value]，而 FUNCTION_LABELS 被
+    // 删掉换成了 actionLabel 里的字面判断。少删的这一处让整页在第 175 行抛 ReferenceError，
+    // 页面停在 hidden 没显示出来，用户看到的就是「右上角 ⌘ 图标点了没反应」。
+    const locked = section === 'actions' && actionGroupId(value) === 'features';
     const tip = locked ? `这个功能由程序实现，只能改左边的说法（${label}）` : label;
     // title：右边这一栏窄，长应用名（如 Karabiner-VirtualHIDDevice-Manager）会被截断，
     // 鼠标停留一下能看到全名
@@ -512,7 +515,14 @@ async function openCommandPage() {
   actionCache = actions;
   snippetCache = snippets;
   cmdPageBefore = { aliases: { ...aliases }, actions: { ...actions }, snippets: { ...snippets } };
-  renderCommandPage(cmdPageBefore);
+  // 渲染失败也必须把页面显示出来：以前异常会冒泡出去，页面永远停在 hidden，
+  // 用户看到的现象是「点了没反应」，连报错都看不到（原则 3：状态要诚实）。
+  try {
+    renderCommandPage(cmdPageBefore);
+  } catch (err) {
+    console.error('[command] 指令管理页渲染失败:', err);
+    toast('指令管理页打不开：' + (err.message || err));
+  }
   page.classList.remove('hidden');
   setMainHidden(true);
   void loadAppList();   // 后台先把应用列表取回来，点下拉时不用等
