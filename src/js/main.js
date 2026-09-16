@@ -8,7 +8,6 @@ import { clearHistory, loadEarlier, renderHistory } from './history.js';
 import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, syncCollapsibleGroups, refreshGroupSummaries, toggleGroup, renderAutoEnterApps, addAutoEnterApp, toggleAutoEnterApp, commitAutoEnterApps, resetAutoEnterAppsDraft, AI_PROVIDERS } from './settings.js';
 import { renderModelStatus, getModelStatus } from './model.js';
 import { initLearnedCommands, pickApplication } from './commands.js';
-import { migrateLegacyLocalConfig } from './config-migration.js';
 import { checkForUpdates, setupUpdateUI, updateVersionInfo } from './updater.js';
 import { playStart, playToggle } from './sfx.js';
 import { apiUrl } from './api.js';
@@ -604,7 +603,6 @@ window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => toggleAutoPaste()
 (async () => {
   renderRunStatus();
   initListAutoScroll();
-  await migrateLegacyLocalConfig();
   // 这四个加载各自读写 /api/config 或 /api/commands。以前它们挂在同一条 await 链上、
   // 只有一个兜底 catch(console.error)：桌面端窗口和 sidecar 抢跑时哪怕一次 fetch 失败，
   // 后面的 initRunStatus / renderHistory / updateVersionInfo / 自动开录全部跳过，
