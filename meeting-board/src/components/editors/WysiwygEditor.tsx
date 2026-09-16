@@ -279,6 +279,16 @@ type Props = {
   sourceMode?: boolean;
   /** 分块保真的改写情况：哪些原文块会按可视化结果重写、里面有什么高级语法。App 用它做保存前提示。 */
   onSourceRewrite?: (info: MarkdownRewriteInfo) => void;
+  /**
+   * 阅读模式（只读，默认关）。开着时只有一件事不同：**不许改**。
+   *
+   * 参照 xiaoer-omia 的做法（App.tsx 的 officeEditing：默认阅读态，点「编辑」进入）。
+   * 那边阅读态换的是另一套渲染器（MarkdownView）；白板这边不能那么做——白板的排版本就是
+   * 把阅读视图的排版搬进编辑器换来的（见 themes/crepe-paper.css 文首），换渲染器等于把
+   * 「编辑态和阅读态长得一样」这件事重新拆开，两份排版迟早分叉。所以这里不换 DOM、
+   * 只把「能改东西」的入口收起来，阅读态与编辑态像素级一致。
+   */
+  readOnly?: boolean;
 };
 
 /**
@@ -550,7 +560,7 @@ function menuLabels(lang: "zh" | "en") {
 // 所见即所得 Markdown 编辑器（Milkdown Crepe）：直接在排版好的视图上改字，输出仍是干净 markdown。
 // 非受控：仅用初始 value 创建；外部切换文档/语言时由父级用 key 重新挂载。
 export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function WysiwygEditor(
-  { value, onChange, newDocument = false, autoFocus = false, onReady, onReadyError, sourceMode = false, onSourceRewrite },
+  { value, onChange, newDocument = false, autoFocus = false, onReady, onReadyError, sourceMode = false, readOnly = false, onSourceRewrite },
   handleRef,
 ) {
   const ref = useRef<HTMLDivElement>(null);
@@ -560,6 +570,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
   onSourceRewriteRef.current = onSourceRewrite;
   const onReadyRef = useRef(onReady);
   const onReadyErrorRef = useRef(onReadyError);
+  // 只读标记：事件监听和校验只在挂载时绑定一次，读不到最新的 props，所以放 ref 里。
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const blockMenuRef = useRef<HTMLDivElement>(null);
   const clearBlockSelectionRef = useRef<() => void>(() => {});
   const noticeTimerRef = useRef<number | undefined>(undefined);
@@ -630,6 +643,10 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     update: SlashInsertMenuState | null | ((current: SlashInsertMenuState | null) => SlashInsertMenuState | null),
   ) => {
     const next = typeof update === "function" ? update(slashInsertMenuStateRef.current) : update;
+    // 阅读模式只允许「关」：插入类菜单一个都不开。光靠 CSS 藏是不够的 ——
+    // 菜单开出来的同时会挂一层吃掉全页点击的 scrim，切回编辑态后它还留着，
+    // 表现就是「白板里点哪都没反应」。所以要在开状态这一步拦住。
+    if (readOnlyRef.current && next) return;
     slashInsertMenuStateRef.current = next;
     setSlashInsertMenu(next);
   };
@@ -637,10 +654,12 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     update: BrowseInsertMenuState | null | ((current: BrowseInsertMenuState | null) => BrowseInsertMenuState | null),
   ) => {
     const next = typeof update === "function" ? update(browseInsertMenuStateRef.current) : update;
+    if (readOnlyRef.current && next) return;   // 同上：只许关不许开
     browseInsertMenuStateRef.current = next;
     setBrowseInsertMenu(next);
   };
   const updateTableSizePicker = (next: TableSizePickerState | null) => {
+    if (readOnlyRef.current && next) return;   // 同上
     tableSizePickerStateRef.current = next;
     setTableSizePicker(next);
   };
@@ -913,7 +932,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       }, 80);
     };
     const selectionToolbar = createSelectionToolbarController({
-      isEligible: hasTextSelectionInside,
+      // 阅读模式不弹选区工具栏：那些按钮是可执行的格式化命令，点了真会改文档
+      // （editable=false 只管输入，管不住命令）。
+      isEligible: () => !readOnlyRef.current && hasTextSelectionInside(),
       setReady: (ready) => {
         const toolbar = host.querySelector<HTMLElement>(".milkdown-toolbar");
         clearSelectionToolbarFallback(toolbar);
@@ -1149,6 +1170,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       else editor?.removeAttribute("aria-activedescendant");
     };
     const scheduleSlashInsertMenuSync = () => {
+      // 阅读模式不挂斜杠菜单：它是「插入区块」的入口，是编辑动作。
+      if (readOnlyRef.current) { closeSlashInsertMenu(); return; }
       if (slashMenuSyncFrame != null) return;
       slashMenuSyncFrame = requestAnimationFrame(syncSlashInsertMenu);
     };
@@ -2240,6 +2263,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       linkLeaveTimer = window.setTimeout(closeLinkToolbar, 180);
     };
     const showLinkToolbarForAnchor = (anchor: HTMLAnchorElement) => {
+      if (readOnlyRef.current) return;   // 阅读模式不弹链接工具栏（编辑/移除都在里面）
       if (selectionPointerOrigin || currentTextSelectionRangeInside()) {
         closeLinkToolbar();
         return;
@@ -2337,6 +2361,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       return valid ? kind : null;
     };
     const onPortableNodeClick = (event: MouseEvent | PointerEvent) => {
+      // 阅读模式不弹节点工具栏（改语言、换图、删除都在里面，点了真会改文档）。
+      // 这里只是不接管，链接、选区这些「看」的动作一律照旧。
+      if (readOnlyRef.current) return;
       const target = event.target as Element | null;
       if (suppressAdvancedCompatibilityClickRoot && event.isTrusted) {
         const suppressThisClick = shouldSuppressAdvancedCompatibilityClick(suppressAdvancedCompatibilityClickRoot, target);
@@ -2669,6 +2696,20 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     host.ownerDocument.addEventListener("pointerup", onAdvancedTableCellPointerUp, true);
     host.ownerDocument.addEventListener("pointercancel", onAdvancedTableCellPointerCancel, true);
     host.addEventListener("click", onPortableNodeClick, true);
+    // 阅读态里链接会变成「真链接」：编辑态下 contenteditable 会吃掉链接激活，点了不跳；
+    // 一改成只读，点击就会把整个白板窗口导航走 —— 投屏到一半翻车，而且回不来了。
+    // 所以阅读态自己接管：交给系统浏览器打开，和工具栏那颗「打开」走同一条通道。
+    const onReadOnlyLinkClick = (event: MouseEvent) => {
+      if (!readOnlyRef.current) return;
+      const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>(".ProseMirror a[href]") : null;
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") ?? "";
+      if (!href || href.startsWith("#")) return;   // 页内锚点直接放行，浏览器自己滚
+      event.preventDefault();
+      event.stopPropagation();
+      void openUrl(href).catch(() => showNotice("error", en ? "Couldn't open this link" : "没有打开这个链接", 2600));
+    };
+    host.addEventListener("click", onReadOnlyLinkClick, true);
     host.addEventListener("pointerup", onCodeNodePointerUp, true);
     host.addEventListener("scroll", repositionNodeToolbar, { passive: true });
     window.addEventListener("resize", repositionNodeToolbar);
@@ -2679,6 +2720,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       selectedIndices: number[] = [block.index],
       listHierarchy?: BlockMenuState["listHierarchy"],
     ) => {
+      if (readOnlyRef.current) return false;   // 阅读模式不开区块菜单（同上，防止留下吃点击的 scrim）
       if (!block || block.pageTitle || (newDocument && block.index === 0)) return false;
       const indices = [...new Set(selectedIndices)].filter((index) => index >= 0 && index < block.count).sort((a, b) => a - b);
       const liveTitleIndex = crepe.editor.action((ctx) => pageTitleIndex(ctx.get(editorViewCtx).state.doc));
@@ -2768,6 +2810,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       return block ? openBlockMenuAt(block, rect, selectedIndices, listHierarchy) : false;
     };
     const openBrowseInsertMenuForOperation = (operation: HTMLElement, clientY: number) => {
+      if (readOnlyRef.current) return false;   // 阅读模式不开插入菜单
       const block = blockAtViewportY(clientY);
       if (!block || !canOpenBrowseInsertMenu({
         isTextblock: block.isTextblock,
@@ -3540,6 +3583,10 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     void crepe.create().then(() => {
       if (destroyed) return;
       const view = crepe.editor.action((ctx) => ctx.get(editorViewCtx));
+      // 只读落在 ProseMirror 的 view 上：editable=false 会一次挡掉打字、粘贴、拖放和
+      // 键盘快捷键（PM 的 keydown / DOM 输入处理只在 editable 为真时挂载，见
+      // prosemirror-view _dispatchEvent）。光靠 CSS 挡不住命令，所以这一条是主干。
+      view.setProps({ editable: () => !readOnlyRef.current });
       selectionToolbarEditorView = view;
       const readyMarkdown = crepe.editor.action((ctx) => serializeEditorMarkdown(
         ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc),
@@ -3739,6 +3786,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
       host.removeEventListener("focusin", onLinkFocusIn, true);
       window.removeEventListener("pointerdown", closeLinkToolbarOutside, true);
       host.removeEventListener("click", onPortableNodeClick, true);
+      host.removeEventListener("click", onReadOnlyLinkClick, true);
       host.removeEventListener("pointerdown", onAdvancedTableCellPointerDown, true);
       host.ownerDocument.removeEventListener("pointermove", onAdvancedTableCellPointerMove, true);
       host.ownerDocument.removeEventListener("pointerup", onAdvancedTableCellPointerUp, true);
@@ -3772,6 +3820,16 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceMode]); // 手动切换源码/可视化时重建编辑器；其余依赖仍由 key 驱动
+
+  // 阅读 ⇄ 编辑：不重建编辑器（重建会丢撤销历史、闪一下），只改 ProseMirror 的 editable，
+  // 正文 DOM 和排版一个字节都不动。
+  useEffect(() => {
+    const crepe = crepeRef.current;
+    if (!crepe) return;   // 还没就绪时忽略：挂载那一步已经带上当前值
+    try {
+      crepe.editor.action((ctx) => ctx.get(editorViewCtx).setProps({ editable: () => !readOnly }));
+    } catch { /* 编辑器正在销毁 */ }
+  }, [readOnly]);
 
   const closeLinkDisplayPicker = (restoreFocus = true) => {
     linkTitleAbortRef.current?.abort();
@@ -4937,7 +4995,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, Props>(function Wys
   };
 
   return (
-    <div className={`editor-canvas${headingOutlineOpen ? " has-outline-open" : ""}`}>
+    <div className={`editor-canvas${headingOutlineOpen ? " has-outline-open" : ""}${readOnly ? " is-readonly" : ""}`}>
       <div id="omia-block-state-status" className="editor-block-state-status" role="status" aria-live="polite" />
       <div ref={ref} className={`milkdown-host h-full overflow-auto ${lang === "en" ? "lang-en" : "lang-zh"}`} />
       {

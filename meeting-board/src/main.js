@@ -22,6 +22,10 @@ let toastEl = null;
 
 let editorRoot = null;
 let editorGeneration = 0;
+// 阅读 / 编辑（默认阅读态，见 setReading）。重渲染入口：换模式不重建编辑器，只改一个 prop。
+let reading = true;
+let renderBoardEditor = null;
+let readHintShown = false;
 let doc = '';           // 编辑器里的当前内容（用的是编辑器自己的写法）
 let rawDoc = '';        // 磁盘上的原文：保存时靠它把没改过的块原样填回去
 let baselineDoc = null; // 编辑器就绪时的序列化；null = 还没取到基线
@@ -80,6 +84,7 @@ async function fetchSessions() {
   if (!response.ok || !data?.ok) throw new Error(data?.error || `HTTP ${response.status}`);
   return data.sessions || [];
 }
+
 
 async function fetchBoard() {
   const suffix = selectedSessionId ? `?sessionId=${encodeURIComponent(selectedSessionId)}` : '';
@@ -279,6 +284,33 @@ function closeMenu() {
   $('sessionBtn').setAttribute('aria-expanded', 'false');
 }
 
+// 阅读 / 编辑切换（默认阅读态）。
+// 白板是投屏现场：拿标 / 拖块 / 滑到正文上敲一下就改了内容，而且自动保存、没有后悔药。
+// 所以默认不给改，要改先点一下「编辑」——这句也是 xiaoer-omia 的做法。
+function setReading(next) {
+  if (reading === next) return;
+  reading = next;
+  renderBoardEditor?.();   // 同一个编辑器实例上换只读/可编辑，不重新挂载
+  syncReadToggle();
+}
+
+/** 按钮本身承担状态显示：阅读态写「编辑」（你一旦能做的事），编辑态写「阅读」。 */
+function syncReadToggle() {
+  const btn = $('readToggle');
+  if (!btn) return;
+  btn.textContent = reading ? '编辑' : '阅读';
+  btn.title = reading ? '进入编辑，可以直接改白板内容（⌘E）' : '回到阅读，只看看不改（⌘E）';
+  btn.setAttribute('aria-pressed', String(!reading));
+  btn.dataset.editing = String(!reading);
+}
+
+/** 阅读态下有人试图直接改内容时说一句 —— 否则就是「敲键盘没反应」。每个阅读阶段只说一次。 */
+function hintReadOnly() {
+  if (readHintShown || !reading) return;
+  readHintShown = true;
+  toast('阅读模式：点右上角「编辑」才能修改');
+}
+
 async function initEditor() {
   // 上游编辑器是非受控组件：初始内容只在挂载时读取，切换会议时由调用方卸载并重建。
   editorReady = false;
@@ -287,9 +319,12 @@ async function initEditor() {
   const initialValue = extractFrontMatter(doc).body || '';
   // 上游编辑器只接收正文，Front Matter 仍由外层分块保存逻辑负责回填。
   doc = initialValue;
+  // 换场次回到阅读态（和 xiaoer-omia 一致：换文件默认阅读）。投屏中误碰修改比多按一下「编辑」贵得多。
+  reading = true;
+  readHintShown = false;
   editorRoot = createRoot(editorEl);
   await new Promise((resolve, reject) => {
-    editorRoot.render(createElement(BoardEditor, {
+    const boardProps = {
       value: initialValue,
       onChange: (markdown) => {
         if (generation !== editorGeneration || sessionAtInit !== selectedSessionId) return;
@@ -317,7 +352,12 @@ async function initEditor() {
         showStatus(reason || '编辑器初始化失败');
         reject(new Error(reason || '编辑器初始化失败'));
       },
-    }));
+    };
+    // readOnly 从 reading 现取：同一个编辑器实例上只是切一个 prop，不重新挂载
+    // （重建会丢掉撤销历史、还会闪一下）。
+    renderBoardEditor = () => editorRoot.render(createElement(BoardEditor, { ...boardProps, readOnly: reading }));
+    renderBoardEditor();
+    syncReadToggle();
   });
 }
 
@@ -330,6 +370,7 @@ async function init() {
           <svg class="board-caret" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <span class="board-status" id="status" hidden></span>
+        <button class="board-read-toggle" id="readToggle" aria-pressed="false" data-editing="false">编辑</button>
         <div class="board-menu" id="sessionMenu" hidden></div>
       </div>
       <div class="editor-wrap"><div id="editor"></div></div>
@@ -357,6 +398,19 @@ async function init() {
   await loadBoard(true);
   await initEditor();
   $('sessionBtn').onclick = (event) => { event.stopPropagation(); if ($('sessionMenu').hidden) openMenu(); else closeMenu(); };
+  $('readToggle').onclick = () => setReading(!reading);
+  // ⌘E / Ctrl+E：和 xiaoer-omia 同一个快捷键。在输入框里不拦（会议定义那四个字段还是要能打字的）。
+  document.addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+    if (event.key.toLowerCase() !== 'e') return;
+    const target = event.target;
+    if (target instanceof HTMLElement && (target.closest('input, textarea, select') || target.isContentEditable)) return;
+    event.preventDefault();
+    setReading(!reading);
+  });
+  // 阅读态里直接上手改内容（点正文 / 敲键盘）时给一句提示
+  editorEl.addEventListener('pointerdown', hintReadOnly, true);
+  editorEl.addEventListener('keydown', hintReadOnly, true);
   $('saveDefBtn').onclick = async () => toast((await saveDef(readForm())) ? '定义已保存' : '保存失败');
   document.addEventListener('click', (event) => { if (!event.target.closest('.board-bar')) closeMenu(); });
   pollTimer = setInterval(async () => {

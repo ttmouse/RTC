@@ -343,6 +343,50 @@
 .milkdown-host.selection-toolbar-has-text .milkdown:has(.milkdown-link-edit[data-show="true"]) .milkdown-toolbar[data-show="true"] {
   display: flex !important;
 }
+
+/* ── 阅读模式（`.editor-canvas.is-readonly`）────────────────────────────
+   白板默认是阅读态，点「编辑」才允许改（参照 xiaoer-omia 的 officeEditing）。
+
+   拦改的主干不在这个文件：真正管用的是 ProseMirror 的 editable=false，见 WysiwygEditor
+   里 crepe.create 之后那行。editable=false 能一次挡掉打字、粘贴、拖放和键盘快捷键，
+   但**管不住浮层上的命令按钮**（命令是直接派发事务的，不经过可编辑性检查）。
+   所以这里把带命令的浮层一并收起来。
+
+   只收「能改东西」的东西：正文排版、目录、折叠、选区、复制全部照旧。
+   阅读态与编辑态必须长得一模一样，否则用户会以为「阅读模式下少看了内容」。 */
+.editor-canvas.is-readonly .milkdown-block-handle,      /* 块左侧 + 与六点拖拽 */
+.editor-canvas.is-readonly .milkdown-toolbar,           /* 选区格式化工具栏 */
+.editor-canvas.is-readonly .milkdown-slash-menu,        /* Crepe 原生斜杠菜单 */
+.editor-canvas.is-readonly .milkdown-link-preview,      /* 链接预览里的编辑/移除 */
+.editor-canvas.is-readonly .milkdown-link-edit,
+.editor-canvas.is-readonly .editor-link-toolbar,
+.editor-canvas.is-readonly .editor-link-display-picker,
+.editor-canvas.is-readonly .editor-link-display-scrim,
+.editor-canvas.is-readonly .editor-node-toolbar,        /* 节点工具栏（改语言/换图/删除） */
+.editor-canvas.is-readonly .editor-code-language-picker,
+.editor-canvas.is-readonly .editor-insert-menu,
+.editor-canvas.is-readonly .editor-insert-menu-scrim,
+.editor-canvas.is-readonly .editor-browse-insert-menu,
+.editor-canvas.is-readonly .editor-slash-empty-state,
+.editor-canvas.is-readonly .editor-table-size-picker,
+.editor-canvas.is-readonly .editor-block-menu,
+.editor-canvas.is-readonly .editor-block-menu-scrim,
+.editor-canvas.is-readonly .editor-rich-link-dialog,
+.editor-canvas.is-readonly .editor-rich-link-scrim,
+.editor-canvas.is-readonly .editor-block-drag-ghost,    /* 拖块时的占位预览 */
+.editor-canvas.is-readonly .editor-block-drop-line,
+.editor-canvas.is-readonly .editor-list-drop-indicator,
+.editor-canvas.is-readonly .editor-table-cell-selection-overlay,  /* 表格格选中框：只服务于改单元格 */
+.editor-canvas.is-readonly .editor-block-selection-overlay,
+.editor-canvas.is-readonly .editor-block-menu-target-overlay,
+.editor-canvas.is-readonly .editor-advanced-table-picker,
+.editor-canvas.is-readonly .editor-table-transition {
+  display: none !important;
+}
+/* 待办勾选是「改内容」：外观留着（它本来就在表达状态），但点不动。 */
+.editor-canvas.is-readonly input[type="checkbox"] {
+  pointer-events: none;
+}
 .milkdown-host .milkdown-toolbar {
   box-sizing: border-box;
   max-width: calc(100vw - 24px);
