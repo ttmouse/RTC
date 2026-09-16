@@ -512,6 +512,19 @@
         border:1px solid var(--rule); border-radius:3px; padding:0 4px; }
   .cmdFootNote{ margin-top:18px; padding:14px 0 0; border-top:1px solid var(--rule);
         font-size:11px; color:var(--ink-faint); }
+  /* 过去这里直接使用 button 默认样式，点击后会出现浏览器灰底和整段粗体，像选区而不像纸墨界面。 */
+  .cmdAgentPrompt{ display:block; width:100%; margin-top:14px; padding:13px 14px 12px; border:1px solid var(--rule);
+        border-radius:4px; background:var(--paper-2); text-align:left; font:inherit; color:var(--ink);
+        cursor:pointer; appearance:none; -webkit-appearance:none; transition:border-color .15s, background .15s; }
+  .cmdAgentPrompt:hover{ border-color:var(--ink-soft); background:var(--paper); }
+  .cmdAgentPrompt:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  .cmdAgentPromptHeader{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .cmdAgentPromptLabel{ font-size:11px; font-weight:700; letter-spacing:.04em; color:var(--ink-soft); }
+  .cmdAgentPromptCopy{ flex:none; color:var(--seal); font-size:10px; }
+  .cmdAgentPromptText{ display:block; margin-top:9px; font-size:12px; line-height:1.75; font-weight:400; color:var(--ink); }
+  .cmdAgentPromptText code{ font-size:11px; }
+  .cmdAgentPrompt.copied{ border-color:var(--ink-soft); }
+  .cmdAgentPrompt.copied .cmdAgentPromptCopy{ font-weight:700; }
   .cmdRows{ display:flex; flex-direction:column; gap:6px; }
   .cmdEmpty{ padding:8px 0; font-size:12px; color:var(--ink-faint); }
   .cmdEditRow{ display:flex; align-items:center; gap:8px; }

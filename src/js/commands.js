@@ -1,8 +1,9 @@
-import { toast } from './ui.js';
+import { toast, esc } from './ui.js';
 import { state } from './state.js';
 import { fetchLocalConfig } from './storage.js';
 import { apiUrl } from './api.js';
-import { pasteToCursor } from './clipboard.js';
+import { pasteToCursor, copyToSystemClipboard } from './clipboard.js';
+import { getFrontmostApp } from './frontmost.js';
 
 // 默认指令表：仅在 commands.json 缺失时作为种子写入。
 // 此后一切以数据目录下的 commands.json 为准（用户或外部 AI Agent 可直接改文件）。
@@ -91,7 +92,6 @@ export async function initLearnedCommands() {
 
 // 动作值 → 人话。两种值：按键表达式（Enter / Meta+Shift+KeyK）和功能码（meeting_summary）。
 // 未知值原样显示，新增动作时面板不会失真。
-const FUNCTION_LABELS = { meeting_summary: '生成会议纪要' };
 // 老表里存的是动作码，显示和执行前都先翻译成表达式
 const LEGACY_KEY_ALIAS = { enter: 'Enter', arrow_down: 'ArrowDown', arrow_up: 'ArrowUp' };
 const MOD_SYMBOLS = { Meta: '⌘', Ctrl: '⌃', Alt: '⌥', Shift: '⇧' };
@@ -117,7 +117,7 @@ function formatShortcut(expr) {
 /** 动作值 → 界面上显示的名字 */
 function actionLabel(value) {
   if (!value) return '选择按键';
-  if (FUNCTION_LABELS[value]) return FUNCTION_LABELS[value];
+  if (value === 'meeting_summary') return '生成会议纪要';
   return formatShortcut(LEGACY_KEY_ALIAS[value] || value);
 }
 
@@ -149,9 +149,7 @@ let cmdAppsPending = null;
 let cmdPickerEl = null;
 let cmdPickerCleanup = null;
 
-function escHtml(s) {
-  return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
+
 
 /** 应用候选（GET /api/apps）：返回的 name 就是包名，不是显示名 */
 function loadAppList() {
@@ -169,7 +167,7 @@ function loadAppList() {
 function commandRowHtml(section, key, value) {
   let target;
   if (section === 'snippets') {
-    target = `<input class="cmdInput cmdValueIn" value="${escHtml(value)}" placeholder="要发出去的话" spellcheck="false">`;
+    target = `<input class="cmdInput cmdValueIn" value="${esc(value)}" placeholder="要发出去的话" spellcheck="false">`;
   } else {
     const label = section === 'actions' ? actionLabel(value) : (value || '选择应用');
     // 功能块的目标不能改：值是程序里的功能码，换一个等于换个不存在的功能。做成不可点的
@@ -178,10 +176,10 @@ function commandRowHtml(section, key, value) {
     const tip = locked ? `这个功能由程序实现，只能改左边的说法（${label}）` : label;
     // title：右边这一栏窄，长应用名（如 Karabiner-VirtualHIDDevice-Manager）会被截断，
     // 鼠标停留一下能看到全名
-    target = `<button type="button" class="cmdTargetBtn${value ? '' : ' empty'}${locked ? ' locked' : ''}" data-value="${escHtml(value)}" title="${escHtml(tip)}"${locked ? ' aria-disabled="true"' : ''}>${escHtml(label)}</button>`;
+    target = `<button type="button" class="cmdTargetBtn${value ? '' : ' empty'}${locked ? ' locked' : ''}" data-value="${esc(value)}" title="${esc(tip)}"${locked ? ' aria-disabled="true"' : ''}>${esc(label)}</button>`;
   }
   return `<div class="cmdEditRow" data-section="${section}">`
-    + `<input class="cmdInput cmdPhraseIn" value="${escHtml(key)}" placeholder="说法，多个用 ｜ 隔开" spellcheck="false">`
+    + `<input class="cmdInput cmdPhraseIn" value="${esc(key)}" placeholder="说法，多个用 ｜ 隔开" spellcheck="false">`
     + `<span class="cmdArrowTxt">→</span>${target}`
     + `<button type="button" class="cmdIconBtn cmdDelBtn" data-act="del" title="删除这条" aria-label="删除这条">${CMD_ICON_TRASH}</button>`
     + `</div>`;
@@ -320,8 +318,8 @@ function openCommandPicker(anchor, items, current, { searchable = false, record 
       ? items.filter((it) => it.label.toLowerCase().includes(kw) || (it.sub || '').toLowerCase().includes(kw))
       : items;
     list.innerHTML = shown.length
-      ? shown.map((it) => `<button type="button" class="cmdPickItem${it.value === current ? ' on' : ''}" data-value="${escHtml(it.value)}">`
-          + `<span>${escHtml(it.label)}</span>${it.sub ? `<span class="pickSub">${escHtml(it.sub)}</span>` : ''}</button>`).join('')
+      ? shown.map((it) => `<button type="button" class="cmdPickItem${it.value === current ? ' on' : ''}" data-value="${esc(it.value)}">`
+          + `<span>${esc(it.label)}</span>${it.sub ? `<span class="pickSub">${esc(it.sub)}</span>` : ''}</button>`).join('')
       : '<div class="cmdPickNone">没找到</div>';
   };
   draw('');
@@ -528,6 +526,20 @@ function bindCommandPage() {
   cmdPageBound = true;
 
   page.addEventListener('click', (e) => {
+    const prompt = e.target.closest('#cmdAgentPrompt');
+    if (prompt) {
+      const text = prompt.querySelector('.cmdAgentPromptText')?.textContent?.trim();
+      if (text) copyToSystemClipboard(text);
+      prompt.classList.add('copied');
+      prompt.querySelector('.cmdAgentPromptCopy').textContent = '已复制';
+      prompt.title = '已复制提示词';
+      setTimeout(() => {
+        prompt.classList.remove('copied');
+        prompt.querySelector('.cmdAgentPromptCopy').textContent = '点击复制';
+        prompt.title = '点击复制提示词';
+      }, 1500);
+      return;
+    }
     const add = e.target.closest('.cmdAddBtn');
     if (add) { addCommandRow(add.dataset.section, add.dataset.box); return; }
     const targetBtn = e.target.closest('.cmdTargetBtn');
@@ -560,6 +572,32 @@ function initCommandMenu() {
   btn.onclick = (e) => { e.stopPropagation(); void openCommandPage(); };
 }
 
+/** 从语音中识别选区 AI 操作（"翻译一下"） */
+function parseSelectionAiCommand(text) {
+  const normalized = normalizePhrase(text);
+  return /^(?:帮我)?翻译一下$/.test(normalized) ? { action: 'translate' } : null;
+}
+
+/** 从当前应用搜索口令提取搜索词（"找到菜花"） */
+function parseCurrentAppSearchCommand(text) {
+  const normalized = String(text || '').trim().replace(/[。！？；，、,.!?;\s]+$/g, '');
+  const match = normalized.match(/^(?:找到|搜索|查找)\s*(.+)$/);
+  const query = match && match[1].trim();
+  return query ? { query } : null;
+}
+
+/** 从复合口令提取应用和搜索词（"打开钉钉，找到紫藤"） */
+function parseAppSearchCommand(text) {
+  const normalized = String(text || '').trim().replace(/[。！？；，、,.!?;\s]+$/g, '');
+  const match = normalized.match(/^(?:打开|启动|开启)\s*(.+?)\s*(?:[，,、]\s*)?(?:找到|搜索|查找)\s*(.+)$/);
+  if (!match) return null;
+  const alias = match[1].trim();
+  const query = match[2].trim();
+  if (!alias || !query) return null;
+  const app = commandCache[alias] || commandCache[alias.toLowerCase()];
+  return app ? { app, alias, query } : null;
+}
+
 /** 从口述文本提取应用名（"打开微信" → "微信"） */
 function parseAppCommand(text) {
   const normalized = String(text || '')
@@ -572,14 +610,14 @@ function parseAppCommand(text) {
 }
 
 /** 执行激活应用，返回 Promise<boolean> */
-function activate(app, label) {
+function activate(app, label, { notify = true } = {}) {
   const invoke = window.__TAURI__?.core?.invoke;
   if (!invoke) {
     toast('应用指令仅支持桌面版');
     return Promise.resolve(false);
   }
   return invoke('activate_app', { app })
-    .then(() => { toast(`已打开${label}`); return true; })
+    .then(() => { if (notify) toast(`已打开${label}`); return true; })
     .catch(error => {
       console.error('[command] 激活应用失败:', error);
       toast(`打开${label}失败：${error}`);
@@ -609,7 +647,7 @@ async function executeEnter() {
 }
 
 /** 按一下某个键（按键类动作）：POST /key/press，值是一个按键表达式 */
-async function executeKey(expr) {
+async function executeKey(expr, { notify = true } = {}) {
   try {
     const r = await fetch(apiUrl('/key/press'), {
       method: 'POST',
@@ -618,14 +656,18 @@ async function executeKey(expr) {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || data.error) {
-      toast('按键失败：' + ((data && data.error) || ('HTTP ' + r.status)));
-      return;
+      if (notify) toast('按键失败：' + ((data && data.error) || ('HTTP ' + r.status)));
+      return false;
     }
-    const name = formatShortcut(LEGACY_KEY_ALIAS[expr] || expr);
-    if (data.warn) toast(`已按 ${name}（若没反应，请检查辅助功能权限）`);
-    else toast(`已按 ${name}`);
+    if (notify) {
+      const name = formatShortcut(LEGACY_KEY_ALIAS[expr] || expr);
+      if (data.warn) toast(`已按 ${name}（若没反应，请检查辅助功能权限）`);
+      else toast(`已按 ${name}`);
+    }
+    return true;
   } catch (e) {
-    toast('按键失败：本机服务未连接');
+    if (notify) toast('按键失败：本机服务未连接');
+    return false;
   }
 }
 
@@ -675,14 +717,110 @@ function runActionCommand(action, phrase) {
     void executeEnter();
     return true;
   }
-  if (FUNCTION_LABELS[action]) {
-    if (action === 'meeting_summary') { void executeMeetingSummary(); return true; }
-    console.warn('[command] 未知功能:', action, '(', phrase, ')');
-    return false;
+  if (action === 'meeting_summary') {
+    void executeMeetingSummary();
+    return true;
   }
   // 其余全当按键表达式（含老表里的 arrow_down / arrow_up，服务端会翻译）
   void executeKey(action);
   return true;
+}
+
+/** 等待应用窗口和搜索框完成切换 */
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const searchSubmitDelay = app => /钉钉|dingtalk/i.test(String(app || '')) ? 1000 : 300;
+
+/** 执行“打开应用 → ⌘F → 输入搜索词 → 回车”的复合口令 */
+async function executeAppSearchCommand({ app, alias, query }) {
+  toast(`正在打开${alias}并搜索“${query}”…`);
+  if (!await activate(app, alias, { notify: false })) return;
+  await wait(700);
+  if (!await executeKey('Meta+KeyF', { notify: false })) return;
+  await wait(250);
+  pasteToCursor(query, false);
+  await wait(searchSubmitDelay(app));
+  await executeKey('Enter', { notify: false });
+  toast(`已在${alias}中搜索“${query}”`);
+}
+
+/** 执行选中文字的 AI 操作，并替换原选区 */
+async function executeSelectionAiCommand({ action }) {
+  const invoke = window.__TAURI__?.core?.invoke;
+  if (!invoke) {
+    toast('选区 AI 操作仅支持桌面版');
+    return;
+  }
+  const { baseUrl, model } = state.aiConfig;
+  if (!baseUrl || !model) {
+    toast('请先在设置中配置 AI 服务');
+    return;
+  }
+
+  toast('正在读取选中文字…');
+  let selected;
+  try {
+    selected = await invoke('read_selected_text');
+  } catch (error) {
+    console.error('[command] 读取选区失败:', error);
+    toast('读取选中文字失败，请检查辅助功能权限');
+    return;
+  }
+  if (!selected || !selected.trim()) {
+    toast('没有识别到选中的文字');
+    return;
+  }
+
+  toast('正在翻译选中文字…');
+  try {
+    const response = await fetch(apiUrl('/api/llm/chat'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl,
+        apiKey: state.aiConfig.apiKey || '',
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: '你是一个翻译工具。若原文主要是中文，翻译成自然、准确的英文；否则翻译成自然、准确的中文。只输出译文，不要解释、不要加引号、不要加标题。',
+          },
+          { role: 'user', content: selected },
+        ],
+        maxTokens: 4096,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok || !data.data) {
+      toast('翻译失败：AI 服务未返回结果');
+      return;
+    }
+    const result = data.data.choices?.[0]?.message?.content?.trim();
+    if (!result) {
+      toast('翻译失败：AI 返回内容为空');
+      return;
+    }
+    pasteToCursor(result, false);
+    toast('已翻译并替换选中文字');
+  } catch (error) {
+    console.error('[command] 选区翻译失败:', error);
+    toast('翻译失败：' + (error.message || 'AI 服务未连接'));
+  }
+}
+
+/** 执行“当前前台应用 → ⌘F → 输入搜索词 → 回车” */
+async function executeCurrentAppSearchCommand({ query }) {
+  const app = await getFrontmostApp();
+  if (!app) {
+    toast('没有识别到当前应用，未执行搜索');
+    return;
+  }
+  toast(`正在${app}中搜索“${query}”…`);
+  if (!await executeKey('Meta+KeyF', { notify: false })) return;
+  await wait(250);
+  pasteToCursor(query, false);
+  await wait(searchSubmitDelay(app));
+  await executeKey('Enter', { notify: false });
+  toast(`已在${app}中搜索“${query}”`);
 }
 
 /**
@@ -690,6 +828,23 @@ function runActionCommand(action, phrase) {
  * 命中即执行并返回 true（该句被消费，不再当普通文本输出）。
  */
 export function tryHandleSpecialCommand(text) {
+  const selectionAi = parseSelectionAiCommand(text);
+  if (selectionAi) {
+    void executeSelectionAiCommand(selectionAi);
+    return true;
+  }
+
+  const appSearch = parseAppSearchCommand(text);
+  if (appSearch) {
+    void executeAppSearchCommand(appSearch);
+    return true;
+  }
+  const currentAppSearch = parseCurrentAppSearchCommand(text);
+  if (currentAppSearch) {
+    void executeCurrentAppSearchCommand(currentAppSearch);
+    return true;
+  }
+
   // 1) 动作指令：整句精确匹配 actions 表（如「发送」→ enter、「总结会议」→ meeting_summary）
   const phrase = normalizePhrase(text);
   if (phrase && phrase.length <= 20) {
@@ -720,6 +875,7 @@ export function tryHandleSpecialCommand(text) {
  * 不阻塞、不吞文本——判定结果只影响后续同款说法的处理。
  */
 export async function learnSpecialCommand(text) {
+  if (parseSelectionAiCommand(text) || parseAppSearchCommand(text) || parseCurrentAppSearchCommand(text)) return;
   const alias = parseAppCommand(text);
   const isMeetingPhrase = MEETING_SUMMARY_RE.test(text);
   if (!alias && !isMeetingPhrase) return;

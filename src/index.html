@@ -376,10 +376,13 @@
       <button type="button" class="sbtn cmdAddBtn" data-section="snippets">+ 添加一条</button>
     </div>
 
-    <div class="cmdDesc cmdFootNote">
-      这张表同时也是一份明文文件，在数据目录的 <code>commands.json</code>，
-      外部工具和你自己的 AI 助手都能直接改它。
-    </div>
+    <button type="button" class="cmdFootNote cmdAgentPrompt" id="cmdAgentPrompt" title="点击复制提示词">
+      <span class="cmdAgentPromptHeader">
+        <span class="cmdAgentPromptLabel">让 AI 帮你配置语音指令</span>
+        <span class="cmdAgentPromptCopy">点击复制</span>
+      </span>
+      <span class="cmdAgentPromptText">请先阅读指南 <code>~/Projects/RTC/docs/voice-command-agent-guide.md</code>，了解 RTC 支持的语音指令类型、配置格式和限制；然后读取并最小化修改配置文件 <code>~/Library/Application Support/com.rtc.transcriber/commands.json</code>，根据我接下来描述的需求，只新增、调整或删除相关条目，不要覆盖其他已有配置。完成后请校验 JSON，并告诉我具体改了什么；如果需求超出 RTC 当前能力，请先说明，不要臆造新的功能。</span>
+    </button>
   </div>
   <div class="s-page-foot">
     <button class="sbtn primary" id="cmdPageSave">保 存</button>

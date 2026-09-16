@@ -268,6 +268,43 @@ fn copy_to_clipboard(text: String) -> Result<String, String> {
     Ok("ok".into())
 }
 
+/// 读取当前应用的选中文本，同时恢复用户原来的剪贴板内容。
+///
+/// 优先走 macOS 辅助功能的 AXSelectedText，不依赖剪贴板是否发生变化；
+/// 某些应用不暴露 AX 选区时，再退回 Cmd+C 方案。
+#[tauri::command]
+fn read_selected_text() -> Result<Option<String>, String> {
+    let accessibility_script = r#"
+        tell application "System Events"
+            set frontApp to first application process whose frontmost is true
+            tell frontApp
+                try
+                    set focusedElement to value of attribute "AXFocusedUIElement"
+                    return value of attribute "AXSelectedText" of focusedElement
+                on error
+                    return ""
+                end try
+            end tell
+        end tell
+    "#;
+    if let Ok(selected) = run_osascript(accessibility_script) {
+        let selected = selected.trim().to_string();
+        if !selected.is_empty() {
+            return Ok(Some(selected));
+        }
+    }
+
+    let previous = read_clipboard()?;
+    run_osascript("tell application \"System Events\" to keystroke \"c\" using command down")?;
+    std::thread::sleep(Duration::from_millis(180));
+    let selected = read_clipboard()?;
+    write_clipboard(&previous)?;
+    if selected.is_empty() || selected == previous {
+        return Ok(None);
+    }
+    Ok(Some(selected))
+}
+
 /// 粘贴文本到当前光标位置（通用粘贴）。
 ///
 /// 只做两件事：把文本写入系统剪贴板，然后无条件向系统发送 Cmd+V。
@@ -867,6 +904,7 @@ pub fn run() {
             paste_text,
             frontmost_app,
             copy_to_clipboard,
+            read_selected_text,
             activate_app,
             reveal_in_finder,
             accessibility_permission,
