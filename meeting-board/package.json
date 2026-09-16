@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "test": "node tests/markdown-block-patch.test.mjs"
   },
   "dependencies": {
-    "@milkdown/crepe": "^7.21.2"
+    "@milkdown/crepe": "^7.21.2",
+    "markdown-it": "^14.3.2"
   },
   "devDependencies": {
     "vite": "^6.0.0"

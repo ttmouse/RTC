@@ -1,4 +1,6 @@
 import { Crepe, CrepeFeature } from '@milkdown/crepe';
+import { getMarkdown } from '@milkdown/kit/utils';
+import { extractFrontMatter, patchMarkdownBlocks } from './markdownBlockPatch.js';
 import './theme/common/style.css';
 import './theme/frame/style.css';
 import './style.css';
@@ -15,7 +17,10 @@ let statusEl = null;
 let toastEl = null;
 
 let crepe = null;
-let doc = '';
+let doc = '';           // 编辑器里的当前内容（用的是编辑器自己的写法）
+let rawDoc = '';        // 磁盘上的原文：保存时靠它把没改过的块原样填回去
+let baselineDoc = null; // 编辑器就绪时的序列化；null = 还没取到基线
+let editorReady = false;
 let def = { background: '', expectedOutput: '', roles: '', boundary: '' };
 let analysis = null;
 let sessions = [];
@@ -83,6 +88,8 @@ function applyBoard(data, initial = false) {
   const savedDoc = typeof data.document === 'string' ? data.document : '';
   const generated = !savedDoc.trim() && analysis ? analysisToMarkdown(analysis) : '';
   doc = savedDoc || generated;
+  rawDoc = savedDoc;
+  baselineDoc = null; // 换了一份文档，旧基线作废，等编辑器重挂完重新取
   seedDocument = !!generated;
   if (initial) fillForm();
 }
@@ -105,13 +112,22 @@ async function loadBoard(initial = false) {
   }
 }
 
-async function saveDoc(text) {
+// 写盘前先过一道「分块保真」：用户没碰过的块原样用磁盘上的原文，只有真改过的块才用编辑器的写法。
+// 还没拿到基线时（编辑器刚重挂、或这份内容是刚生成出来的）没有可对比的参照，只能整篇写。
+async function saveDoc(text, { force = false } = {}) {
+  const payload = baselineDoc === null
+    ? text
+    : patchMarkdownBlocks({ original: rawDoc, baseline: baselineDoc, edited: text }).markdown;
+  // 编辑器自己吐出来的归一化写法也算「没改」——这种时候没必要去写一次盘。
+  if (!force && payload === rawDoc) return;
   try {
     const suffix = selectedSessionId ? `?sessionId=${encodeURIComponent(selectedSessionId)}` : '';
-    await fetch(api(`/api/meeting-board/document${suffix}`), {
+    const response = await fetch(api(`/api/meeting-board/document${suffix}`), {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ document: text }),
+      body: JSON.stringify({ document: payload }),
     });
+    // 只有真的写进去了才更新「磁盘原文」；否则下次会拿一份并不存在的底本去回填。
+    if (response.ok) rawDoc = payload;
   } catch (error) { console.warn('[board] save document:', error); }
 }
 
@@ -180,10 +196,6 @@ async function loadSelectedSession() {
       editorEl.innerHTML = '';
     }
     await initEditor();
-    if (seedDocument) {
-      seedDocument = false;
-      await saveDoc(doc);
-    }
     toast('已切换会议文档');
   } finally { switchingSession = false; }
 }
@@ -217,20 +229,32 @@ function closeMenu() {
 }
 
 async function initEditor() {
+  // 编辑器解析完原文后自己会 dispatch 一次变更（比如补上末尾的段落），那不是用户在改，
+  // 所以拿到基线之前的序列化一律不触发保存。
+  editorReady = false;
   crepe = new Crepe({
     root: editorEl,
-    defaultValue: doc || '',
+    // front matter 编辑器不认（它会把 --- 当成分割线、把字段当正文，存回去就多出一份），
+    // 所以只把正文交给编辑器，front matter 由保存时的 patch 从原文里原样接回。
+    defaultValue: extractFrontMatter(doc).body || '',
     featureConfigs: { [CrepeFeature.Placeholder]: { text: '开始记录会议内容…' } },
   });
   crepe.on((listener) => listener.markdownUpdated((_ctx, markdown) => {
     doc = markdown;
+    if (!editorReady) return;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => saveDoc(markdown), 400);
+    saveTimer = setTimeout(() => void saveDoc(markdown), 400);
   }));
   await crepe.create();
+  // 编辑器就绪后的写法 = 同一份文档的另一种排版，这就是分块保真要的基线。
+  doc = crepe.editor.action(getMarkdown());
+  baselineDoc = doc;
+  editorReady = true;
   if (seedDocument) {
+    // 这份正文是刚由外部分析结果整理出来的，磁盘上还没有对应原文，只能整篇落盘。
     seedDocument = false;
-    await saveDoc(doc);
+    rawDoc = doc;
+    await saveDoc(doc, { force: true });
   }
 }
 
