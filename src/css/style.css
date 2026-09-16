@@ -38,12 +38,15 @@
   /* 状态机：异常状态点，复用既有告警色 */
   #dot.err{ background:var(--seal-deep); }
   .header-actions{ display:flex; align-items:center; gap:10px; }
-  #settingsBtn, #cmdBtn{ background:none; border:none; color:#b7ab92; padding:4px;
+  /* 会议白板入口曾经漏在这条样式之外：浏览器给了它默认的浅灰底和系统边框，
+     夹在语音指令 / 设置两个无边框图标中间像个贴歪的方块。
+     三个入口图标必须始终共用这一组盒模型，新增顶栏图标按钮照抄这行加名字。 */
+  #settingsBtn, #cmdBtn, #meetingBoardBtn{ background:none; border:none; color:#b7ab92; padding:4px;
         border-radius:var(--radius-sm); cursor:pointer; line-height:0;
         display:inline-flex; align-items:center; justify-content:center; }
-  #settingsBtn svg, #cmdBtn svg{ display:block; }
-  #settingsBtn:hover, #cmdBtn:hover{ color:var(--seal); }
-  #settingsBtn:focus-visible, #cmdBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  #settingsBtn svg, #cmdBtn svg, #meetingBoardBtn svg{ display:block; width:15px; height:15px; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  #settingsBtn:hover, #cmdBtn:hover, #meetingBoardBtn:hover{ color:var(--seal); }
+  #settingsBtn:focus-visible, #cmdBtn:focus-visible, #meetingBoardBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
   /* 语音指令入口：右上角图标。点它打开整页的指令管理（#cmdPage）。
      以前这点开是个只读小面板——想看和想改都得去编辑 commands.json，
      而 open -a 认的是 .app 包名，写「飞书」会报应用不存在，改错了很难自查。 */
