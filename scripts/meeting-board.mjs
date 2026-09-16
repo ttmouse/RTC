@@ -231,19 +231,24 @@ function formatDefinition(def) {
 function printBrief(session) {
   const saved = boardOf(session.id);
   const def = saved.definition || {};
+  const existingDoc = typeof saved.document === 'string' ? saved.document.trim() : '';
   console.log(`# 会议白板 · 待分析材料\n`);
   console.log(`## 场次\n- 场次 ID：${session.id}`);
   console.log(`- 时间：${fmtDateTime(session.start)} — ${fmtTime(session.end)}（${fmtDuration(session.end - session.start)}）`);
   console.log(`- 记录条数：${session.count}`);
   console.log(`- 已有分析：${saved.analysis ? `有（${saved.analysis._updatedAt || '时间未知'}），本次写入会覆盖它` : '无'}`);
-  console.log(`- 白板正文：${(saved.document || '').trim() ? '已有内容，用户手写的部分不会被覆盖' : '空，分析结果会直接生成正文'}`);
+  console.log(`- 白板正文：${existingDoc ? `${existingDoc.length} 字。write-document 是**整篇替换**，要留着就把它带进新正文，或写回时加 --append` : '空，分析结果会自动生成一版正文'}`);
   console.log(`\n## 会前定义\n${formatDefinition(def)}`);
   console.log(`\n## 逐字稿\n\n${transcriptText(session)}\n`);
-  console.log(`## 写回方式（分析完成后照做即可）
+  if (existingDoc) {
+    // 把现有正文一并交出来，外部 AI 才有机会合并而不是默默抹掉用户写过的东西。
+    console.log(`## 已有正文（写回时要么带上它，要么用 --append）\n\n${existingDoc}\n`);
+  }
+  console.log(`## 写回方式（照做即可，白板 2 秒内自己刷新）
 
 面板上真正被人看到的是「白板正文」，不是 analysis。所以一次完整的更新要写两样：
 
-1. 结构化结果（机器可读，写在 analysis 里，供后续比对和生成正文）写成 JSON 文件：
+1. 结构化结果（机器可读，供后续比对和生成正文）写成 JSON 文件，字段：
    - title              一句话标题
    - currentTopic       当前话题
    - decisionsReached   已形成结论（数组）
@@ -251,16 +256,50 @@ function printBrief(session) {
    - actionItems        行动项（数组，建议「谁 · 做什么 · 何时」）
    - alignmentStatus    { backgroundCovered, boundaryRespected, roleClarity, expectedOutputProgress }
    - summary            一句话总结
-   缺的字段可以省略，数组元素是字符串最省事。
-   写入：node scripts/meeting-board.mjs write-analysis <结果.json> ${session.id}
+   缺的可以省略，数组元素写成字符串最省事。
 
-2. 正文（Markdown，这是用户在面板里看到的东西）写成 .md 文件：
-   写入：node scripts/meeting-board.mjs write-document <正文.md> ${session.id}
+2. 正文（Markdown，这就是用户在面板里看到的）写成 .md 文件。
+
+写回（场次 ID 省略就是最近一场，这里带上更稳）：
+
+    rtc board write-analysis <结果.json> ${session.id}
+    rtc board write-document <正文.md>  ${session.id}            # 整篇替换，会抵掉已有正文
+    rtc board write-document <正文.md>  ${session.id} --append   # 保留已有正文，接在后面
 
 注：只有该场正文还是空的时候，应用才会拿 analysis 自动生成一版正文；正文一旦有内容，
-就只靠 write-document 更新。已打开的白板窗口不会自己重读文件（只刷场次列表），
-写完要在下拉里重新选一次该场会议，或重开白板窗口。
-要改会前定义用 write-definition。场次 ID 省略就是最近一场。`);
+就只靠 write-document 更新。要改会前定义用 write-definition。`);
+}
+
+/**
+ * update — 外部 AI 迭代白板的单一入口。
+ *
+ * 输出 Brief 材料后直接以 JSON 结尾放写回指令，外部 AI 只需：
+ *   1. 读取 stdout 中的材料
+ *   2. 生成两个临时文件
+ *   3. 执行 write-back 命令
+ */
+function printUpdate(session) {
+  printBrief(session);
+  const sid = session.id;
+  const tag = `[board-update:${sid}]`;
+  console.log(`${tag}
+---
+## ✓ 材料已就绪
+
+场次 ${sid} 的材料已输出完毕。现在的工作流：
+
+### 1️⃣ 分析
+基于上面的会前定义和逐字稿，生成两个文件：
+
+### 2️⃣ 写回
+执行以下两条命令回写白板（白板 2 秒内自动刷新）：
+
+    rtc board write-analysis <结果.json> ${sid}
+    rtc board write-document <正文.md> ${sid}
+${boardOf(sid).document ? '    rtc board write-document <正文.md> ' + sid + ' --append  （已有正文，用 --append 保留）' : ''}
+
+字段要求和注意事项见上文「写回方式」一节。
+`);
 }
 
 // ---------- 写回（走本地服务，服务端串行合并，避免覆盖别的写入者） ----------
@@ -271,7 +310,7 @@ const ENDPOINTS = {
   'write-document': { path: '/api/meeting-board/document', kind: 'markdown', label: '白板正文' },
 };
 
-async function writeBack(command, file, sessionArg, date) {
+async function writeBack(command, file, sessionArg, date, append) {
   const spec = ENDPOINTS[command];
   if (!file) fail(`用法: node scripts/meeting-board.mjs ${command} <文件> [场次ID]`);
   if (!existsSync(file)) fail(`找不到文件：${file}`);
@@ -292,6 +331,18 @@ async function writeBack(command, file, sessionArg, date) {
   // 面板打开的是场次视图，会看不出变化。
   const session = resolveSession(sessionArg, date);
   const endpoint = `${spec.path}?sessionId=${encodeURIComponent(session.id)}`;
+
+  if (command === 'write-document') {
+    // write-document 是整篇替换，而面板上的正文可能是用户自己写的。
+    // 不拦，但一定要说清楚 —— 「我写的东西怎么没了」是查不回来的。
+    const current = boardOf(session.id).document;
+    const existing = typeof current === 'string' ? current.trim() : '';
+    if (append) {
+      body = { document: existing ? `${existing}\n\n${String(body.document).trim()}\n` : body.document };
+    } else if (existing) {
+      console.error(`[board] 提醒：原有正文 ${existing.length} 字被整篇替换（想保留加 --append）`);
+    }
+  }
 
   if (command === 'write-definition') {
     body = {
@@ -353,18 +404,22 @@ function printHelp() {
 
   sessions [--date D] [--json]      当天会议场次列表（* 标出最近一场）
   latest [--date D]                 打印最近一场的场次 ID（纯文本）
-  brief [场次ID] [--date D]         给外部 AI 的完整材料：会前定义 + 逐字稿 + 写回说明
+  update [场次ID] [--date D]         全链路迭代：输出材料 → 等外部 AI 分析 → 写回白板
+                                      等价于 brief + write-analysis + write-document
+  外部 AI 完整工作流：
+    rtc board update                   # 只要这一句，一次完成读 → 分析 → 写回
   transcript [场次ID] [--date D]    该场逐字稿（每行 [HH:MM] 内容）
   show [场次ID] [--json]            该场已保存的定义 / 分析 / 正文
-  write-analysis <JSON文件> [场次ID]    写入外部分析结果
-  write-definition <JSON文件> [场次ID]  写入会前定义
-  write-document <Markdown文件> [场次ID] 写入白板正文
+  write-analysis <JSON文件> [场次ID]     写入外部分析结果
+  write-definition <JSON文件> [场次ID]   写入会前定义
+  write-document <Markdown文件> [场次ID] [--append]
+                                      写入白板正文（整篇替换；--append 则保留原文接在后面）
 
-「更新最新一场会议」只需两步：
-  node scripts/meeting-board.mjs brief            # 拿材料
-  node scripts/meeting-board.mjs write-analysis /tmp/analysis.json
+「把最新一场会议的记录写进白板」的做法（外部 AI 只用记这一句）：
+  rtc board update                         # 读材料 → 分析 → 回写，一步到位
+  背后等价于：brief → 生成分析 → write-analysis → write-document
 
-场次 ID 省略时默认取最近一场。也可通过 rtc 统一入口调用：rtc board <子命令>
+场次 ID 省略时默认取最近一场。也可直接用脚本：node scripts/meeting-board.mjs <子命令>
 环境变量: RTC_DATA_DIR 数据目录 · RTC_URL / RTC_PORT 服务地址（默认 http://127.0.0.1:8931）
 `);
 }
@@ -375,6 +430,7 @@ async function main() {
   const positionals = [];
   let date = '';
   let json = false;
+  let append = false;
 
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
@@ -382,6 +438,8 @@ async function main() {
       date = argv[++i] || '';
     } else if (a === '--json') {
       json = true;
+    } else if (a === '--append') {
+      append = true;
     } else if (a === '--help' || a === '-h') {
       printHelp();
       return;
@@ -435,6 +493,9 @@ async function main() {
       }
       break;
     }
+    case 'update':
+      printUpdate(resolveSession(positionals[0], date));
+      break;
     case 'brief':
       printBrief(resolveSession(positionals[0], date));
       break;
@@ -446,8 +507,10 @@ async function main() {
       break;
     case 'write-analysis':
     case 'write-definition':
+      await writeBack(command, positionals[0], positionals[1], date, false);
+      break;
     case 'write-document':
-      await writeBack(command, positionals[0], positionals[1], date);
+      await writeBack(command, positionals[0], positionals[1], date, append);
       break;
     default:
       fail(`未知命令: ${command}（不带参数运行可看用法）`);

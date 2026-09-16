@@ -41,15 +41,24 @@
 ## 外部写入方式
 
 外部 AI 与白板之间只有一条通道：`rtc board`（脚本本体是 `scripts/meeting-board.mjs`）。
-「更新最近一场会议」是两步：
+「把这场会议的记录写进白板」是三步：
 
 ```text
-rtc board brief                  # 拿材料：会前定义 + 该场逐字稿 + 写回格式说明
-rtc board write-analysis <分析结果.json>   # 写回，面板 2 秒内自动刷新
+rtc board brief                            # 拿材料：会前定义 + 该场逐字稿 + 已有正文 + 写回格式
+                                           # 中间：分析，产出 结果.json + 正文.md
+rtc board write-analysis <结果.json>        # 结构化结果（写进 analysis）
+rtc board write-document <正文.md>          # 正文，这才是用户在面板里看到的东西
 ```
 
-`brief` 把外部 AI 需要的东西一次给全（定义、逐字稿、要写哪些字段、写回命令），
+两个必须记住的点：
+
+- **只写 analysis，白板不会变。** 面板只渲染正文，analysis 只在该场正文为空时被用来生成一版正文。
+- **`write-document` 是整篇替换。** 要保留已有正文就加 `--append`（新内容接在后面）；
+  整篇替换一个非空正文时 CLI 会在 stderr 提醒一次。`brief` 会把已有正文整段打出来，方便合并。
+
+`brief` 把外部 AI 需要的东西一次给全（定义、逐字稿、已有正文、要写哪些字段、写回命令），
 外部 AI 不需要自己拼上下文，也不需要先问一遍场次编号。
+Agent 侧的一站式说明书沉淀在 `~/.agents/skills/rtc-meeting-board/SKILL.md`。
 
 其余子命令：
 
@@ -59,7 +68,7 @@ rtc board latest [--date D]       最近一场的场次 ID（纯文本，可喂�
 rtc board transcript [场次ID]     该场逐字稿
 rtc board show [场次ID] [--json]  该场已保存的定义 / 分析 / 正文
 rtc board write-definition <JSON> [场次ID]
-rtc board write-document <Markdown> [场次ID]
+rtc board write-document <Markdown> [场次ID] [--append]
 ```
 
 场次 ID 省略时默认取「最近一场」。给了 ID 时由 ID 反推日期再定位，

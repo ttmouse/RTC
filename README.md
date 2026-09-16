@@ -294,16 +294,23 @@ ec rtc prompt
 ### 会议白板（外部 AI 读写）
 
 白板分两层：应用只管「记录、保存、加载、展示」，理解会议交给外部 AI。
-CLI 把外部 AI 那半条链路串好了，**「更新最近一场会议」只需两步**：
+CLI 把外部 AI 那半条链路串好了，**「把这场会议的记录写进白板」三步**：
 
 ```bash
-# 步骤 1：拿材料（会前定义 + 该场逐字稿 + 写回格式说明，一次拿全）
+# 步骤 1：拿材料（会前定义 + 该场逐字稿 + 已有正文 + 写回格式，一次拿全）
 rtc board brief
 
-# 步骤 2：回写。面板上人看到的是「正文」，所以一次完整更新写两样：
+# 步骤 2：分析，产出 analysis.json（结构化）和 body.md（正文）
+
+# 步骤 3：写回。面板上人看到的是「正文」，所以两个都要写
 rtc board write-analysis /tmp/analysis.json   # 结构化结果
 rtc board write-document /tmp/body.md        # 正文（Markdown）
 ```
+
+`write-document` 是整篇替换；要保留已有正文就加 `--append`（新内容接在后面）。
+
+**Agent 侧的一站式说明书**：`~/.agents/skills/rtc-meeting-board/SKILL.md`
+（Cindy / Claude Code 都会自动加载）。
 
 场次 ID 省略时默认就是「最近一场」，不用手工复制。其余子命令：
 
@@ -316,7 +323,7 @@ rtc board write-document /tmp/body.md        # 正文（Markdown）
 | `rtc board show [场次ID] [--json]` | 该场已保存的定义 / 分析 / 正文 |
 | `rtc board write-analysis <JSON> [场次ID]` | 写入外部分析结果（结构化，机器可读） |
 | `rtc board write-definition <JSON> [场次ID]` | 写入会前定义 |
-| `rtc board write-document <Markdown> [场次ID]` | 写入白板正文 |
+| `rtc board write-document <Markdown> [场次ID] [--append]` | 写入白板正文（整篇替换；`--append` 保留原文接在后面） |
 
 读的部分直接读本地文件（应用没开也能用）；写回走本地服务，由服务端串行合并，
 场次切分规则（静默 5 分钟）与面板完全一致。
@@ -328,6 +335,9 @@ rtc board write-document /tmp/body.md        # 正文（Markdown）
 不会再改正文，所以一次完整更新要 analysis + document 都写。
 
 直接调脚本也可以：`node scripts/meeting-board.mjs brief`。
+`rtc` 入口在 `~/bin/RTC`（macOS 大小写不敏感，`rtc` 和 `RTC` 是同一个文件）：
+第一段是 `status/config/llm/act/commands/board/transcript` 时走 `scripts/rtc.mjs`，
+其余（`--minutes` / `--sessions` / `-t` 等）照旧走 `scripts/transcript.mjs`。
 
 ### API
 
