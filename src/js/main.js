@@ -191,6 +191,58 @@ $('meetingBoardBtn').onclick = () => {
   if (!w) toast('弹窗被拦截，请允许弹出窗口或手动打开 http://localhost:8931/meeting-board/');
 };
 
+// ---------- 推荐 RTC 居中弹窗 ----------
+function closeSharePopover() {
+  $('sharePopover').classList.add('hidden');
+  $('shareBtn').classList.remove('on');
+  $('shareBtn').setAttribute('aria-expanded', 'false');
+}
+
+$('shareBtn').onclick = () => {
+  const popover = $('sharePopover');
+  if (!popover.classList.contains('hidden')) { closeSharePopover(); return; }
+  popover.classList.remove('hidden');
+  $('shareBtn').classList.add('on');
+  $('shareBtn').setAttribute('aria-expanded', 'true');
+};
+
+$('sharePopoverClose').onclick = closeSharePopover;
+
+// 点击遮罩关闭弹窗
+document.addEventListener('click', (e) => {
+  const popover = $('sharePopover');
+  if (popover.classList.contains('hidden')) return;
+  if (e.target.closest('.sharePopover-panel') || e.target.closest('#shareBtn')) return;
+  closeSharePopover();
+});
+
+// 点击文案段落复制
+document.addEventListener('click', (e) => {
+  const item = e.target.closest('.sharePopover-item');
+  if (!item) return;
+  // 从可见内容提取文案，<br> 转成实际换行
+  const textEl = item.querySelector('.sharePopover-item-text');
+  if (!textEl) return;
+  const text = textEl.innerHTML
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .trim();
+  navigator.clipboard.writeText(text).then(() => {
+    item.classList.add('copied');
+    setTimeout(() => item.classList.remove('copied'), 1500);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  });
+});
+
 $('settingsBtn').onclick = () => showSettings(true);
 $('settingsClose').onclick = () => showSettings(false);
 $('settingsSaveBtn').onclick = async () => {

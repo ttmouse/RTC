@@ -32,6 +32,41 @@
     </button>
   </div>
 </header>
+
+<!-- 推荐 RTC 浮层（居中弹窗） -->
+<div id="sharePopover" class="hidden" role="dialog" aria-label="推荐 RTC">
+  <div class="sharePopover-overlay"></div>
+  <div class="sharePopover-panel">
+    <div class="sharePopover-head">
+      <span>推荐 RTC</span>
+      <button id="sharePopoverClose" title="关闭" aria-label="关闭">&times;</button>
+    </div>
+    <div class="sharePopover-body">
+      <p class="sharePopover-hint">觉得好用？选一段文案，点一下就能复制，转发给朋友或同事：</p>
+      <div class="sharePopover-texts">
+        <div class="sharePopover-item">
+          <div class="sharePopover-item-body">
+            <div class="sharePopover-item-title">推荐给同事 / 朋友</div>
+            <div class="sharePopover-item-text">推荐你试试 RTC（实时逐字稿），一款免费开源的语音转写工具。<br><br>它能实时把你说的话转成文字，支持百炼云端、本地 SenseVoice、Qwen3-ASR 三种引擎自由切换，离线也能用，数据不出本机，隐私完全放心。<br><br>它还可以语音控制应用——说「打开飞书」就切过去，说一句指令就替你敲快捷键或粘贴固定短语发出去。<br><br>开会、写代码、做笔记，都不用再动手打字了。</div>
+          </div>
+        </div>
+        <div class="sharePopover-item">
+          <div class="sharePopover-item-body">
+            <div class="sharePopover-item-title">安利给效率党</div>
+            <div class="sharePopover-item-text">安利一个很好用的语音工具 RTC：<br><br>开会时实时把语音转成文字，会后直接复制粘贴到文档里，再也不用边听边记了。它支持本地和云端多种识别引擎，离线也能用。<br><br>还能设置关键词替换，专业术语不再识别错。<br><br>更厉害的是它可以语音控制电脑——说「打开微信」「发送消息」就能操作，配合自动粘贴和自动发送，写代码、写报告全程不用碰键盘。<br><br>免费开源，强烈推荐。</div>
+          </div>
+        </div>
+        <div class="sharePopover-item">
+          <div class="sharePopover-item-body">
+            <div class="sharePopover-item-title">推荐给程序员 / 深度用户</div>
+            <div class="sharePopover-item-text">分享一个最近在用的效率工具 RTC（实时逐字稿）。简单说就是：你说的话实时变成文字，准确率很高。<br><br>几种用法：<br><br>一是开会/访谈时做实时记录，结束后直接拿到完整文稿。<br><br>二是语音控制电脑——设好关键词，说一句就替你打开应用、敲快捷键或粘贴固定文本发出去，写代码时省掉大量上下文切换。<br><br>三是配合智能纠错和关键词替换，识别结果可以直接用。<br><br>支持本地运行无需联网，数据全程本地处理，隐私安全。完全免费开源，值得一试。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="err"></div>
 
 <div id="updateBanner" class="hidden">
