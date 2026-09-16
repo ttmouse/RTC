@@ -956,6 +956,22 @@ const server = http.createServer((req, res) => {
   // ========== 会议白板（Meeting Board） ==========
 
   const MEETING_BOARD_PATH = path.join(DATA_ROOT, 'meeting-board.json');
+  const MEETINGS_DIR = path.join(DATA_ROOT, 'meetings');
+
+  function sessionDocPath(id) {
+    return path.join(MEETINGS_DIR, `${id}.md`);
+  }
+
+  function writeSessionDoc(id, content) {
+    if (!id || typeof content !== 'string') return;
+    const filePath = sessionDocPath(id);
+    fs.mkdir(MEETINGS_DIR, { recursive: true }, (err) => {
+      if (err) { console.warn('[board] mkdir meetings:', err.message); return; }
+      fs.writeFile(filePath, content, 'utf-8', (writeErr) => {
+        if (writeErr) console.warn('[board] write session doc:', writeErr.message);
+      });
+    });
+  }
 
   function readMeetingBoard() {
     try { return JSON.parse(fs.readFileSync(MEETING_BOARD_PATH, 'utf-8')) || {}; } catch { return {}; }
@@ -998,22 +1014,27 @@ const server = http.createServer((req, res) => {
     const sessions = detectSessions(readBoardDayEvents(date), MEETING_SILENCE_SEC);
     const board = readMeetingBoard();
     const stored = board.sessions || {};
-    const latestId = sessions.length ? sessionInfo(sessions.at(-1)).id : '';
-    // 兼容第一阶段的单会议数据：首次加载时把旧数据归档到当天最新场次。
-    if (latestId && !stored[latestId] && (board.analysis || board.document || board.definition)) {
-      board.sessions = board.sessions || {};
-      board.sessions[latestId] = { definition: board.definition || defaultDefinition, analysis: board.analysis || null, document: board.document || '' };
-      board.activeSessionId = latestId;
-      stored[latestId] = board.sessions[latestId];
-      void writeMeetingBoard(board);
-    }
+    // 旧版顶层字段只保留给未带 sessionId 的兼容读取，不能在这里复制给新场次。
+    // 否则每次出现新场次，旧白板正文都会被伪装成这场会议的内容。
     const result = sessions.map((session) => {
       const info = sessionInfo(session);
       const saved = stored[info.id] || {};
-      return { ...info, title: saved.title || saved.analysis?.title || `会议 ${formatLocal(session.start).slice(11)}`, hasAnalysis: !!saved.analysis, hasDocument: typeof saved.document === 'string' && !!saved.document.trim() };
+      const docPath = sessionDocPath(info.id);
+      // 自动同步：session 有文档但 .md 文件缺失时补写
+      if (saved && typeof saved.document === 'string' && saved.document.trim()) {
+        writeSessionDoc(info.id, saved.document);
+      }
+      return { ...info, title: saved.title || saved.analysis?.title || `会议 ${formatLocal(session.start).slice(11)}`, hasAnalysis: !!saved.analysis, hasDocument: typeof saved.document === 'string' && !!saved.document.trim(), docPath };
     });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, date, sessions: result }));
+    return;
+  }
+
+  // GET /api/meeting-board/board-path — 返回 meeting-board.json 的绝对路径
+  if (req.method === 'GET' && boardPath === '/api/meeting-board/board-path') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, path: MEETING_BOARD_PATH }));
     return;
   }
 
@@ -1022,7 +1043,8 @@ const server = http.createServer((req, res) => {
     const board = readMeetingBoard();
     const id = boardUrl.searchParams.get('sessionId');
     const saved = id && board.sessions && board.sessions[id];
-    const legacy = !id || (!saved && id === board.activeSessionId);
+    // 明确请求某个尚未保存内容的场次时必须返回空白，不能回落到旧版顶层正文。
+    const legacy = !id;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
@@ -1076,6 +1098,9 @@ const server = http.createServer((req, res) => {
         board.activeSessionId = id;
       } else board.document = document;
       writeMeetingBoard(board).then(() => {
+        // 同时写入独立的 .md 文件（非阻塞）
+        if (id && document) writeSessionDoc(id, document);
+        else if (!id && document) writeSessionDoc(board.activeSessionId || '', document);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true }));
       }).catch((e) => {

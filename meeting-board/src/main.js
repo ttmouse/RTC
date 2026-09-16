@@ -77,14 +77,18 @@ function analysisToMarkdown(value) {
   return `# ${value.title || value.currentTopic || '会议记录'}\n\n## 当前话题\n\n${value.currentTopic || '待补充'}\n${list('已形成结论', value.decisionsReached)}${list('待决问题', value.openQuestions)}${list('行动项', value.actionItems)}\n## 对齐状态\n\n- 背景覆盖：${s.backgroundCovered ? '是' : '否'}\n- 讨论边界遵守：${s.boundaryRespected ? '是' : '否'}\n- 角色分工清晰：${s.roleClarity ? '是' : '否'}\n- 预期产出进展：${s.expectedOutputProgress || '待补充'}\n\n${value.summary ? `> ${value.summary}\n` : ''}`.trim();
 }
 
+function localDateStamp(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 async function fetchSessions() {
-  const date = new Date().toISOString().slice(0, 10);
+  // 事件按本地日期分文件；不能用 toISOString()，否则午夜附近会读到 UTC 的另一天。
+  const date = localDateStamp();
   const response = await fetch(api(`/api/meeting-board/sessions?date=${date}`), { cache: 'no-store' });
   const data = await response.json();
   if (!response.ok || !data?.ok) throw new Error(data?.error || `HTTP ${response.status}`);
   return data.sessions || [];
 }
-
 
 async function fetchBoard() {
   const suffix = selectedSessionId ? `?sessionId=${encodeURIComponent(selectedSessionId)}` : '';
@@ -198,12 +202,21 @@ function currentSession() {
 function renderSessionTitle() {
   const session = currentSession();
   $('sessionName').textContent = session ? session.title : '今天还没有识别出的会议';
+  // 同步顶栏的复制按钮
+  const copyBtn = $('boardCopyBtn');
+  const docPath = session && (sessions.find((s) => s.id === selectedSessionId)?.docPath || '');
+  if (docPath) {
+    copyBtn.hidden = false;
+    copyBtn.dataset.path = docPath;
+  } else {
+    copyBtn.hidden = true;
+  }
 }
 
 function renderMenu() {
   const menu = $('sessionMenu');
   menu.innerHTML = sessions.length
-    ? sessions.map((session) => `<button class="menu-item ${session.id === selectedSessionId ? 'active' : ''}" data-session-id="${escapeHtml(session.id)}"><span>${escapeHtml(session.title)}</span><span class="menu-meta">${session.count} 条记录 · ${session.hasDocument ? '可编辑' : '待整理'}</span></button>`).join('')
+    ? sessions.map((session) => `<button class="menu-item ${session.id === selectedSessionId ? 'active' : ''}" data-session-id="${escapeHtml(session.id)}"><span class="menu-title">${escapeHtml(session.title)}</span><span class="menu-meta">${session.count} 条记录 · ${session.hasDocument ? '可编辑' : '待整理'}</span></button>`).join('')
     : '<div class="menu-empty">今天还没有识别出的会议</div>';
   menu.querySelectorAll('.menu-item').forEach((button) => {
     button.onclick = () => { closeMenu(); selectedSessionId = button.dataset.sessionId; void loadSelectedSession(); };
@@ -369,6 +382,9 @@ async function init() {
           <span id="sessionName">加载中…</span>
           <svg class="board-caret" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
+        <button class="board-copy" id="boardCopyBtn" hidden title="复制文档路径" aria-label="复制文档路径">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+        </button>
         <span class="board-status" id="status" hidden></span>
         <button class="board-read-toggle" id="readToggle" aria-pressed="false" data-editing="false">编辑</button>
         <div class="board-menu" id="sessionMenu" hidden></div>
@@ -412,6 +428,24 @@ async function init() {
   editorEl.addEventListener('pointerdown', hintReadOnly, true);
   editorEl.addEventListener('keydown', hintReadOnly, true);
   $('saveDefBtn').onclick = async () => toast((await saveDef(readForm())) ? '定义已保存' : '保存失败');
+  // 顶栏复制按钮
+  $('boardCopyBtn').onclick = async () => {
+    const text = $('boardCopyBtn').dataset.path;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('文档路径已复制');
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      toast('文档路径已复制');
+    }
+  };
   document.addEventListener('click', (event) => { if (!event.target.closest('.board-bar')) closeMenu(); });
   pollTimer = setInterval(async () => {
     try {
