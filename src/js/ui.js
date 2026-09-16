@@ -25,7 +25,8 @@ export function toast(msg) {
 }
 
 // ============================================================
-// 顶栏运行状态机（单一渲染来源）：这里唯一决定状态点、状态文字、时间区。
+// 运行状态机（单一渲染来源）：这里唯一决定状态点、状态文字、时间区。
+// 渲染位置在 footer 电平尺一行右侧（2026-09-15 从顶栏移下来；文案仍叫状态区，别按位置找）。
 // 其它模块只改 state（recording / asrReady / serverOk / micError）后调用
 // renderRunStatus()，禁止各自 setTextContent。
 // ============================================================
@@ -100,7 +101,7 @@ export function renderRunStatus() {
 }
 
 /**
- * 启动顶栏状态机：探测 /api/status 拿服务运行时长基准，之后每秒重渲染。
+ * 启动运行状态机：探测 /api/status 拿服务运行时长基准，之后每秒重渲染。
  * 服务不可达时置 serverOk=false，状态机据此显示「服务未连接」并停止累加时长。
  */
 export function initRunStatus() {
@@ -146,7 +147,7 @@ export function flashPulse(el) {
 
 export function setRecordBtn(recording) {
   // 按钮已简化成纯图标圆形按钮：文案只留在 title/aria-label，保证可访问性
-  const label = recording ? '停止录音' : '开始录音';
+  const label = (recording ? '停止录音' : '开始录音') + ' · 空格键';
   const btn = $('btn');
   if (btn) { btn.title = label; btn.setAttribute('aria-label', label); }
   // 录制按钮的两种状态（常态黑底 / 录音中红底）只在这里切换，脉冲也挂在同一个

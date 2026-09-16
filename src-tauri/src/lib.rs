@@ -336,21 +336,11 @@ fn paste_text(text: String, auto_enter: Option<bool>) -> Result<PasteOutcome, St
         });
     }
 
-    let cmd = if auto_enter.unwrap_or(false) {
-        concat!(
-            "delay 0.1\n",
-            "tell application \"System Events\"\n",
-            "  keystroke \"v\" using command down\n",
-            "  delay 0.3\n",
-            "  keystroke return\n",
-            "end tell",
-        )
-    } else {
-        "tell application \"System Events\" to keystroke \"v\" using command down"
-    };
-
+    // 先只发送 Cmd+V，让前端在粘贴完成后立即播放反馈音。
+    // 旧实现把「等待 300ms + 回车」放在同一个 osascript 里，导致文字已经出现，
+    // 但提示音要等回车结束后才响，用户感知为粘贴卡顿。
     let paste_start = Instant::now();
-    let outcome = match run_osascript(cmd) {
+    let outcome = match run_osascript("tell application \"System Events\" to keystroke \"v\" using command down") {
         Ok(_) => PasteOutcome { status: "ok" },
         Err(e) => {
             eprintln!("[paste] osascript 失败（降级为仅剪贴板）: {}", e);
@@ -360,6 +350,17 @@ fn paste_text(text: String, auto_enter: Option<bool>) -> Result<PasteOutcome, St
         }
     };
     log_timing("paste_text.osascript", paste_start.elapsed());
+
+    // 自动发送仍保留 300ms 的缓冲，但不阻塞粘贴结果和提示音返回。
+    if auto_enter.unwrap_or(false) && outcome.status == "ok" {
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(300));
+            if let Err(e) = run_osascript("tell application \"System Events\" to keystroke return") {
+                eprintln!("[paste] 自动回车失败: {}", e);
+            }
+        });
+    }
+
     log_timing("paste_text.total", start.elapsed());
     Ok(outcome)
 }

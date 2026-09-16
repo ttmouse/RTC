@@ -123,7 +123,7 @@
         <button class="engineOption" id="optQwen3" data-engine="qwen3" role="option"><span class="optLabel">Qwen3-ASR</span></button>
       </div>
     </div>
-    <button id="btn" title="开始录音" aria-label="开始录音">
+    <button id="btn" title="开始录音 · 空格键" aria-label="开始录音，快捷键为空格键">
       <svg id="btnIconMic" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
       <svg id="btnIconPause" class="hidden" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
     </button>
@@ -219,7 +219,7 @@
       <div class="localTuning" id="localTuningPanel">
         <div class="s-field">
           <div class="fl">静音超时</div>
-          <div class="fd">一句话被中途截断调高此值，说完后等太久才出字调低此值</div>
+          <div class="fd">截断就调高，出字太慢就调低</div>
           <div class="range-row">
             <input type="range" id="silenceTimeout" min="500" max="5000" step="100" value="2000">
             <span class="rv" id="silenceTimeoutLabel">2000ms</span>
@@ -227,7 +227,7 @@
         </div>
         <div class="s-field">
           <div class="fl">麦克风增益</div>
-          <div class="fd">信号偏弱导致识别不准调高此值（2x~3x 起步）</div>
+          <div class="fd">声音偏弱或识别不准时调高</div>
           <div class="range-row">
             <input type="range" id="gainMultiplier" min="1" max="5" step="0.5" value="1">
             <span class="rv" id="gainMultiplierLabel">1x</span>
@@ -247,7 +247,7 @@
       <div class="sg-body hidden" id="aiGroupBody">
         <div class="s-field">
           <div class="fl">服务商</div>
-          <div class="fd">OpenAI 兼容接口，供智能纠错、纪要、翻译等功能使用；Key 仅保存在本机</div>
+          <div class="fd">供纠错、纪要、翻译使用；Key 只保存在本机</div>
           <div class="select-wrap">
             <select id="aiProvider">
               <option value="openai">OpenAI</option>
@@ -263,7 +263,7 @@
         </div>
         <div class="s-field">
           <div class="fl">API 地址</div>
-          <div class="fd">base URL，通常以 /v1 结尾；本地服务可填 http://localhost:11434/v1</div>
+          <div class="fd">接口地址，通常以 /v1 结尾</div>
           <input type="text" id="aiBaseUrl" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false">
         </div>
         <div class="s-field">
@@ -282,7 +282,7 @@
         </div>
         <div class="s-field">
           <div class="fl">模型</div>
-          <div class="fd">Chat Completions 模型名，如 gpt-4o-mini / deepseek-chat / qwen-max</div>
+          <div class="fd">填写 Chat Completions 模型名</div>
           <input type="text" id="aiModel" placeholder="gpt-4o-mini" autocomplete="off" spellcheck="false">
         </div>
       </div>
@@ -296,7 +296,7 @@
         <div class="toggle-row">
           <div class="ti">
             <div class="tt">关键词替换</div>
-            <div class="ts">ASR 识别结果中的关键词自动替换为指定词，点击「管理」进入</div>
+            <div class="ts">识别结果中的关键词自动替换，点击「管理」编辑</div>
           </div>
           <div class="s-row-end">
             <span class="s-count" id="corrCount">0 条规则</span>
@@ -312,7 +312,7 @@
       <div class="sg-title">自动发送</div>
       <div class="s-field app-rules-field">
         <div class="fl">允许自动发送的应用</div>
-        <div class="fd">未选中的应用仍会粘贴文字，但不会自动按回车。点击“添加应用”后，从本机应用列表中选择。</div>
+        <div class="fd">未选中的应用只粘贴，不自动回车。应用从本机列表选择。</div>
         <div class="app-rule-add"><button type="button" class="sbtn sm" id="autoEnterAppAdd">添加应用</button></div>
         <div id="autoEnterAppList" class="app-rule-list"></div>
       </div>
@@ -380,9 +380,7 @@
     <div class="s-group">
       <div class="sg-title">打开应用</div>
       <div class="cmdDesc">
-        说「打开 + 左边这句」就切到右边那个应用。<b>目标必须从列表里选</b>——
-        系统只认程序自己的名字，比如飞书是 <code>Lark</code>，写成「飞书」它会说找不到。<br>
-        同一个应用的说法写在一行里，用 <code>｜</code> 隔开，比如 <code>飞出｜飞速｜飞书</code>。
+        说「打开 + 左边说法」切换应用。<b>目标从系统列表选择</b>，同一应用的说法用 <code>｜</code> 分隔。
       </div>
       <div class="cmdRows" id="cmdRowsAliases"></div>
       <button type="button" class="sbtn cmdAddBtn" data-section="aliases">+ 添加一条</button>
@@ -390,23 +388,20 @@
 
     <div class="s-group">
       <div class="sg-title">按键</div>
-      <div class="cmdDesc">整句说完就替你敲一下键，不用说「打开」这类前缀。
-        点右边输入框就会进入录制状态，<b>直接按一个键录下来</b>，组合键也行（⌘S、⌘⇧K）。
-        唯一录不到的是「按的是哪个 ⌘」——系统这条通道发不出左右，录制时会合成一个。</div>
+      <div class="cmdDesc">整句说完后敲一次按键。点击右侧输入框直接录制，支持组合键；左右 ⌘ 无法区分。</div>
       <div class="cmdRows" id="cmdRowsKeys"></div>
       <button type="button" class="sbtn cmdAddBtn" data-section="actions" data-box="cmdRowsKeys">+ 添加一条</button>
     </div>
 
     <div class="s-group">
       <div class="sg-title">功能</div>
-      <div class="cmdDesc">整句说完就让 app 干一件事——不是按键，说完要等一下结果。
-        每个功能背后都有程序逻辑，加新的得改代码，所以这里<b>只能改说法，不能自己加</b>。</div>
+      <div class="cmdDesc">整句说完后执行一个功能。功能由程序提供，<b>只能修改说法</b>。</div>
       <div class="cmdRows" id="cmdRowsFeatures"></div>
     </div>
 
     <div class="s-group">
       <div class="sg-title">快捷短语</div>
-      <div class="cmdDesc">说完这句，就把右边那段话粘贴到光标位置并回车发出去。</div>
+      <div class="cmdDesc">说完后粘贴右侧文本并回车发送。</div>
       <div class="cmdRows" id="cmdRowsSnippets"></div>
       <button type="button" class="sbtn cmdAddBtn" data-section="snippets">+ 添加一条</button>
     </div>
@@ -447,21 +442,19 @@
 
 <!-- 纠错规则管理模态框 -->
 <div id="correctionModal" class="modal-overlay">
-  <div class="modal-box" style="background:var(--paper);border-radius:8px;width:520px;max-width:92vw;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.2);">
-    <div class="modal-head" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px 10px;border-bottom:2px solid var(--ink);">
-      <h3 style="font-size:15px;font-weight:700;letter-spacing:.12em;">纠错规则管理</h3>
-      <button class="modal-close" onclick="correctionCloseEditor()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--ink-faint);padding:2px 6px;border-radius:3px;line-height:1;">&times;</button>
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>纠错规则管理</h3>
+      <button class="modal-close" onclick="correctionCloseEditor()">&times;</button>
     </div>
-    <div class="modal-body" style="flex:1;overflow-y:auto;padding:14px 20px;">
-      <p style="font-size:12px;color:var(--ink-faint);margin-bottom:10px;line-height:1.5;">
-        ASR 识别结果中的关键词自动替换为指定词。每行一条规则，使用 <code style="font-family:var(--mono);">=></code> 分隔关键词和替换词。
-      </p>
-      <textarea id="correctionRules" rows="12" style="width:100%;padding:8px 10px;border:1px solid var(--rule);border-radius:3px;background:var(--paper);font-size:12px;font-family:var(--mono);color:var(--ink);resize:vertical;outline:none;line-height:1.6;" placeholder="关键词 => 替换词"></textarea>
+    <div class="modal-body">
+      <p>ASR 识别结果中的关键词自动替换为指定词。每行一条规则，使用 <code>=></code> 分隔关键词和替换词。</p>
+      <textarea id="correctionRules" rows="12" placeholder="关键词 => 替换词"></textarea>
     </div>
-    <div class="modal-foot" style="display:flex;gap:8px;padding:10px 20px 14px;border-top:1px solid var(--rule);">
+    <div class="modal-foot">
       <button class="sbtn" onclick="correctionCloseEditor()">取消</button>
       <button class="sbtn primary" id="corrSave">保存</button>
-      <button class="sbtn danger" id="corrReset" style="margin-left:auto;">恢复默认</button>
+      <button class="sbtn danger" id="corrReset">恢复默认</button>
     </div>
   </div>
 </div>

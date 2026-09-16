@@ -15,8 +15,9 @@ import { apiUrl } from './api.js';
 import { showStatsPage } from './stats.js';
 
 /**
- * 主界面顶栏运行状态已收敛到 ui.js 的单一状态机（renderRunStatus / initRunStatus）。
+ * 主界面运行状态已收敛到 ui.js 的单一状态机（renderRunStatus / initRunStatus）。
  * 本文件不再自己写 #statusText / #statusTime，只负责改 state 并在必要时触发重渲染。
+ * （状态块本身在 footer 电平尺一行右侧，曾经在顶栏。）
  */
 setAsrStopHandler(stopRec);
 
@@ -569,6 +570,21 @@ $('clearDataBtn').onclick = () => {
 };
 
 document.addEventListener('keydown', (e) => {
+  // 主界面激活时，空格复用录音按钮的唯一切换入口；输入控件和各整页界面不抢键盘。
+  const mainInterfaceActive = ['settingsPage', 'cmdPage', 'statsPage', 'sharePopover', 'correctionModal']
+    .every(id => {
+      const el = $(id);
+      return !el || (id === 'correctionModal' ? !el.classList.contains('open') : el.classList.contains('hidden'));
+    });
+  const target = e.target;
+  const isTyping = target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]');
+  const isControl = target instanceof Element && target.closest('button, a');
+  if (e.code === 'Space' && mainInterfaceActive && !isTyping && !isControl) {
+    e.preventDefault();
+    $('btn').click();
+    return;
+  }
+
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
     e.preventDefault();
     toggleAutoEnter();

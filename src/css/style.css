@@ -20,7 +20,7 @@
     background:radial-gradient(130% 80% at 50% -20%, rgba(255,252,240,.6), transparent 55%),
                radial-gradient(80% 50% at 100% 100%, rgba(160,140,100,.1), transparent 60%); }
 
-  header{ position:relative; z-index:30; background:var(--ink); color:var(--paper);
+  header{ position:relative; z-index:30; background:transparent; color:var(--ink);
          padding:12px 20px; display:flex; justify-content:space-between; align-items:center; }
   header h1{ font-size:16px; font-weight:700; letter-spacing:.12em; display:flex; align-items:center; gap:10px; }
   /* 运行状态区：放在 footer 电平尺左侧，靠近下方操作区，也不和最新历史记录混在一起。
@@ -49,7 +49,7 @@
   /* 会议白板入口曾经漏在这条样式之外：浏览器给了它默认的浅灰底和系统边框，
      夹在语音指令 / 设置两个无边框图标中间像个贴歪的方块。
      三个入口图标必须始终共用这一组盒模型，新增顶栏图标按钮照抄这行加名字。 */
-  #settingsBtn, #cmdBtn, #meetingBoardBtn{ background:none; border:none; color:#b7ab92; padding:4px;
+  #settingsBtn, #cmdBtn, #meetingBoardBtn{ background:none; border:none; color:var(--ink-soft); padding:4px;
         border-radius:var(--radius-sm); cursor:pointer; line-height:0;
         display:inline-flex; align-items:center; justify-content:center; }
   #settingsBtn svg, #cmdBtn svg, #meetingBoardBtn svg{ display:block; width:15px; height:15px; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
@@ -136,7 +136,7 @@
            width:30%; height:1px; background:var(--rule); }
   .daysep::before{ left:0; } .daysep::after{ right:0; }
 
-  #queryBar{ padding:6px 20px; background:var(--paper-2);
+  #queryBar{ padding:6px 20px; background:transparent;
              gap:8px; flex-wrap:wrap;
              align-items:center; position:relative; z-index:2; display:flex; }
   #searchInput{ flex:1; min-width:0; padding:9px 14px; border:1px solid var(--rule);
@@ -279,9 +279,10 @@
         background:var(--paper); flex-shrink:0; }
   #settingsClose, #cmdPageClose, #statsPageClose{ background:none; border:none; font-size:22px; cursor:pointer;
         color:var(--ink-faint); padding:0 6px; line-height:1; border-radius:var(--radius-sm); }
-  #settingsClose:hover, #cmdPageClose:hover{ color:var(--seal); }
-  #settingsClose:focus-visible, #cmdPageClose:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
-  .settingsPageBody{ flex:1; overflow-y:auto; padding:2px 20px 24px; counter-reset:sg; }
+  #settingsClose:hover, #cmdPageClose:hover, #statsPageClose:hover{ color:var(--seal); }
+  #settingsClose:focus-visible, #cmdPageClose:focus-visible, #statsPageClose:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  .settingsPageBody{ flex:1; overflow-y:auto; padding:2px 20px 24px; counter-reset:sg; scrollbar-width:none; }
+  .settingsPageBody::-webkit-scrollbar{ width:0; height:0; display:none; }
   /* 设置面板统一使用系统无衬线常规字体 */
   #settingsPage, #cmdPage, #statsPage, #settingsPage button, #cmdPage button, #statsPage button,
   #settingsPage input, #cmdPage input, #statsPage input, #settingsPage select {
@@ -291,7 +292,7 @@
      分区之间画一条实线。以前是每个字段都挂一条虚线，虚线太轻既分不开组，
      又和行内的按钮、状态文字打架，所以线只留在「更重要的地方」。 */
   .s-group{ counter-increment:sg; margin:0; }
-  .s-group + .s-group{ margin-top:16px; padding-top:16px; border-top:1px solid var(--rule); }
+  .s-group + .s-group{ margin-top:12px; padding-top:12px; border-top:1px solid var(--rule); }
   /* 模块标题：层级高于字段标签，用更大字号 + 更重字重 + 编号三者一起拉开 */
   .s-group > .sg-title{ font-size:13px; font-weight:700; color:var(--ink);
         letter-spacing:.06em; margin-bottom:9px; padding-top:1px; }
@@ -356,13 +357,13 @@
   .s-group .localTuning .s-field{ border-bottom:none; }
   /* ── 字段 ──
      字段之间只用留白：虚线去掉之后，层级改由「标签字重 + 说明色阶 + 分区实线」承担。 */
-  .s-field{ padding:9px 0 11px; border-bottom:none; }
+  .s-field{ padding:7px 0 9px; border-bottom:none; }
   .s-field:last-child{ padding-bottom:1px; }
   /* 字段标签刻意不加粗：加粗后和分区标题（13/700 + 编号）看起来一样重，就分不出
      「一组的名字」和「一个设置项的名字」。层级靠分区标题、说明文字、实线三者一起拉。 */
   .s-field .fl{ font-size:13px; font-weight:400; margin-bottom:5px; color:var(--ink);
         letter-spacing:.01em; }
-  .s-field .fd{ font-size:11px; color:var(--ink-faint); margin-bottom:7px; line-height:1.55;
+  .s-field .fd{ font-size:11px; color:var(--ink-faint); margin-bottom:5px; line-height:1.4;
         max-width:62ch; }
   .s-field .fn{ font-size:11px; color:var(--ink-soft); margin-top:6px; line-height:1.5; padding:6px 9px; background:var(--paper-2); border-radius:3px; }
   /* 字段右侧的次级信息 + 动作：计数在左，按钮在右，基线居中对齐 */
@@ -506,11 +507,11 @@
   .s-page-foot .sbtn.danger:hover{ background:var(--seal-light, rgba(191,58,30,.08)); }
 
   /* ── 语音指令管理页：一行 = 一条指令（说法 → 目标），左边说得出口，右边点得开 ── */
-  .cmdDesc{ padding:0 0 10px; font-size:12px; line-height:1.7; color:var(--ink-soft); }
+  .cmdDesc{ padding:0 0 8px; font-size:11px; line-height:1.5; color:var(--ink-soft); }
   .cmdDesc b{ color:var(--ink); }
   .cmdDesc code{ font-family:var(--mono); font-size:11px; background:var(--paper-2);
         border:1px solid var(--rule); border-radius:3px; padding:0 4px; }
-  .cmdFootNote{ margin-top:18px; padding:14px 0 0; border-top:1px solid var(--rule);
+  .cmdFootNote{ margin-top:14px; padding:10px 0 0; border-top:1px solid var(--rule);
         font-size:11px; color:var(--ink-faint); }
   /* 过去这里直接使用 button 默认样式，点击后会出现浏览器灰底和整段粗体，像选区而不像纸墨界面。 */
   .cmdAgentPrompt{ display:block; width:100%; margin-top:14px; padding:13px 14px 12px; border:1px solid var(--rule);
@@ -736,7 +737,10 @@
   .modal-overlay .modal-close{ background:none; border:none; font-size:20px; cursor:pointer;
     color:var(--ink-faint); padding:2px 6px; border-radius:3px; line-height:1; }
   .modal-overlay .modal-close:hover{ color:var(--seal); }
-  .modal-overlay .modal-body{ flex:1; overflow-y:auto; padding:14px 20px; }
+  .modal-overlay .modal-body{ flex:1; overflow-y:auto; padding:14px 20px; scrollbar-width:none; }
+  .modal-overlay .modal-body p{ font-size:12px; color:var(--ink-faint); margin-bottom:10px; line-height:1.5; }
+  .modal-overlay .modal-body code{ font-family:var(--mono); }
+  .modal-overlay .modal-body::-webkit-scrollbar{ width:0; height:0; display:none; }
   .modal-overlay .modal-body textarea{ width:100%; padding:8px 10px; border:1px solid var(--rule);
     border-radius:3px; background:var(--paper); font-size:12px; font-family:var(--mono);
     color:var(--ink); resize:vertical; outline:none; line-height:1.6; }
@@ -751,6 +755,7 @@
   .modal-overlay .modal-foot .sbtn.primary:hover{ background:#2d271f; }
   .modal-overlay .modal-foot .sbtn.danger{ color:var(--seal); border-color:var(--seal); }
   .modal-overlay .modal-foot .sbtn.danger:hover{ background:rgba(191,58,30,.08); }
+  .modal-overlay .modal-foot .sbtn.danger:last-child{ margin-left:auto; }
   @media(max-width:520px){
     .modal-overlay .modal-box{ width:100vw; max-width:100vw; max-height:100vh; border-radius:0; }
   }

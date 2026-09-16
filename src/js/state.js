@@ -25,7 +25,7 @@ export const state = {
   asrWs: null,
   asrTaskId: '',
   asrReady: false,
-  // ---------- 顶栏运行状态（唯一渲染来源在 ui.js 的 renderRunStatus） ----------
+  // ---------- 运行状态（唯一渲染来源在 ui.js 的 renderRunStatus；显示在 footer 右侧） ----------
   serverOk: null,         // 本地服务探测结果：null=尚未探测 / true=可达 / false=不可达
   serverUptime: 0,        // 服务运行时长基准（秒），来自 /api/status.uptime
   micError: '',           // 麦克风不可用原因（''=可用），由 getUserMedia 失败时写入
