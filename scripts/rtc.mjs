@@ -15,6 +15,7 @@
  *   rtc llm chat "问题" [--system 系统提示]  用已配置服务商对话（JSON 输出）
  *   rtc act paste "文本" [--enter]     复制并粘贴到光标位置
  *   rtc act open "应用名" [--app 英文名] 激活应用（不做白名单，任意已安装应用）
+ *   rtc board ...                      会议白板（直通 scripts/meeting-board.mjs）
  *   rtc help / --help
  *
  * 环境变量:
@@ -124,6 +125,17 @@ async function cmdStatus() {
 
 function cmdTranscript(args) {
   const script = join(SCRIPT_DIR, 'transcript.mjs');
+  const r = spawnSync(process.execPath, [script, ...args], { stdio: 'inherit' });
+  process.exit(r.status ?? 1);
+}
+
+// ---------- rtc board ----------
+
+// 会议白板的外部 AI 通道在 scripts/meeting-board.mjs 里（和 transcript 一样直通）。
+// 拆开是因为白板那套场次/材料/写回的逻辑只在外部 AI 场景用得到，塞进主 CLI 会把
+// 「读记录 / 改配置 / 调 LLM / 执行动作」这条主线淹掉。
+function cmdBoard(args) {
+  const script = join(SCRIPT_DIR, 'meeting-board.mjs');
   const r = spawnSync(process.execPath, [script, ...args], { stdio: 'inherit' });
   process.exit(r.status ?? 1);
 }
@@ -431,8 +443,14 @@ rtc — RTC 逐字稿 CLI 开放入口（数据/配置/动作，供外部 AI 与
   rtc act paste "文本" [--enter]
   rtc act open "微信" [--app WeChat]
   rtc commands get | list | set "说法=应用" | remove 说法
+  rtc board sessions | latest | brief | transcript | show | write-analysis <JSON>
 
 transcript 子命令直通 scripts/transcript.mjs 的全部选项（--sessions / --digest / --raw 等）。
+
+board 是会议白板的外部 AI 通道：
+  rtc board brief                 # 取最近一场的会前定义 + 逐字稿 + 写回说明
+  rtc board write-analysis a.json # 把外部分析写回白板（不写场次 ID 就是最近一场）
+  rtc board sessions              # 看当天有哪些场次、哪些已经有分析了
 
 commands 操作的是指令映射配置文件（默认 ~/Library/Application Support/com.rtc.transcriber/commands.json）：
 前端语音指令与 rtc 共用此文件，可直接把内容发给外部 AI Agent 参考或代为维护。
@@ -455,6 +473,9 @@ async function main() {
       break;
     case 'transcript':
       cmdTranscript(args);
+      break;
+    case 'board':
+      cmdBoard(args);
       break;
     case 'config': {
       const sub = args[0];

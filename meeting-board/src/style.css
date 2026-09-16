@@ -1,10 +1,10 @@
 /* Meeting Board styles */
 *{ margin:0; padding:0; box-sizing:border-box; }
-body{ background:#faf9f7; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif; }
+body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif; }
 /* 白板是投屏给会议室所有人看的：顶部只留一行会议名，其余高度全部给文档，
    常驻的标题 / 状态 / 按钮 / 场次卡片都不留。 */
-.board-wrap{ display:flex; flex-direction:column; min-height:100vh; padding:16px 40px 40px; }
-.board-bar{ position:relative; display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+.board-wrap{ display:flex; flex-direction:column; min-height:100vh; padding:0; }
+.board-bar{ position:relative; display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 24px; }
 .board-session{ display:inline-flex; align-items:center; gap:6px; max-width:70vw; padding:3px 6px; margin-left:-6px; border:0; border-radius:6px; background:none; font:inherit; font-size:18px; font-weight:600; color:#2c2c2c; cursor:pointer; }
 .board-session:hover{ background:#f0eee9; }
 .board-session:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
@@ -47,7 +47,8 @@ body{ background:#faf9f7; color:#2c2c2c; font-family:-apple-system,BlinkMacSyste
 .def-grid textarea:focus{ border-color:#2c2c2c; }
 .def-label{ font-size:11px; font-weight:600; color:#666; margin-bottom:2px; }
 .def-actions{ margin-top:10px; display:flex; gap:6px; }
-.editor-wrap{ flex:1; background:#fff; border:1px solid #e8e5e0; border-radius:10px; }
+.editor-wrap{ flex:1; min-height:0; background:#fff; border:0; border-radius:0; overflow:hidden; }
+.editor-wrap > #editor, .editor-wrap .editor-canvas{ height:100%; min-height:0; }
 .editor-wrap .milkdown-host{ padding:12px 24px 80px; }
 .editor-wrap .milkdown{ max-width:860px; margin:0 auto; }
 .toast{ position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#2c2c2c; color:#fff; padding:8px 20px; border-radius:6px; font-size:12px; z-index:9999; opacity:0; transition:opacity .25s; pointer-events:none; }

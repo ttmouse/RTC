@@ -40,35 +40,65 @@
 
 ## 外部写入方式
 
-外部工具先生成一个 JSON 文件，再执行：
+外部 AI 与白板之间只有一条通道：`rtc board`（脚本本体是 `scripts/meeting-board.mjs`）。
+「更新最近一场会议」是两步：
 
 ```text
-node scripts/meeting-board.mjs write-analysis <分析结果.json>
-node scripts/meeting-board.mjs write-definition <会议定义.json>
+rtc board brief                  # 拿材料：会前定义 + 该场逐字稿 + 写回格式说明
+rtc board write-analysis <分析结果.json>   # 写回，面板 2 秒内自动刷新
 ```
 
-也可以直接调用：
+`brief` 把外部 AI 需要的东西一次给全（定义、逐字稿、要写哪些字段、写回命令），
+外部 AI 不需要自己拼上下文，也不需要先问一遍场次编号。
+
+其余子命令：
 
 ```text
-PUT /api/meeting-board/analysis
-PUT /api/meeting-board/definition
+rtc board sessions [--date D]     当天场次列表（* 标出最近一场，并显示哪些已有分析）
+rtc board latest [--date D]       最近一场的场次 ID（纯文本，可喂给别的命令）
+rtc board transcript [场次ID]     该场逐字稿
+rtc board show [场次ID] [--json]  该场已保存的定义 / 分析 / 正文
+rtc board write-definition <JSON> [场次ID]
+rtc board write-document <Markdown> [场次ID]
 ```
+
+场次 ID 省略时默认取「最近一场」。给了 ID 时由 ID 反推日期再定位，
+所以隔天也能直接补写前一天的会议，不用先查是哪一天。
+
+读的部分直接读本地文件（应用没开也能用）；写回走本地服务，由服务端串行合并。
+底层接口仍在：`PUT /api/meeting-board/analysis|definition|document`。
 
 ## 面板行为
 
 白板打开时会按本地日期和连续转写之间的静默间隔整理会议场次：静默超过 5 分钟，就视为进入下一场会议。场次按钮显示在白板顶部，点击即可切换不同会议。
 
-白板打开时先读取已有数据，之后每 2 秒自动读取一次。外部工具写入新分析后，面板自动更新，不需要刷新应用；新识别出的会议也会自动出现在场次列表中。
+白板打开时先读取已有数据，之后每 2 秒去拉一次**场次列表和当前场次的正文**。
 
-「读取最新场次」按钮用于人工立即重新整理一次。
+外部写完正文后，面板会自己重读 —— 不用切会议、不用重开窗口，也不用刷新应用。
+这个行为移植自 xiaoer-omia（`src/lib/fileDocumentDraft.ts` 的 `resolveExternalFileChange` /
+`sourceContentFingerprint`）：换文档必须整个重挂编辑器（Milkdown 的文档值是初始化参数），
+但什么时候该重挂是有规则的（`meeting-board/src/lib/externalRefresh.js`）：
 
-外部工具写入指定会议时，在 JSON 文件后追加场次编号：
+| 情况 | 行为 |
+|------|------|
+| 内容指纹没变 | 什么都不做。少了这条，轮询会把正在看的文档每 2 秒重挂一次，光标和滚动一直跳 |
+| 指纹变了、本地没改动 | 重读，面板变成磁盘上的那份 |
+| 指纹变了、本地有未保存的改动 | 不覆盖，只提示「你这边有没保存的改动」，用户的内容优先 |
+
+指纹是 FNV-1a 32（内容 + 字节数，和 Omia 同算法同格式），只用来判「底本换没换」，不是安全哈希。
+窗口重新拿回焦点时也会多读一次。
+
+另一件需要知道的事：面板只渲染 `document`（正文）。`analysis` 不单独展示，
+只在该场正文还是空的时候被用来生成一版正文；正文一旦有内容，写 analysis 不会再改正文。
+所以外部 AI 一次完整的更新要同时写 analysis（结构化）和 document（人看的）。
+
+外部工具写入指定会议时，在文件后追加场次编号：
 
 ```text
-node scripts/meeting-board.mjs write-analysis <分析结果.json> <会议场次ID>
+rtc board write-analysis <分析结果.json> <会议场次ID>
 ```
 
-场次编号由面板接口 `GET /api/meeting-board/sessions?date=YYYY-MM-DD` 返回。
+场次编号由 `rtc board sessions` 或面板接口 `GET /api/meeting-board/sessions?date=YYYY-MM-DD` 返回。
 
 ## 后续阶段
 
@@ -81,7 +111,20 @@ node scripts/meeting-board.mjs write-analysis <分析结果.json> <会议场次I
 ## 验收标准
 
 - 应用内没有主动人工智能调用。
-- 外部写入分析结果后，白板两秒内能看到变化。
-- 人工编辑正文不会被自动刷新覆盖。
+- 外部写完正文后，已打开的面板自己重读（不切会议、不重开窗口）—— ✅ 已实现并有验证脚本。
+- 内容没变时不重挂编辑器（不闪、不丢光标）—— ✅ 已实现并有验证脚本。
+- 人工编辑正文不会被自动刷新覆盖 ✅（编辑时的自动保存会不会反过来盖掉外部写入，见下）。
 - 重启应用后，定义、正文和分析结果仍然存在。
 - 没有配置人工智能服务时，白板仍然可以正常打开和编辑。
+
+验证脚本（不占端口、不碰真实数据，临时数据目录 + WebKit）：`/tmp/rtc-board-reload-test.py`。
+它要的东西：一个 `RTC_DATA_DIR` 指向临时目录、监听 8997 的 server.js、以及装了 Playwright 的 python。
+
+### 还没做完的
+
+- **反向的一半没有保险**：用户这边的自动保存（停手 400ms 后触发）不会先确认磁盘是否被外部改过，
+  所以如果外部的写入刚好落在用户敲字之后，用户那份会把外部刚写的内容盖掉，且没有提示。
+  Omia 在保存侧也有一个冲突检查（`createSourceConflict`），这边还没做。要做的话建议顺手把服务端
+  的 `PUT /api/meeting-board/document` 改成带 `base` 的条件写，否则两边同时写仍有窗口。
+- 编辑器的 `onChange` 是滞后的（实测合成按键连续敲 2.7 秒都没回调，下一次输入才把上一次的内容交出来），
+  上面那条「本地有改动就不覆盖」的保险准不准，取决于它什么时候把内容交出来。这个要等编辑器那层稳定后再验。

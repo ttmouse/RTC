@@ -1,8 +1,12 @@
-import { Crepe, CrepeFeature } from '@milkdown/crepe';
-import { getMarkdown } from '@milkdown/kit/utils';
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BoardEditor } from './BoardEditor.jsx';
 import { extractFrontMatter, patchMarkdownBlocks } from './markdownBlockPatch.js';
+import { resolveExternalFileChange, sourceContentFingerprint } from './lib/externalRefresh.js';
 import './theme/common/style.css';
 import './theme/frame/style.css';
+import './themes/crepe-paper.css';
+import './themes/markdown-fidelity.css';
 import './style.css';
 
 // 白板是外部人工智能的文档展示层：应用不调用人工智能，只把结果整理成可编辑 Markdown。
@@ -16,7 +20,8 @@ let editorEl = null;
 let statusEl = null;
 let toastEl = null;
 
-let crepe = null;
+let editorRoot = null;
+let editorGeneration = 0;
 let doc = '';           // 编辑器里的当前内容（用的是编辑器自己的写法）
 let rawDoc = '';        // 磁盘上的原文：保存时靠它把没改过的块原样填回去
 let baselineDoc = null; // 编辑器就绪时的序列化；null = 还没取到基线
@@ -29,6 +34,8 @@ let pollTimer = null;
 let saveTimer = null;
 let seedDocument = false;
 let switchingSession = false;
+let refreshingDocument = false;
+let lastConflictFingerprint = '';
 
 function toast(msg) {
   toastEl.textContent = msg;
@@ -112,6 +119,42 @@ async function loadBoard(initial = false) {
   }
 }
 
+// 外部（外部 AI / 命令行）改完白板后，面板得自己变回来——不能要求用户切一下会议、或重开窗口。
+// 判定用 Omia 那套三分支（见 lib/externalRefresh.js）：指纹一样就不动，变了且本地干净就重读，
+// 变了但本地有改动就不覆盖。没有第一分支，这个 2 秒轮询会把正在看的文档每轮重挂一次；
+// 没有第三分支，用户正在输字的时候会被外部写入截断。
+async function refreshDocument() {
+  if (switchingSession || refreshingDocument || !editorReady) return;
+  refreshingDocument = true;
+  try {
+    const board = await fetchBoard();
+    const decision = resolveExternalFileChange({
+      dirty: doc !== rawDoc,
+      baseFingerprint: sourceContentFingerprint(rawDoc),
+      diskFingerprint: sourceContentFingerprint(typeof board.document === 'string' ? board.document : ''),
+    });
+    if (decision.outcome === 'reload') {
+      applyBoard(board);
+      lastConflictFingerprint = '';
+      await remountEditor();
+      hideStatus();
+      toast('白板已更新');
+    } else if (decision.outcome === 'conflict') {
+      // 同一个冲突不反复弹：轮询是 2 秒一次，不挡一下会一直刷屏。
+      const key = sourceContentFingerprint(typeof board.document === 'string' ? board.document : '');
+      if (key !== lastConflictFingerprint) {
+        lastConflictFingerprint = key;
+        showStatus('白板在外部更新了；你这边有还没保存的改动，先保留你的版本');
+      }
+    } else {
+      // 读到就能读，上次的冲突提示自然过期。
+      hideStatus();
+    }
+  } catch (error) {
+    console.warn('[board] poll document:', error);
+  } finally { refreshingDocument = false; }
+}
+
 // 写盘前先过一道「分块保真」：用户没碰过的块原样用磁盘上的原文，只有真改过的块才用编辑器的写法。
 // 还没拿到基线时（编辑器刚重挂、或这份内容是刚生成出来的）没有可对比的参照，只能整篇写。
 async function saveDoc(text, { force = false } = {}) {
@@ -181,21 +224,29 @@ function moveMenuFocus(step) {
   focusMenuItem(current === -1 ? 0 : current + step);
 }
 
+// Milkdown 的文档值是初始化参数；换文档只能整只换掉，不能在一个实例里强行替换文档，
+// 不然点击后仍显示旧文档或出现空白（做法同 xiaoer-omia）。
+async function remountEditor() {
+  if (editorRoot) {
+    editorRoot.unmount();
+    editorRoot = null;
+    editorEl.innerHTML = '';
+    // 上游编辑器的清理会异步销毁 Milkdown；等它完成后再复用同一个宿主节点，
+    // 否则旧实例可能在新实例挂载后继续清空 DOM，表现就是切换后白板空白。
+    await new Promise((resolve) => setTimeout(resolve, 180));
+  }
+  await initEditor();
+}
+
 async function loadSelectedSession() {
   if (switchingSession) return;
   switchingSession = true;
+  clearTimeout(saveTimer);
   renderSessionTitle();
   renderMenu();
   try {
     await loadBoard(true);
-    // Milkdown 的文档值是初始化参数；切换场次时按 xiaoer-omia 的方式重挂编辑器，
-    // 不在同一个实例里强行替换文档，避免点击后仍显示旧文档或出现空白。
-    if (crepe) {
-      await crepe.destroy();
-      crepe = null;
-      editorEl.innerHTML = '';
-    }
-    await initEditor();
+    await remountEditor();
     toast('已切换会议文档');
   } finally { switchingSession = false; }
 }
@@ -229,33 +280,45 @@ function closeMenu() {
 }
 
 async function initEditor() {
-  // 编辑器解析完原文后自己会 dispatch 一次变更（比如补上末尾的段落），那不是用户在改，
-  // 所以拿到基线之前的序列化一律不触发保存。
+  // 上游编辑器是非受控组件：初始内容只在挂载时读取，切换会议时由调用方卸载并重建。
   editorReady = false;
-  crepe = new Crepe({
-    root: editorEl,
-    // front matter 编辑器不认（它会把 --- 当成分割线、把字段当正文，存回去就多出一份），
-    // 所以只把正文交给编辑器，front matter 由保存时的 patch 从原文里原样接回。
-    defaultValue: extractFrontMatter(doc).body || '',
-    featureConfigs: { [CrepeFeature.Placeholder]: { text: '开始记录会议内容…' } },
+  const generation = ++editorGeneration;
+  const sessionAtInit = selectedSessionId;
+  const initialValue = extractFrontMatter(doc).body || '';
+  // 上游编辑器只接收正文，Front Matter 仍由外层分块保存逻辑负责回填。
+  doc = initialValue;
+  editorRoot = createRoot(editorEl);
+  await new Promise((resolve, reject) => {
+    editorRoot.render(createElement(BoardEditor, {
+      value: initialValue,
+      onChange: (markdown) => {
+        if (generation !== editorGeneration || sessionAtInit !== selectedSessionId) return;
+        doc = markdown;
+        if (!editorReady) return;
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          if (generation === editorGeneration && sessionAtInit === selectedSessionId) void saveDoc(markdown);
+        }, 400);
+      },
+      onReady: () => {
+        if (generation !== editorGeneration || sessionAtInit !== selectedSessionId) return resolve();
+        // React 编辑器就绪后会给出已归一化的 Markdown；当前值作为分块保真的基线。
+        baselineDoc = doc;
+        editorReady = true;
+        if (seedDocument) {
+          seedDocument = false;
+          rawDoc = doc;
+          void saveDoc(doc, { force: true });
+        }
+        resolve();
+      },
+      onError: (reason) => {
+        if (generation !== editorGeneration) return resolve();
+        showStatus(reason || '编辑器初始化失败');
+        reject(new Error(reason || '编辑器初始化失败'));
+      },
+    }));
   });
-  crepe.on((listener) => listener.markdownUpdated((_ctx, markdown) => {
-    doc = markdown;
-    if (!editorReady) return;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => void saveDoc(markdown), 400);
-  }));
-  await crepe.create();
-  // 编辑器就绪后的写法 = 同一份文档的另一种排版，这就是分块保真要的基线。
-  doc = crepe.editor.action(getMarkdown());
-  baselineDoc = doc;
-  editorReady = true;
-  if (seedDocument) {
-    // 这份正文是刚由外部分析结果整理出来的，磁盘上还没有对应原文，只能整篇落盘。
-    seedDocument = false;
-    rawDoc = doc;
-    await saveDoc(doc, { force: true });
-  }
 }
 
 async function init() {
@@ -306,7 +369,11 @@ async function init() {
         renderMenu();
       }
     } catch (error) { console.warn('[board] poll sessions:', error); }
+    await refreshDocument();
   }, 2000);
+  // 窗口重新拿回焦点时也重读一次（做法同 xiaoer-omia）。切窗口回来就该看到最新的，
+  // 而不是再等一个轮询周期。
+  window.addEventListener('focus', () => { void refreshDocument(); });
   document.addEventListener('keydown', (event) => {
     if (!$('sessionMenu').hidden) {
       if (event.key === 'ArrowDown') { event.preventDefault(); moveMenuFocus(1); return; }

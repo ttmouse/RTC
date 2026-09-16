@@ -250,7 +250,4 @@ function clearEnvironmentWarning() {
   document.querySelectorAll('.model-env-warning').forEach(el => el.remove());
 }
 
-// 供 reload 按钮回调
-async function renderAll() {
-  await renderModelStatus();
-}
+

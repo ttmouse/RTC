@@ -449,7 +449,7 @@ export function syncCollapsibleGroups() {
 
 // ---------- AI 服务商表单同步与测试连接 ----------
 
-/** AI 服务商分组的展开/收起（保留旧入口，语义等同 toggleGroup('ai')） */
+/** 同步 AI 服务商分组展开/收起，供内部和测试使用 */
 export function setAIGroupOpen(open) {
   toggleGroup('ai', open);
 }

@@ -226,3 +226,116 @@ npm run build:sidecar   # 需要 bun（编译 server.js）+ pyinstaller（打包
 ## 许可
 
 MIT
+
+## AI Agent 集成
+
+RTC 的设计原则是**数据对外部 AI Agent 完全开放**，不做内置 AI 绑定。
+
+### 数据结构
+
+转写记录以 JSONL 格式存储在本地：
+
+```
+~/Library/Application Support/com.rtc.transcriber/
+  events/
+    2026-09-16.jsonl      # 每天一个文件
+    2026-09-17.jsonl
+    ...
+  meeting-board.json       # 会议白板文档
+  config.json              # 配置
+  commands.json            # 语音指令映射
+```
+
+每条记录是一行 JSON：
+
+```json
+{"schemaVersion":1,"eventId":"uuid","type":"segment",
+ "text":"会议内容","ts":"2026-09-16T16:01:53.483Z",
+ "engine":"sensevoice","targetApp":null}
+```
+
+- `eventId`: 全局唯一 ID
+- `text`: 识别后的文字
+- `ts`: ISO 时间戳
+- `engine`: sensevoice / bailian / qwen3
+- `targetApp`: 自动粘贴的目标应用（如 WeChat），无粘贴则为 null
+
+### CLI 访问（推荐）
+
+通过 [`ec`（Echo）CLI](https://github.com/ttmouse/echo) 读取：
+
+```bash
+# 最近 10 条转写
+ec rtc --limit 10
+
+# 查看当日转写记录（AI 会议纪要用）
+ec rtc summary
+
+# 查看指定日期的记录
+ec rtc summary --date 2026-09-15
+
+# 获取 AI 会议纪要提示词模板
+ec rtc prompt
+```
+
+### 外部 AI 生成会议纪要
+
+```bash
+# 步骤 1：导出今日记录
+ec rtc summary --date 2026-09-16 > /tmp/transcript.txt
+
+# 步骤 2：让 AI Agent 读取该文件并生成纪要
+# （配合 ec rtc prompt 获取提示词模板）
+ec rtc prompt
+```
+
+外部 AI Agent 也可直接读取 `events/YYYY-MM-DD.jsonl` 自行解析。
+
+### 会议白板（外部 AI 读写）
+
+白板分两层：应用只管「记录、保存、加载、展示」，理解会议交给外部 AI。
+CLI 把外部 AI 那半条链路串好了，**「更新最近一场会议」只需两步**：
+
+```bash
+# 步骤 1：拿材料（会前定义 + 该场逐字稿 + 写回格式说明，一次拿全）
+rtc board brief
+
+# 步骤 2：回写。面板上人看到的是「正文」，所以一次完整更新写两样：
+rtc board write-analysis /tmp/analysis.json   # 结构化结果
+rtc board write-document /tmp/body.md        # 正文（Markdown）
+```
+
+场次 ID 省略时默认就是「最近一场」，不用手工复制。其余子命令：
+
+| 命令 | 说明 |
+|------|------|
+| `rtc board sessions [--date D] [--json]` | 当天有哪些场次、哪些已经有分析了（`*` 标出最近一场） |
+| `rtc board latest [--date D]` | 打印最近一场的场次 ID（纯文本，可直接喂给别的命令） |
+| `rtc board brief [场次ID]` | 给外部 AI 的完整材料：会前定义 + 逐字稿 + 写回说明 |
+| `rtc board transcript [场次ID]` | 该场逐字稿（每行 `[HH:MM] 内容`） |
+| `rtc board show [场次ID] [--json]` | 该场已保存的定义 / 分析 / 正文 |
+| `rtc board write-analysis <JSON> [场次ID]` | 写入外部分析结果（结构化，机器可读） |
+| `rtc board write-definition <JSON> [场次ID]` | 写入会前定义 |
+| `rtc board write-document <Markdown> [场次ID]` | 写入白板正文 |
+
+读的部分直接读本地文件（应用没开也能用）；写回走本地服务，由服务端串行合并，
+场次切分规则（静默 5 分钟）与面板完全一致。
+
+写完不用做任何事：已打开的白板窗口每 2 秒会自己重读当前场次的正文（内容没变就不动，
+你正在编辑且有未保存改动时不覆盖）。
+
+两个要记住的点：面板只渲染正文，`analysis` 不单独展示 —— 一场正文非空之后，写 analysis
+不会再改正文，所以一次完整更新要 analysis + document 都写。
+
+直接调脚本也可以：`node scripts/meeting-board.mjs brief`。
+
+### API
+
+运行中的服务（`localhost:8931`）提供 REST API：
+
+| 接口 | 说明 |
+|------|------|
+| `GET /api/transcripts/events?from=...&to=...&q=...` | 查询转写记录 |
+| `GET /api/meeting-board/sessions?date=...` | 按静默间隔整理的会议场次 |
+| `GET /api/meeting-board/definition?sessionId=...` | 会议白板文档内容 |
+| `PUT /api/meeting-board/analysis?sessionId=...` | 外部 AI 写入分析结果 |

@@ -6,11 +6,21 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node tests/markdown-block-patch.test.mjs"
+    "test": "node tests/markdown-block-patch.test.mjs && node tests/external-refresh.test.mjs"
   },
   "dependencies": {
+    "@codemirror/language-data": "^6.5.1",
+    "@codemirror/theme-one-dark": "^6.1.2",
     "@milkdown/crepe": "^7.21.2",
-    "markdown-it": "^14.3.2"
+    "@milkdown/kit": "^7.21.2",
+    "@milkdown/utils": "^7.21.2",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "js-yaml": "^4.1.0",
+    "markdown-it": "^14.3.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "vite": "^6.0.0"
