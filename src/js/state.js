@@ -16,6 +16,7 @@ export const state = {
   historyFrom: null,     // 已加载窗口的起点（ms）；向前翻页时不断前移，null=今天 00:00
   historyExhausted: false, // 已经翻到最早，不再尝试向前加载
   historyLoading: false,   // 向前加载进行中，防止滚动事件并发触发多次请求
+  todayCount: 0,            // 标题栏实时显示的今日记录条数
   searchQuery: '',
   filterOn: true,
   asrEngine: 'sensevoice',

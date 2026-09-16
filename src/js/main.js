@@ -12,6 +12,7 @@ import { migrateLegacyLocalConfig } from './config-migration.js';
 import { checkForUpdates, setupUpdateUI, updateVersionInfo } from './updater.js';
 import { playStart, playToggle } from './sfx.js';
 import { apiUrl } from './api.js';
+import { showStatsPage } from './stats.js';
 
 /**
  * 主界面顶栏运行状态已收敛到 ui.js 的单一状态机（renderRunStatus / initRunStatus）。
@@ -162,6 +163,9 @@ $('settingsPage').addEventListener('click', (e) => {
   // 「恢复默认」后所有摘要文案都会变，统一重算一遍
   if (e.target.closest('#settingsResetBtn')) refreshGroupSummaries();
 });
+
+// ---------- 今日记录统计 ----------
+$('statsBtn').onclick = () => showStatsPage(true);
 
 // 会议白板
 // 会议白板 — 新开独立窗口，与主界面并存

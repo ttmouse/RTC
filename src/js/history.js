@@ -20,6 +20,13 @@ function todayStart() {
   return d;
 }
 
+export function setTodayCount(count) {
+  const value = Number.isFinite(count) ? count : 0;
+  const countEl = $('todayCount');
+  if (countEl) countEl.textContent = String(value);
+  state.todayCount = value;
+}
+
 /**
  * 一条转写记录入库。
  *
@@ -40,6 +47,7 @@ export async function saveEntry(text, targetApp) {
   }
   try {
     await appendTranscriptEvent(text, ts, engine, app);
+    setTodayCount((state.todayCount || 0) + 1);
   } catch (e) {
     console.error('[transcript] JSONL append failed:', e.message || e);
   }
@@ -126,6 +134,7 @@ async function fillIfNotScrollable() {
 
 export async function renderHistory(force) {
   const events = await loadHistory();
+  if (!state.searchQuery && !state.historyFrom) setTodayCount(events.length);
   const entries = events.map(event => ({
     id: event.eventId,
     t: event.ts,

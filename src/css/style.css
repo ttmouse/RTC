@@ -38,6 +38,14 @@
   /* 状态机：异常状态点，复用既有告警色 */
   #dot.err{ background:var(--seal-deep); }
   .header-actions{ display:flex; align-items:center; gap:10px; }
+  .statsWrap{ position:relative; display:flex; align-items:center; }
+  #statsBtn{ display:inline-flex; align-items:center; gap:4px; background:none; border:none;
+        color:var(--ink-soft); padding:4px; border-radius:var(--radius-sm); cursor:pointer;
+        font-family:var(--mono); font-size:11px; font-variant-numeric:tabular-nums;
+        line-height:1; }
+  #statsBtn:hover{ color:var(--seal); }
+  #statsBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  #statsBtn svg{ display:block; width:15px; height:15px; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   /* 会议白板入口曾经漏在这条样式之外：浏览器给了它默认的浅灰底和系统边框，
      夹在语音指令 / 设置两个无边框图标中间像个贴歪的方块。
      三个入口图标必须始终共用这一组盒模型，新增顶栏图标按钮照抄这行加名字。 */
@@ -236,21 +244,47 @@
   /* 拖动过程中收起 Tips：它正好压住列表最后几行，而拖着的时候用户不需要再听解释 */
   #levelMeterBlock.dragging[data-tip]::after{ opacity:0; }
   /* 全页面设置面板 */
-  #settingsPage, #cmdPage{ position:fixed; inset:0; z-index:100; background:var(--paper);
+  #settingsPage, #cmdPage, #statsPage{ position:fixed; inset:0; z-index:100; background:var(--paper);
         display:flex; flex-direction:column; }
-  #settingsPage.hidden, #cmdPage.hidden{ display:none; }
+  #settingsPage.hidden, #cmdPage.hidden, #statsPage.hidden{ display:none; }
+  #statsPage .settingsPageHeader{ border-bottom:0; padding:18px 40px 4px; }
+  #statsPageBody{ overflow-y:auto; padding:30px 40px 48px; max-width:1000px; width:100%; margin:0 auto; box-sizing:border-box; }
+  .statsOverview{ display:grid; grid-template-columns:repeat(3, 1fr); gap:16px; margin-bottom:48px; }
+  .statsMetric{ position:relative; min-height:84px; padding:14px 20px 16px 46px; border:0; border-radius:6px; background:rgba(236,228,212,.58); box-sizing:border-box; }
+  .statsMetric svg{ position:absolute; left:16px; top:17px; width:20px; height:20px; fill:none; stroke:var(--ink-soft); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+  .statsMetric span{ display:block; color:var(--ink-soft); font-size:11px; margin-bottom:9px; }
+  .statsMetric strong{ display:block; color:var(--ink); font:22px var(--mono); font-variant-numeric:tabular-nums; letter-spacing:-.03em; }
+  .statsMetric:first-child strong{ font-size:30px; }
+  .statsSection{ margin:0 0 36px; }
+  .statsSection h2{ display:flex; align-items:center; gap:8px; margin:0 0 14px; font-size:12px; font-weight:600; letter-spacing:.12em; }
+  .statsSection h2 svg{ width:16px; height:16px; fill:none; stroke:var(--ink-soft); stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+  .stats-bar-row{ display:grid; grid-template-columns:minmax(90px, 150px) 1fr 42px; gap:14px; align-items:center; margin:10px 0; font-size:12px; }
+  .stats-bar-label{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-soft); }
+  .stats-bar-track{ height:8px; background:var(--paper-2); border-radius:4px; overflow:hidden; }
+  .stats-bar-track i{ display:block; height:100%; min-width:3px; background:var(--ink-soft); border-radius:4px; }
+  .stats-bar-value{ color:var(--ink); font:11px var(--mono); text-align:right; font-variant-numeric:tabular-nums; }
+  .stats-empty{ color:var(--ink-faint); font-size:12px; }
+  .stats-hour-chart{ display:grid; grid-template-columns:repeat(24, minmax(10px, 1fr)); gap:6px; height:190px; padding-top:4px; border-bottom:1px solid var(--rule); }
+  .stats-hour-col{ min-width:0; display:grid; grid-template-rows:18px 1fr 18px; gap:5px; align-items:end; text-align:center; }
+  .stats-hour-value{ color:var(--ink-soft); font:10px var(--mono); font-variant-numeric:tabular-nums; overflow:hidden; }
+  .stats-hour-bar-wrap{ height:100%; display:flex; align-items:flex-end; justify-content:center; }
+  .stats-hour-bar-wrap i{ display:block; width:min(20px, 72%); min-height:0; background:var(--ink-soft); border-radius:3px 3px 0 0; }
+  .stats-hour-label{ color:var(--ink-faint); font:10px var(--mono); font-variant-numeric:tabular-nums; }
+  .stats-day-chart-scroll{ overflow:hidden; padding-bottom:4px; }
+  .stats-day-chart{ display:grid; grid-template-columns:repeat(var(--day-count), minmax(0, 1fr)); gap:7px; min-width:100%; height:190px; padding-top:4px; border-bottom:1px solid var(--rule); }
+  .statsPageBody.loading{ opacity:.6; }
   .settingsPageHeader{ display:flex; justify-content:space-between; align-items:center;
         padding:12px 20px; border-bottom:2px solid var(--ink); font-size:15px;
         font-weight:600; color:var(--ink); letter-spacing:.16em;
         background:var(--paper); flex-shrink:0; }
-  #settingsClose, #cmdPageClose{ background:none; border:none; font-size:22px; cursor:pointer;
+  #settingsClose, #cmdPageClose, #statsPageClose{ background:none; border:none; font-size:22px; cursor:pointer;
         color:var(--ink-faint); padding:0 6px; line-height:1; border-radius:var(--radius-sm); }
   #settingsClose:hover, #cmdPageClose:hover{ color:var(--seal); }
   #settingsClose:focus-visible, #cmdPageClose:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
   .settingsPageBody{ flex:1; overflow-y:auto; padding:2px 20px 24px; counter-reset:sg; }
   /* 设置面板统一使用系统无衬线常规字体 */
-  #settingsPage, #cmdPage, #settingsPage button, #cmdPage button,
-  #settingsPage input, #cmdPage input, #settingsPage select {
+  #settingsPage, #cmdPage, #statsPage, #settingsPage button, #cmdPage button, #statsPage button,
+  #settingsPage input, #cmdPage input, #statsPage input, #settingsPage select {
         font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif; }
   /* ── 分区：像一份排版好的说明书 ──
      每个分区带一个等宽编号（01/02/…），由 CSS 计数器生成，不用改 HTML。
@@ -598,6 +632,17 @@
     header{ padding:10px 14px; flex-wrap:wrap; gap:6px; }
     header h1{ font-size:14px; }
     .header-actions{ flex-wrap:wrap; gap:6px; }
+    .statsOverview{ grid-template-columns:repeat(3, 1fr); gap:8px; }
+    #statsPage .settingsPageHeader{ padding-left:20px; padding-right:20px; }
+    #statsPageBody{ padding:24px 20px 36px; }
+    .stats-hour-chart{ gap:2px; height:160px; }
+    .stats-hour-value{ font-size:8px; }
+    .stats-hour-label{ font-size:8px; }
+    .stats-day-chart{ height:160px; gap:3px; }
+    .statsMetric{ min-width:0; padding-left:40px; padding-right:6px; }
+    .statsMetric svg{ left:12px; }
+    .statsMetric span{ white-space:nowrap; }
+    .statsMetric strong, .statsMetric:first-child strong{ font-size:18px; }
     #engineBadge{ font-size:12px; padding:6px 16px; min-height:40px; }
     .line{ gap:8px; }
     .ts{ min-width:56px; font-size:10px; }

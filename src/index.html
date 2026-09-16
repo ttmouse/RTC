@@ -10,6 +10,15 @@
 <header>
   <h1>实时逐字稿</h1>
   <div class="header-actions">
+    <div class="statsWrap">
+      <button id="statsBtn" title="今日记录统计" aria-label="今日记录统计" aria-expanded="false" aria-haspopup="dialog">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M8 17v-4"/><path d="M13 17V7"/><path d="M18 17v-7"/></svg>
+        <span id="todayCount">0</span>
+      </button>
+    </div>
+    <button id="shareBtn" title="推荐 RTC" aria-expanded="false" aria-haspopup="true">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+    </button>
     <div class="cmdWrap">
       <button id="cmdBtn" title="语音指令" aria-haspopup="dialog" aria-expanded="false">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
@@ -376,6 +385,25 @@
     <button class="sbtn primary" id="cmdPageSave">保 存</button>
     <button class="sbtn" id="cmdPageCancel">取 消</button>
     <button class="sbtn danger" id="cmdPageReset">恢复默认</button>
+  </div>
+</div>
+
+<!-- 统计页：从标题栏统计入口进入，和设置 / 语音指令保持同一套整页形态 -->
+<div id="statsPage" class="hidden">
+  <div class="settingsPageHeader">
+    <span>统 计</span>
+    <button id="statsPageClose" title="关闭" aria-label="关闭">&times;</button>
+  </div>
+  <div class="settingsPageBody" id="statsPageBody">
+    <div class="statsOverview">
+      <div class="statsMetric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5m0 14h16M8 16v-4m4 4V8m4 8v-7"/></svg><span>记录条数</span><strong id="statsTotal">0</strong></div>
+      <div class="statsMetric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"/></svg><span>文字数</span><strong id="statsChars">0</strong></div>
+      <div class="statsMetric"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span>活跃天数</span><strong id="statsDays">0</strong></div>
+    </div>
+    <div class="statsSection"><h2><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h5M8 16h3"/></svg>按目标应用</h2><div id="statsApps"></div></div>
+    <div class="statsSection"><h2><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h3m2 0h3"/></svg>按识别引擎</h2><div id="statsEngines"></div></div>
+    <div class="statsSection"><h2><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>按小时分布</h2><div id="statsHours"></div></div>
+    <div class="statsSection"><h2><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4m8-4v4M4 10h16"/></svg>最近 14 天</h2><div id="statsDaysChart"></div></div>
   </div>
 </div>
 
