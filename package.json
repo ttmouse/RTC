@@ -9,6 +9,7 @@
         "dev": "cd src-tauri && tauri dev",
         "dev:web": "node scripts/dev.mjs",
         "test": "node scripts/check-static.mjs",
+        "check:ux": "node scripts/check-ux.mjs",
         "rtc": "node scripts/rtc.mjs",
         "rtc:transcript": "node scripts/transcript.mjs"
     },

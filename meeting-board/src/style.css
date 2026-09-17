@@ -1,15 +1,23 @@
 /* Meeting Board styles */
 *{ margin:0; padding:0; box-sizing:border-box; }
 body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif; }
-/* 白板是投屏给会议室所有人看的：顶部只留一行会议名，其余高度全部给文档，
-   常驻的标题 / 状态 / 按钮 / 场次卡片都不留。 */
-.board-wrap{ display:flex; flex-direction:column; min-height:100vh; padding:0; }
-.board-bar{ position:relative; display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 24px; }
+/* 白板是投屏给会议室所有人看的：顶部只留一行会议名，其余高度全部给内容，
+   常驻的标题 / 状态 / 按钮 / 场次卡片都不留。
+   整页锁在一屏高，是为了让两档内容共用同一块可用高度——标签切换是「换一屏内容」，
+   不是在某一行下面再塞一块。 */
+.board-wrap{ display:flex; flex-direction:column; height:100vh; overflow:hidden; padding:0; }
+/* position:relative 不能删：它是下面 .board-menu（position:absolute）的定位祖先。
+   少了它，菜单会按整个窗口定位——掉到屏幕外看不见，还把整页撑出滚动条，
+   症状就是「一点会议名，整个界面错位、下拉开在莫名其妙的地方」。
+   顺带：z-index 只在非 static 的元素上才生效。 */
+.board-bar{ position:relative; flex:none; z-index:40; display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 24px; background:#fff; border-bottom:1px solid #eeeae4; }
 .board-session{ display:inline-flex; align-items:center; gap:6px; max-width:70vw; padding:3px 6px; margin-left:-6px; border:0; border-radius:6px; background:none; font:inherit; font-size:18px; font-weight:600; color:#2c2c2c; cursor:pointer; }
 .board-session:hover{ background:#f0eee9; }
 .board-session:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
 .board-caret{ flex:none; color:#a39b8f; }
-.board-status{ font-size:12px; color:#b0402a; }
+/* 读不到文件时的红字。它自己吃掉剩余空间：编辑开关在逐字稿那一档是隐藏的
+   （原话改不了），那时顶栏的右对齐不能塌掉。 */
+.board-status{ margin-left:auto; font-size:12px; color:#b0402a; }
 .board-status[hidden]{ display:none; }
 /* 阅读 / 编辑开关：白板默认阅读态，靠这颗按钮进入编辑。
    顶栏只有一行会议名，所以这颗按钮跟着会议名同一行靠右；不用图标而用字，
@@ -18,20 +26,40 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
   background:none; font:inherit; font-size:13px; color:#5c554a; cursor:pointer; }
 .board-read-toggle:hover{ background:#f0eee9; color:#2c2c2c; }
 .board-read-toggle:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
+/* 本地 AI 处理：只在 AI 会议内容这一档显示，位置紧挨编辑按钮。 */
+.local-ai-button{ flex:none; padding:4px 12px; border:1px solid #d8c9b4; border-radius:999px;
+  background:#f4ecdf; font:inherit; font-size:13px; color:#8a4a2a; cursor:pointer; }
+.local-ai-button:hover{ background:#eee1d0; color:#6f381f; }
+.local-ai-button:disabled{ opacity:.55; cursor:default; }
+.local-ai-button:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
+.local-ai-button[hidden]{ display:none; }
 /* 编辑中：按钮文字变成「阅读」（告诉你下一步能做什么），并给一个能一眼认出的底 */
 .board-read-toggle[data-editing="true"]{ border-color:#d8c9b4; background:#f4ecdf; color:#8a4a2a; font-weight:600; }
-.board-menu{ position:absolute; top:calc(100% + 8px); left:0; z-index:50; min-width:320px; max-width:min(560px,80vw); max-height:60vh; overflow-y:auto; padding:6px; background:#fff; border:1px solid #e8e5e0; border-radius:10px; box-shadow:0 14px 36px rgba(0,0,0,.10); }
+/* 场次下拉：上面一个搜索框（不动），下面一份滚动列表。列表单独滚动而不是整块滚动，
+   否则一往下翻，搜索框就跟着滚没了——检索到一半想改关键词还得先滚回去。 */
+/* left 跟着 .board-bar 的左右内边距（24px）走，让下拉与它上面的会议名左对齐——
+   absolute 的 left:0 对齐的是 padding box 外缘，会贴到窗口最左边，和会议名错开一截。 */
+.board-menu{ position:absolute; top:calc(100% + 8px); left:24px; z-index:50; display:flex; flex-direction:column; gap:6px; min-width:340px; max-width:min(560px,80vw); padding:6px; background:#fff; border:1px solid #e8e5e0; border-radius:10px; box-shadow:0 14px 36px rgba(0,0,0,.10); }
 .board-menu[hidden]{ display:none; }
-.menu-item{ display:grid; grid-template-columns:1fr auto; gap:3px; width:100%; padding:9px 8px 9px 12px; border:0; border-radius:7px; background:none; font:inherit; font-size:13px; color:#3a3a3a; text-align:left; cursor:pointer; }
+.board-search{ width:100%; padding:7px 10px; border:1px solid #e8e5e0; border-radius:7px; background:#faf9f7; font:inherit; font-size:13px; color:#2c2c2c; }
+.board-search::placeholder{ color:#a9a196; }
+.board-search:focus{ outline:none; border-color:#cfc8bd; background:#fff; }
+.board-search::-webkit-search-cancel-button{ cursor:pointer; }
+.board-menu-list{ display:flex; flex-direction:column; gap:2px; max-height:52vh; overflow-y:auto; }
+.menu-item{ display:flex; flex-direction:column; gap:3px; width:100%; padding:9px 12px; border:0; border-radius:7px; background:none; font:inherit; font-size:13px; color:#3a3a3a; text-align:left; cursor:pointer; }
 .menu-item:hover{ background:#f4f2ee; }
 .menu-item:focus{ background:#f4f2ee; outline:none; }
 .menu-item.active{ background:#f4f2ee; color:#1a1a1a; font-weight:600; }
-.menu-title{ grid-column:1; }
-.menu-meta{ grid-column:1; font-size:11px; color:#9a9287; font-weight:400; }
-.menu-copy{ grid-column:2; grid-row:1/3; display:inline-flex; align-items:center; justify-content:center; align-self:center; width:28px; height:28px; border:0; border-radius:6px; background:none; font-size:14px; cursor:pointer; opacity:0; transition:opacity .15s; color:#9a9287; }
-.menu-item:hover .menu-copy, .menu-item:focus-within .menu-copy, .menu-copy:focus-visible{ opacity:1; }
-.menu-copy:hover{ background:#e3ddd5; color:#3a3a3a; }
-.menu-copy:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; opacity:1; }
+.menu-meta{ font-size:11px; color:#9a9287; font-weight:400; }
+/* 命中上下文：只在下拉里出现，用来说明「这场为什么被搜出来」。 */
+.menu-snippet{ font-size:11px; color:#9a9287; font-weight:400; line-height:1.5; }
+.menu-snippet mark{ padding:0 1px; background:#f6e7c6; color:#5c4a1f; border-radius:2px; }
+/* 顶栏复制按钮：悬浮在会议名右侧，仅在当前会议有文档时才显示 */
+.board-copy{ flex:none; display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; padding:0; border:0; border-radius:6px; background:none; font-size:15px; cursor:pointer; color:#9a9287; transition:background .15s, color .15s; }
+.board-copy[hidden]{ display:none; }
+.board-copy:hover{ background:#e3ddd5; color:#3a3a3a; }
+.board-copy:active{ background:#d4cdc3; }
+.board-copy:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
 .menu-empty{ padding:10px 12px; font-size:12px; color:#9a9287; }
 .analysis-panel{ background:#fff; border:1px solid #e8e5e0; border-radius:8px; padding:16px 18px; margin-bottom:16px; }
 .analysis-empty{ color:#999; font-size:13px; line-height:1.6; }
@@ -46,7 +74,68 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
 .analysis-grid p{ color:#555; }
 .analysis-grid .muted{ color:#aaa; }
 .analysis-panel blockquote{ margin-top:12px; padding:8px 12px; border-left:2px solid #d4d0cb; color:#555; font-size:12px; }
-@media(max-width:700px){ .analysis-grid{ grid-template-columns:1fr; } }
+/* 白板上只有两档，共占标签下面这**一整块**位置：
+   逐字稿（原话，只读）和 AI 会议内容（白板正文本身，可编辑，由模型生成）。
+   没有第三个笔记区——所以标签下面只该有一块内容，不该再叠一块编辑器。
+   被明确要求过的约束，改样式时别退回：
+   1) 不做成上下两块（标签只管自己那一档，不跨到别的块上）。
+   2) 不做成「电梯」：不要固定高度的小滚动框，内容用满可用高度。
+   3) 两块拼成一块——标签栏紧贴内容，中间不夹任何东西（两档的区分只靠标签栏，不靠边缘色带）。 */
+.preliminary-panel{ flex:1; min-height:0; display:flex; flex-direction:column; background:#faf9f7; }
+.preliminary-panel[data-state="empty"]{ color:#999; }
+.preliminary-panel[data-state="pending"]{ color:#777; }
+
+/* 标签栏：这一块自己的表头。横贯整块，它的下边界就是内容区的顶边。
+   **标签栏里只放标签，不放任何状态或自我说明。** 曾被放在这里的右侧状态文案（「可直接编辑」
+   「本地模型 · <模型名>」「未整理」）已明确要求去掉：那位置在屏幕最上方、离内容最远，
+   说的却是内容自己的事，而「能不能编辑」顶栏的「编辑」按钮已经在说。
+   白板自己的状态说明只在**没有内容**时出现，且只出现在内容区底部（.preliminary-note）。 */
+.preliminary-tabbar{ display:flex; align-items:center; gap:12px;
+  max-width:860px; margin:0 auto; padding:0 24px; border-bottom:1px solid #eeeae4; }
+.preliminary-tabs{ display:flex; align-items:stretch; gap:22px; min-width:0; }
+/* 下划线式标签：它说的是「同一份内容的两种看法」，不是两个动作。
+   用按钮样式会让人以为按下去会发生别的事。 */
+.preliminary-tab{ position:relative; padding:11px 0 10px; border:0; background:none; font:inherit;
+  font-size:13px; color:#9a9287; cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.preliminary-tab:hover{ color:#4e4942; }
+.preliminary-tab:focus-visible{ outline:2px solid #2c2c2c; outline-offset:-2px; border-radius:3px; }
+.preliminary-tab.active{ color:#2c2c2c; font-weight:600; }
+.preliminary-tab.active::after{ content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; background:#2c2c2c; }
+.preliminary-tab-count{ padding:0 5px; border-radius:8px; background:#ece8e2; color:#8b8276; font-size:10px; font-weight:400; }
+.preliminary-tab.active .preliminary-tab-count{ background:#2c2c2c; color:#fff; }
+/* 这一档还没内容（AI 还没跑完）时标签仍在、仍可点，只是淡一点：
+   藏起来用户就不知道「还有一档 AI 内容」这回事。 */
+.preliminary-tab:not(.active):not([data-has-content="true"]){ opacity:.55; }
+
+/* 两档各占满标签下面这一整块，切换时是换内容、不是往下叠：
+   panes 是定位容器，每个 pane 铺满它，同一时刻只显示一个。
+   正文在 860px 内换行居中——投屏时一行太长没法读。 */
+.board-panes{ position:relative; flex:1; min-height:0; }
+.board-pane{ position:absolute; inset:0; display:flex; flex-direction:column; min-height:0; }
+/* 非当前档用 visibility 藏，不用 display:none：编辑器（Milkdown/ProseMirror）在挂载时
+   要量布局，塞进 display:none 的容器里会量到零高度；visibility 保留布局又不响应交互。 */
+.board-pane[data-active="false"]{ visibility:hidden; }
+.board-pane pre{ flex:1; min-height:0; overflow-y:auto; margin:0; white-space:pre-wrap; word-break:break-word;
+  font:inherit; font-size:13px; line-height:1.7; color:#3f3b36;
+  padding:12px max(24px, calc((100% - 860px) / 2)) 0; }
+.preliminary-note{ flex:none; padding:10px max(24px, calc((100% - 860px) / 2)) 14px;
+  color:#aaa196; font-size:11px; line-height:1.5; }
+/* 有内容时这行说明就是空的（连元素一起藏掉，别留一条空白带占内容的高度）。 */
+.preliminary-note[hidden]{ display:none; }
+
+/* 这里曾经用 border-left 给两档换色（原文中性灰、AI 稿近黑），目的是让语气一眼分得开。
+   已明确要求去掉：投屏时那块面板铺满整个窗口宽度，左边一条从顶到底的 3px 色带
+   只会被当成渲染坏了的边，分不清是设计还是 bug。两档的区分靠标签自己——
+   下划线 + 加粗 + 行数徽标，信息量够且都在内容区之内，别再退回边框方案。 */
+.preliminary-panel[data-state="fallback"] .preliminary-tab.active::after{ background:#c9a227; }
+.preliminary-panel[data-state="fallback"] .preliminary-tab.active .preliminary-tab-count{ background:#c9a227; }
+@media(max-width:700px){
+  .analysis-grid{ grid-template-columns:1fr; }
+  .preliminary-tabbar{ padding:0 16px; }
+  .preliminary-tabs{ gap:14px; }
+  .board-pane pre{ padding-left:16px; padding-right:16px; }
+  .preliminary-note{ padding-left:16px; padding-right:16px; }
+}
 .btn{ padding:6px 14px; border:1px solid #d4d0cb; border-radius:6px; font-size:12px; font-family:inherit; cursor:pointer; background:#fff; color:#555; display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
 .btn:hover{ border-color:#bbb; color:#333; }
 .btn:disabled{ opacity:.5; cursor:default; }
@@ -61,9 +150,15 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
 .def-grid textarea:focus{ border-color:#2c2c2c; }
 .def-label{ font-size:11px; font-weight:600; color:#666; margin-bottom:2px; }
 .def-actions{ margin-top:10px; display:flex; gap:6px; }
+/* AI 那一档的正文就是编辑器本身：白板正文（document）由模型生成、也能自己改。
+   它就是白板的正主，不再是「标签下面另起的第二块」。 */
 .editor-wrap{ flex:1; min-height:0; background:#fff; border:0; border-radius:0; overflow:hidden; }
+/* 编辑器自己的滚动容器，必须显式限制高度并允许滚动。
+   上游 WysiwygEditor 给 .milkdown-host 挂的是 Tailwind 的 h-full / overflow-auto，
+   但这个构建里没有 Tailwind——少了这两行，宿主节点会长到内容高度，
+   再被 .editor-canvas 的 overflow:hidden 整段裁掉：正文只看得到上半屏，而且滚不动。 */
 .editor-wrap > #editor, .editor-wrap .editor-canvas{ height:100%; min-height:0; }
-.editor-wrap .milkdown-host{ padding:12px 24px 80px; }
+.editor-wrap .milkdown-host{ height:100%; overflow-y:auto; padding:12px 24px 80px; }
 .editor-wrap .milkdown{ max-width:860px; margin:0 auto; }
 .toast{ position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:#2c2c2c; color:#fff; padding:8px 20px; border-radius:6px; font-size:12px; z-index:9999; opacity:0; transition:opacity .25s; pointer-events:none; }
 .toast.show{ opacity:1; }
