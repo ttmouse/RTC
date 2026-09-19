@@ -23,6 +23,10 @@
 （麦克风用振荡器代替、ASR 用本地假引擎），验证断了会自愈、救不回来会如实报——见
 `product-rules/ux-issue-log.md` 的 UX-14。它需要 Playwright（和 check:ux 一样不在仓库依赖里）。
 
+交互类的同样不能只靠读代码：`npm run check:search` 把顶栏这一排入口的行为跑一遍（搜索入口：
+默认不占版面 / 点开聚焦 / Esc 一步一跳 / 带着词收起就连词一起清 / 聚焦用偏灰墨色；六个图标的
+悬停都是浅纸底加墨色图标），`--break=visible|hidden|red|hoverred|esc` 用来自证这盏灯真会变红。
+
 ## product-direction/ — 产品方向
 
 | 文件 | 内容 |
@@ -41,3 +45,18 @@
 
 - `README.md`（仓库根）：安装、三种运行方式、配置项、换行逻辑、目录结构
 - `scripts/rtc.mjs`：CLI 开放入口，**软件边界的产品化表达**（外部 Agent 通过它读记录 / 改配置 / 调 LLM / 执行动作）
+
+## project-knowledge/ — 决策的知识目录（Project-Ledger）
+
+`docs/project-knowledge/records/` 存的是**可追溯的决策记录**（record-v1：id / status / sources /
+关系 / key），入口是仓库根的 `.project-knowledge.json`。它**不重复**上面那些文档的正文：
+规则本身仍在 `product-rules/`，这里只额外记下「当时怎么判断、选了哪条、被什么验证过」，
+并给出 id 和来源，让「这件事当初为什么这么定、后来有没有被推翻」是可查的而不是靠翻对话。
+
+```bash
+python3 ~/.agents/skills/Project-Ledger/scripts/knowledge.py context . --task "改主界面搜索入口" --scope src/js
+python3 ~/.agents/skills/Project-Ledger/scripts/knowledge.py review .
+```
+
+与 `product-rules/` 的分工：**规则是给人读的、要长期遵守的；记录是给人和 Agent 查的、
+带来源与验证状态的**。两张表不互相复制，改了一边记得看另一边要不要跟。
