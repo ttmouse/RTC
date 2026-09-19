@@ -107,6 +107,8 @@ $('btn').onclick = async () => {
     state.vadState = 'silent';
     state.vadSilenceCount = 0;
     state.vadHeartbeat = 0;
+    state.vadSpeechBlocks = 0;
+    state.speechHeardAt = 0;
     state.vadBuf.length = 0;
     resetVAD();
     connectASR();

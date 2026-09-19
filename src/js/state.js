@@ -67,6 +67,13 @@ export const state = {
   vadState: 'silent',
   vadSilenceCount: 0,
   vadHeartbeat: 0,
+  // 起说门槛计数：连着这么多块过门槛才认「有人说话」（见 asr.js 的 VAD_ONSET_BLOCKS）。
+  // 只用来挡一瞬的噪声（敲键盘、碰麦克风），所以中间掉一块就归零。
+  vadSpeechBlocks: 0,
+  // 最近一次「判定到有人在说话」的时刻（ms）。
+  // 只给界面用（菜单栏说完后留一小段「已听到」的回执），**不参与**说话判定本身——
+  // 判定只认 vadState（见 asr.js 的 updateSpeechState）。
+  speechHeardAt: 0,
   vadBuf: [],
   silenceChunks: 0,
   pcmSendBuffer: [],
@@ -74,6 +81,8 @@ export const state = {
   // 上行拥塞提示只在一次拥塞里弹一次，恢复后复位（见 asr.js sendPCM）
   pcmStallNotified: false,
   asrStopHandler: null,
+  // 一次性指令模式：用户主动打开后，只消费下一句定型语音，执行完自动关闭。
+  commandModeArmed: false,
   // AI 服务商配置（OpenAI 兼容）：provider/baseUrl/apiKey/model
   aiConfig: {
     provider: 'custom',

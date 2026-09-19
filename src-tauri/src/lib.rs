@@ -5,6 +5,8 @@ use std::process::{Command, Child, Stdio};
 use std::sync::Mutex;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
+use tauri::image::Image;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 /// 「现在最前面的是哪个应用」——粘贴目标。实现在 mac_frontmost.rs，那里写清了为什么
@@ -526,6 +528,183 @@ fn asr_status_snapshot(app: &tauri::AppHandle) -> LocalAsrStatus {
 #[tauri::command]
 fn local_asr_status(app: tauri::AppHandle) -> LocalAsrStatus {
     asr_status_snapshot(&app)
+}
+
+// ============================================================
+// 菜单栏图标（macOS 顶部状态栏）
+//
+// 它存在的唯一理由：应用在后台（用户正在别的软件里说话）时，这是唯一能回答
+// 「现在到底有没有在工作」的地方。窗口在别人后面时，用户看不到主界面状态区。
+//
+// 分工：**状态判断只在前端**（src/js/ui.js 的 computeRunStatus，产品原则 3：状态单一来源），
+// 前端把「用哪个字形 + 什么颜色」算好后调 set_tray_status；Rust 只负责换图、上色、写 tooltip。
+// 这里不重新判断状态——否则菜单栏和主界面迟早会说两套话。
+// ============================================================
+
+/// 菜单栏图标 id（前端改状态时按它找回这个图标）
+const TRAY_ID: &str = "rtc-status";
+
+/// 菜单栏那一格的宽度（pt）。**写死一个值，不靠图片算**：
+/// - 按钮会在图片两侧各留一段内边距（实测比图片宽 16pt），所以「把图片缩窄」调不准；
+/// - 固定宽度意味着三种状态切换时**旁边那排图标不会左右跳**（说话是每句话都会发生的事）。
+///
+/// 28pt 是这么来的：里面的图形（参考 `speaking` 那根波浪）约 13.5pt 宽，
+/// 两侧各留 7pt 左右的呼吸 → 胶囊看起来才不像被图形撑满的长条。觉得宽/窄就改这一个数。
+const TRAY_SLOT_WIDTH: f64 = 28.0;
+
+/// 字形名 → 图片。字形语义互斥（见 src/js/tray.js 的映射表）：
+/// idle=待命（麦克风）、dot=在录但没听到声音（圆点，就是「录音灯」）、
+/// speaking=正在说话（电平柱，底色由按钮图层另行画出，见 paint_tray_background）、
+/// mic-off=麦克风/声音输入异常、service-error=服务侧异常。
+///
+/// 全部都是**模板图**（纯黑+透明）：默认交给 macOS 按模板图渲染（跟随系统明暗），
+/// 需要颜色时由 set_tray_status 临时着色——不另存彩色版本，见 tint_rgba。
+///
+/// 所有字形统一是 **36×36 画布**（= 18×18pt，tray 固定按高 18pt 渲染）。
+/// 菜单栏那一格的宽度不靠图片决定，而是写死 `TRAY_SLOT_WIDTH`（见 paint_tray_background），
+/// 所以三种状态切换时**旁边那排图标不会左右跳**。
+fn tray_glyph_bytes(glyph: &str) -> Option<&'static [u8]> {
+    Some(match glyph {
+        "idle" => include_bytes!("../icons/tray/idle.png"),
+        "dot" => include_bytes!("../icons/tray/dot.png"),
+        "speaking" => include_bytes!("../icons/tray/speaking.png"),
+        "mic-off" => include_bytes!("../icons/tray/mic-off.png"),
+        "service-error" => include_bytes!("../icons/tray/service-error.png"),
+        _ => return None,
+    })
+}
+
+/// 解析 `#RRGGBB`（前端传的色值）。认不出来返回 None —— 宁可不看色（退回黑白模板图），
+/// 也不猜一个可能与状态无关的颜色。
+fn parse_hex_color(s: &str) -> Option<(u8, u8, u8)> {
+    let s = s.trim().trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    Some((
+        u8::from_str_radix(&s[0..2], 16).ok()?,
+        u8::from_str_radix(&s[2..4], 16).ok()?,
+        u8::from_str_radix(&s[4..6], 16).ok()?,
+    ))
+}
+
+/// 把黑色像素换成指定颜色，**alpha 原样保留**——字形本身就是一张 alpha 遮罩，
+/// 所以着色不需要另存一套彩色图片：只改 RGB。
+fn tint_rgba(src: &[u8], (r, g, b): (u8, u8, u8)) -> Vec<u8> {
+    let mut out = src.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        px[0] = r;
+        px[1] = g;
+        px[2] = b;
+    }
+    out
+}
+
+/// 前端状态每变一次就调这里：`glyph` = 图标字形，`color` = 颜色（None = 黑白模板图），
+/// `tooltip` = 悬停说明。
+///
+/// **没有文字参数**：菜单栏那一格只放图标，状态全写在图形与颜色里
+/// （图标边上的文字已按用户 2026-09-19 的要求全部去掉）；要看原因与下一步就悬停或点开主界面。
+///
+/// 失败不 panic 也不报错弹窗：菜单栏只是旁路出口，它坏了不能影响录音主流程（产品原则 4）。
+#[tauri::command]
+fn set_tray_status(
+    app: tauri::AppHandle,
+    glyph: String,
+    color: Option<String>,
+    background: Option<String>,
+    tooltip: String,
+) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return Err("菜单栏图标不存在（可能是启动时创建失败）".into());
+    };
+    if let Some(bytes) = tray_glyph_bytes(&glyph) {
+        let img = Image::from_bytes(bytes).map_err(|e| e.to_string())?;
+        let (w, h) = (img.width(), img.height());
+        match color.as_deref().and_then(parse_hex_color) {
+            Some(rgb) => {
+                // 有色 → 必须关掉模板模式，否则 macOS 会把颜色丢掉、按系统明暗重绘成黑白
+                let tinted = tint_rgba(img.rgba(), rgb);
+                let icon = Image::new(&tinted, w, h).to_owned();
+                tray.set_icon_with_as_template(Some(icon), false)
+                    .map_err(|e| e.to_string())?;
+            }
+            // 无色 → 模板图：自动跟随菜单栏明暗（空闲态就该安静，不抢眼）
+            None => {
+                tray.set_icon_with_as_template(Some(img), true)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    // 背景块（「正在说话」那块橙底）画在按钮自己的图层上：高度由系统给，
+    // 所以和系统点击时那块高亮底**天然一样高**——图片做不到这件事（见函数注释）。
+    #[cfg(target_os = "macos")]
+    paint_tray_background(&tray, background.as_deref().and_then(parse_hex_color))?;
+    #[cfg(not(target_os = "macos"))]
+    let _ = &background;
+
+    tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 给菜单栏项自己的按钮画/清背景块。
+///
+/// 为什么不用图片画：**tray 固定把图片按高 18pt 渲染**（tray-icon 里写死 `icon_height = 18.0`），
+/// 所以图片做出来的色块最多 18pt 高；而系统点击时那块高亮底是按钮自己的 bounds，比 18pt 高。
+/// 用户要的正是「和那个高度一致」——那就只能画在按钮的图层上：高度由系统给，天然一样高，
+/// 不用猜一个写死的数字，也不会因为换了显示器/分辨率而错位。
+///
+/// 另一个好处：颜色仍然只有一处（src/js/tray.js 的 TONE_SPEAKING），不必把橙色烤进 PNG。
+#[cfg(target_os = "macos")]
+fn paint_tray_background(
+    tray: &tauri::tray::TrayIcon<tauri::Wry>,
+    rgb: Option<(u8, u8, u8)>,
+) -> Result<(), String> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSColor;
+    use objc2_quartz_core::kCACornerCurveContinuous;
+
+    tray.with_inner_tray_icon(move |inner| {
+        let Some(item) = inner.ns_status_item() else { return };
+        // 这个回调跑在主线程上；万一不是（未来实现变了），安静放弃比乱设更安全
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        // 宽度每次都重设一遍：图标换过之后系统可能按内容重新量过
+        item.setLength(TRAY_SLOT_WIDTH);
+        let Some(button) = item.button(mtm) else { return };
+        button.setWantsLayer(true); // layer() 在此之前返回 nil
+        let Some(layer) = button.layer() else { return };
+        match rgb {
+            Some((r, g, b)) => {
+                let color = NSColor::colorWithSRGBRed_green_blue_alpha(
+                    r as f64 / 255.0,
+                    g as f64 / 255.0,
+                    b as f64 / 255.0,
+                    1.0,
+                );
+                layer.setBackgroundColor(Some(&color.CGColor()));
+                // 胶囊形状（用户 2026-09-19 要的「大圆角、像胶囊按钮」）：半径取高度的一半，
+                // 这样它天然是个胶囊——不用写死数值，换显示器/菜单栏变高也不会变成半圆角矩形。
+                layer.setCornerRadius(button.bounds().size.height / 2.0);
+                // 苹果自己的胶囊用的是「连续圆角」（squircle），比正圆弧更顺眼；
+                // 默认是 circular，不设的话两条边的转角会看出硬拐点。
+                layer.setCornerCurve(unsafe { kCACornerCurveContinuous });
+            }
+            None => layer.setBackgroundColor(None),
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 点菜单栏图标 → 把主界面拿到前面。
+/// 先 show 再聚焦：⌘H 隐藏过整个应用时，单一个 set_focus 叫不回来。
+fn focus_main_window(app: &tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
 }
 
 /// 重启本机模型服务——设置页「模型服务未启动」时的恢复入口。
@@ -1054,11 +1233,41 @@ pub fn run() {
             accessibility_permission,
             request_accessibility_permission,
             local_asr_status,
-            restart_local_asr
+            restart_local_asr,
+            set_tray_status
         ])
         .setup(|app| {
             let handle = app.handle().clone();
             restore_window_state(&handle);
+
+            // 菜单栏图标：常驻一个「待命」图标，之后由前端按状态换图换字（见 set_tray_status）。
+            // 点一下把主界面拿到前面——图标只回答「在不在工作」，具体状态和下一步在主界面里，
+            // 所以不做第二套菜单（同一个状态只在一个地方说）。
+            {
+                let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+                    .show_menu_on_left_click(false)
+                    .tooltip("实时逐字稿")
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            focus_main_window(tray.app_handle());
+                        }
+                    });
+                if let Some(bytes) = tray_glyph_bytes("idle") {
+                    if let Ok(img) = Image::from_bytes(bytes) {
+                        builder = builder.icon(img).icon_as_template(true);
+                    }
+                }
+                match builder.build(&handle) {
+                    Ok(_) => println!("[tauri] 菜单栏图标已创建"),
+                    // 建不出来也不拦启动：主界面照旧，只是少了一个后台状态出口
+                    Err(e) => eprintln!("[tauri] 菜单栏图标创建失败: {e}"),
+                }
+            }
 
             // 系统级全局热键 ⌥⌘P：切换「自动粘贴」。
             // 为什么需要全局：典型场景是在别的应用里打字时临时开/关粘贴，
@@ -1214,5 +1423,34 @@ fn cleanup_all_servers(state: &AppState) {
             let _ = c.kill();
             let _ = c.wait();
         }
+    }
+}
+
+#[cfg(test)]
+mod tray_tests {
+    use super::*;
+
+    /// 每个字形必须都能解码，而且**画布尺寸完全一致**（36×36 = 18×18pt 的 @2x）。
+    ///
+    /// 尺寸一致这条比看起来重要：菜单栏那一格的宽度虽然由 `TRAY_SLOT_WIDTH` 定死，
+    /// 但图形本身的画布一旦不一样大，图标在格子里的视觉大小就会跳（说话是每句话都会发生的事）。
+    ///
+    /// 这条测试为什么值得存在：`set_tray_status` 拿不到图片时是「静默不换图」——
+    /// 图片改错名、被误删、或换了非 PNG 格式，菜单栏会**继续显示上一个状态的图标**，
+    /// 界面不报错、日志不报错，只有用户看得见那句假状态。这正是产品原则 3 要禁的假状态。
+    #[test]
+    fn tray_glyphs_decode() {
+        let mut canvas = None;
+        for glyph in ["idle", "dot", "speaking", "mic-off", "service-error"] {
+            let bytes = tray_glyph_bytes(glyph).unwrap_or_else(|| panic!("字形 {glyph} 没有图片"));
+            let img = Image::from_bytes(bytes).unwrap_or_else(|e| panic!("字形 {glyph} 解码失败: {e}"));
+            let size = (img.width(), img.height());
+            assert_eq!(size, (36, 36), "字形 {glyph} 画布尺寸不对（应为 36×36 = 18×18pt 的 @2x）");
+            match canvas {
+                None => canvas = Some(size),
+                Some(c) => assert_eq!(c, size, "字形 {glyph} 和别的字形画布不一样大，切换时会把旁边的图标推来推去"),
+            }
+        }
+        assert!(tray_glyph_bytes("not-a-glyph").is_none(), "未定义字形应返回 None，而不是猜一个");
     }
 }

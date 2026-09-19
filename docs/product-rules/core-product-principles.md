@@ -115,7 +115,7 @@
 |------|--------|
 | 1 软件边界 | `scripts/rtc.mjs` 文件头的声明；`POST /api/llm/chat` 是透明代理（baseUrl/Key/model 由调用方传入）；例外：`server.js` 的 `POST /api/tasks/meeting-summary` |
 | 2 本地优先 | 数据目录 `~/Library/Application Support/com.rtc.transcriber/`；模型外置不入库（README）；`/api/storage` 暴露路径 |
-| 3 单一状态源 | `src/js/ui.js` 的 `computeRunStatus`（唯一决定状态点/文案/时间；其它模块只改 state）。它读两个可达性字段：`serverOk`（代理服务 8931）与 `modelServiceOk`（本机模型服务 8933，由 `src/js/model.js` 的 `probeModelService` 写入，设置页与主界面共用同一次探测） |
+| 3 单一状态源 | `src/js/ui.js` 的 `computeRunStatus`（唯一决定状态点/文案/时间；其它模块只改 state）。它读两个可达性字段：`serverOk`（代理服务 8931）与 `modelServiceOk`（本机模型服务 8933，由 `src/js/model.js` 的 `probeModelService` 写入，设置页与主界面共用同一次探测）。屏幕顶部菜单栏图标是同一结论的第二个出口（`src/js/tray.js` 只做「结论 → 字形/颜色」的翻译，不重新判断；图标边上不放文字，状态全在图形与颜色里；字形资源在 `src-tauri/icons/tray/`，Rust 侧的 `set_tray_status`（含 `color` 上色与 `tint_rgba`）、`TRAY_ID`、`focus_main_window` 在 `src-tauri/src/lib.rs`；状态清单与字形表的对应关系由 `tests/tray-status.test.mjs` 钉死） |
 | 4 不阻塞主路径 | `src/js/asr.js` 用 `void learnSpecialCommand(...)`；`src/js/commands.js` 注释「不阻塞、不吞文本」 |
 | 5 文件即接口 | `events/YYYY-MM-DD.jsonl`（每行一个事件；`targetApp` = 这句话粘给了哪个软件，没粘出去就是 `null`）、`config.json`、`commands.json`；`scripts/transcript.mjs` 直接读文件 |
 | 6 配置合并 | `server.js:357 patchConfig`，注释记录了被否决的 GET-改-PUT 写法导致的丢失更新 |

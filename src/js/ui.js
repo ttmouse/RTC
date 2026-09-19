@@ -2,6 +2,7 @@ import { state } from './state.js';
 import { apiUrl } from './api.js';
 import { setLineTarget, setLinePasteState, specFromActiveApp } from './pastebadge.js';
 import { shouldShowTimestamp } from './timeGrouping.js';
+import { syncTrayStatus } from './tray.js';
 
 export function $(id) {
   return document.getElementById(id);
@@ -125,6 +126,15 @@ export function renderRunStatus() {
       delete statusEl.dataset.tip;
     }
   }
+  // 菜单栏图标和状态区共用这一次结论（应用在后台时，它是唯一能看到状态的地方）。
+  // 除了状态，还要告诉它「现在有没有人在说话」：VAD 一判定到音超过门槛就会立刻
+  // 再调一次本函数（见 asr.js 的 updateSpeechState），所以菜单栏上的「说话中」不是
+  // 秒级轮询，而是和电平尺同一时刻的事实。onExpire 是「已听到」回执到期时叫我们重渲染。
+  syncTrayStatus(st, {
+    speaking: state.vadState === 'speech',
+    onExpire: () => renderRunStatus(),
+  });
+
   if (!timeEl) return;
   if (st.time === 'rec' && state.recStartTs) {
     timeEl.textContent = fmtDuration((Date.now() - state.recStartTs) / 1000);
@@ -413,7 +423,7 @@ export function prependEntries(entries) {
   let prevDay = null;
   entries.forEach((entry, i) => {
     const { day, el } = buildLine(new Date(tsOf(entry)), entry.text, false);
-    // 没有 activeApp 的旧事件不补造前台应用，只显示可知的正文状态。
+    // 没有 activeApp 的旧事件不补造前台应用，改用未识别图标保留左侧位置。
     setLineTarget(el, specFromActiveApp(entry.activeApp));
     setLinePasteState(el, entry.pasteStatus === 'pasted');
     if (day !== prevDay) {

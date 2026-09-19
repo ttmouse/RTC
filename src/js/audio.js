@@ -1,6 +1,6 @@
 import { state, rmsToMeterPct, isLocalEngine, normalizeEngine } from './state.js';
 import { renderRunStatus, setRecordBtn } from './ui.js';
-import { vadSend, sendPCM, finalizePending, disconnectBailian } from './asr.js';
+import { vadSend, trackSpeech, sendPCM, finalizePending, disconnectBailian } from './asr.js';
 import { flushTotalDuration } from './settings.js';
 import { playStop } from './sfx.js';
 import { feedMeter, startMeter, resetMeter } from './meter.js';
@@ -122,6 +122,10 @@ export async function startAudio() {
         const pcm = floatToInt16(down);
         vadSend(down, pcm);
       } else if (isLocalEngine(normalizeEngine(state.asrEngine))) {
+        // 本地引擎的音频不过前端 VAD 闸门（分段由 asr_local/server.py 自己那套同样的
+        // 自适应 VAD 做，每块都送），但「现在有没有人在说话」是共用的结论——
+        // 菜单栏的「说话中」靠它，否则本地引擎下那个状态永远不会亮。
+        trackSpeech(down);
         const pcm = floatToInt16(down);
         sendPCM(pcm);
       } else {
@@ -243,6 +247,13 @@ export function stopRec() {
   state.wantRecording = false;
   state.recording = false;
   state.recStartTs = 0;
+  // 说话状态跟着录音一起结束：不停掉的话，在「说话中」按下停止（或 WS 断开自动停）
+  // 会把「说话中」留在菜单栏上——录都没在录了还说有人说话，就是假状态。
+  state.vadState = 'silent';
+  state.vadSilenceCount = 0;
+  state.vadHeartbeat = 0;
+  state.vadSpeechBlocks = 0;
+  state.speechHeardAt = 0;
   clearTimeout(state.reconnectTimer);
   releaseAudioInput();
   finalizePending();
