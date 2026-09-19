@@ -10,7 +10,10 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
    少了它，菜单会按整个窗口定位——掉到屏幕外看不见，还把整页撑出滚动条，
    症状就是「一点会议名，整个界面错位、下拉开在莫名其妙的地方」。
    顺带：z-index 只在非 static 的元素上才生效。 */
-.board-bar{ position:relative; flex:none; z-index:40; display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 24px; background:#fff; border-bottom:1px solid #eeeae4; }
+.board-bar{ position:relative; flex:none; z-index:40; display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 24px; background:#fff; border-bottom:1px solid #eeeae4; transition:margin-left .18s ease; }
+.session-sidebar-toggle{ display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px; padding:0; border:0; border-radius:6px; background:none; color:#9a9287; cursor:pointer; }
+.session-sidebar-toggle:hover{ background:#f0eee9; color:#2c2c2c; }
+.session-sidebar-toggle:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
 .board-session{ display:inline-flex; align-items:center; gap:6px; max-width:70vw; padding:3px 6px; margin-left:-6px; border:0; border-radius:6px; background:none; font:inherit; font-size:18px; font-weight:600; color:#2c2c2c; cursor:pointer; }
 .board-session:hover{ background:#f0eee9; }
 .board-session:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
@@ -40,6 +43,9 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
 /* left 跟着 .board-bar 的左右内边距（24px）走，让下拉与它上面的会议名左对齐——
    absolute 的 left:0 对齐的是 padding box 外缘，会贴到窗口最左边，和会议名错开一截。 */
 .board-menu{ position:absolute; top:calc(100% + 8px); left:24px; z-index:50; display:flex; flex-direction:column; gap:6px; min-width:340px; max-width:min(560px,80vw); padding:6px; background:#fff; border:1px solid #e8e5e0; border-radius:10px; box-shadow:0 14px 36px rgba(0,0,0,.10); }
+.board-wrap.sidebar-open .board-bar, .board-wrap.sidebar-open .preliminary-panel{ margin-left:300px; }
+.board-wrap.sidebar-open .board-menu{ position:fixed; top:0; left:0; bottom:0; width:300px; height:100vh; min-width:0; max-width:none; padding:60px 10px 12px; border-width:0 1px 0 0; border-radius:0; box-shadow:8px 0 24px rgba(0,0,0,.06); }
+.board-wrap.sidebar-open .board-menu-list{ flex:1; max-height:none; min-height:0; }
 .board-menu[hidden]{ display:none; }
 .board-search{ width:100%; padding:7px 10px; border:1px solid #e8e5e0; border-radius:7px; background:#faf9f7; font:inherit; font-size:13px; color:#2c2c2c; }
 .board-search::placeholder{ color:#a9a196; }
@@ -50,7 +56,7 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
 .menu-item:hover{ background:#f4f2ee; }
 .menu-item:focus{ background:#f4f2ee; outline:none; }
 .menu-item.active{ background:#f4f2ee; color:#1a1a1a; font-weight:600; }
-.menu-meta{ font-size:11px; color:#9a9287; font-weight:400; }
+.menu-meta{ font-size:11px; color:#6f6860; font-weight:400; }
 /* 命中上下文：只在下拉里出现，用来说明「这场为什么被搜出来」。 */
 .menu-snippet{ font-size:11px; color:#9a9287; font-weight:400; line-height:1.5; }
 .menu-snippet mark{ padding:0 1px; background:#f6e7c6; color:#5c4a1f; border-radius:2px; }
@@ -60,7 +66,7 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
 .board-copy:hover{ background:#e3ddd5; color:#3a3a3a; }
 .board-copy:active{ background:#d4cdc3; }
 .board-copy:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
-.menu-empty{ padding:10px 12px; font-size:12px; color:#9a9287; }
+.menu-empty{ padding:10px 12px; font-size:12px; color:#6f6860; }
 .analysis-panel{ background:#fff; border:1px solid #e8e5e0; border-radius:8px; padding:16px 18px; margin-bottom:16px; }
 .analysis-empty{ color:#999; font-size:13px; line-height:1.6; }
 .analysis-head{ display:flex; justify-content:space-between; gap:12px; padding-bottom:10px; border-bottom:1px solid #eeeae4; font-size:13px; font-weight:600; }
@@ -81,7 +87,7 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
    1) 不做成上下两块（标签只管自己那一档，不跨到别的块上）。
    2) 不做成「电梯」：不要固定高度的小滚动框，内容用满可用高度。
    3) 两块拼成一块——标签栏紧贴内容，中间不夹任何东西（两档的区分只靠标签栏，不靠边缘色带）。 */
-.preliminary-panel{ flex:1; min-height:0; display:flex; flex-direction:column; background:#faf9f7; }
+.preliminary-panel{ flex:1; min-height:0; display:flex; flex-direction:column; background:#faf9f7; transition:margin-left .18s ease; }
 .preliminary-panel[data-state="empty"]{ color:#999; }
 .preliminary-panel[data-state="pending"]{ color:#777; }
 
@@ -96,12 +102,12 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
 /* 下划线式标签：它说的是「同一份内容的两种看法」，不是两个动作。
    用按钮样式会让人以为按下去会发生别的事。 */
 .preliminary-tab{ position:relative; padding:11px 0 10px; border:0; background:none; font:inherit;
-  font-size:13px; color:#9a9287; cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  font-size:13px; color:#6f6860; cursor:pointer; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
 .preliminary-tab:hover{ color:#4e4942; }
 .preliminary-tab:focus-visible{ outline:2px solid #2c2c2c; outline-offset:-2px; border-radius:3px; }
 .preliminary-tab.active{ color:#2c2c2c; font-weight:600; }
 .preliminary-tab.active::after{ content:""; position:absolute; left:0; right:0; bottom:-1px; height:2px; background:#2c2c2c; }
-.preliminary-tab-count{ padding:0 5px; border-radius:8px; background:#ece8e2; color:#8b8276; font-size:10px; font-weight:400; }
+.preliminary-tab-count{ padding:0 5px; border-radius:8px; background:#ece8e2; color:#645d54; font-size:10px; font-weight:400; }
 .preliminary-tab.active .preliminary-tab-count{ background:#2c2c2c; color:#fff; }
 /* 这一档还没内容（AI 还没跑完）时标签仍在、仍可点，只是淡一点：
    藏起来用户就不知道「还有一档 AI 内容」这回事。 */
@@ -119,7 +125,7 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
   font:inherit; font-size:13px; line-height:1.7; color:#3f3b36;
   padding:12px max(24px, calc((100% - 860px) / 2)) 0; }
 .preliminary-note{ flex:none; padding:10px max(24px, calc((100% - 860px) / 2)) 14px;
-  color:#aaa196; font-size:11px; line-height:1.5; }
+  color:#6f6860; font-size:11px; line-height:1.5; }
 /* 有内容时这行说明就是空的（连元素一起藏掉，别留一条空白带占内容的高度）。 */
 .preliminary-note[hidden]{ display:none; }
 
@@ -129,6 +135,16 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
    下划线 + 加粗 + 行数徽标，信息量够且都在内容区之内，别再退回边框方案。 */
 .preliminary-panel[data-state="fallback"] .preliminary-tab.active::after{ background:#c9a227; }
 .preliminary-panel[data-state="fallback"] .preliminary-tab.active .preliminary-tab-count{ background:#c9a227; }
+@media(max-width:999px){
+  .session-sidebar-toggle{ display:none; }
+  .board-wrap.menu-open .board-bar{ flex-wrap:wrap; }
+  .board-wrap.menu-open .board-menu{ position:static; order:10; flex:0 0 100%; min-width:0; max-width:none; margin-top:2px; }
+
+  .board-wrap.sidebar-open .board-bar, .board-wrap.sidebar-open .preliminary-panel{ margin-left:0; }
+  .board-wrap.sidebar-open .board-menu{ position:absolute; top:calc(100% + 8px); left:24px; bottom:auto; width:auto; height:auto; min-width:340px; max-width:min(560px,80vw); padding:6px; border-width:1px; border-radius:10px; box-shadow:0 14px 36px rgba(0,0,0,.10); }
+  .board-wrap.menu-open .board-menu{ position:static; top:auto; left:auto; width:auto; }
+  .board-wrap.sidebar-open .board-menu-list{ flex:none; max-height:52vh; }
+}
 @media(max-width:700px){
   .analysis-grid{ grid-template-columns:1fr; }
   .preliminary-tabbar{ padding:0 16px; }
@@ -146,6 +162,10 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
 .def-desc{ font-size:12px; color:#999; margin-bottom:12px; }
 .def-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 @media(max-width:700px){ .def-grid{ grid-template-columns:1fr; } }
+@media(min-width:1000px){
+  .board-session{ max-width:calc(100vw - 360px); }
+  .board-wrap:not(.sidebar-open) .session-sidebar-toggle{ color:#2c2c2c; }
+}
 .def-grid textarea{ width:100%; padding:8px 10px; border:1px solid #d4d0cb; border-radius:4px; font-size:12px; font-family:inherit; resize:vertical; outline:none; line-height:1.5; background:#faf9f7; }
 .def-grid textarea:focus{ border-color:#2c2c2c; }
 .def-label{ font-size:11px; font-weight:600; color:#666; margin-bottom:2px; }
