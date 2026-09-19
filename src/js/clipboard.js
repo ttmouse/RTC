@@ -23,11 +23,12 @@ export function pasteToCursor(text, autoEnter) {
     if (status === 'clipboard_only') {
       logTiming('paste.done_clipboard_only');
       console.log(`[paste] ${source} 完成（仅剪贴板，无自动粘贴）`);
-      return;
+      return status;
     }
     logTiming('paste.done');
     console.log(`[paste] ${source} Cmd+V 已发送`);
     playPaste();
+    return status;
   };
   const tauriInvoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
   const reportPasteError = e => {
@@ -43,17 +44,16 @@ export function pasteToCursor(text, autoEnter) {
   };
 
   if (tauriInvoke) {
-    tauriInvoke('paste_text', { text, autoEnter })
+    return tauriInvoke('paste_text', { text, autoEnter })
       .then(result => {
         const status = result && typeof result === 'object' ? result.status : result;
-        afterPaste(status, 'Tauri paste');
+        return afterPaste(status, 'Tauri paste');
       })
       .catch(reportPasteError);
-    return;
   }
 
   const endpoint = apiUrl('/paste');
-  fetch(endpoint, {
+  return fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, autoEnter }),
@@ -61,7 +61,7 @@ export function pasteToCursor(text, autoEnter) {
     .then(async res => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
-      afterPaste(data.warn === 'auto_paste_disabled' ? 'clipboard_only' : 'ok', '服务端 paste');
+      return afterPaste(data.warn === 'auto_paste_disabled' ? 'clipboard_only' : 'ok', '服务端 paste');
     })
     .catch(reportPasteError);
 }

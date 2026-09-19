@@ -327,12 +327,22 @@
     <!-- 拾音参数（静音超时 / 麦克风增益）已并入上方「识别方式」的本地引擎区 -->
 
     <div class="s-group">
+      <div class="sg-title">自动粘贴</div>
+      <div class="s-field app-rules-field">
+        <div class="fl">允许自动粘贴的应用</div>
+        <div class="fd">未选中的应用不会被自动粘贴，字只留在记录里。应用从本机列表选择。</div>
+        <div class="app-rule-add"><button type="button" class="sbtn sm" data-rule="autoPaste">添加应用</button></div>
+        <div id="autoPasteAppList" class="app-rule-list" data-rule="autoPaste"></div>
+      </div>
+    </div>
+
+    <div class="s-group">
       <div class="sg-title">自动发送</div>
       <div class="s-field app-rules-field">
         <div class="fl">允许自动发送的应用</div>
-        <div class="fd">未选中的应用只粘贴，不自动回车。应用从本机列表选择。</div>
-        <div class="app-rule-add"><button type="button" class="sbtn sm" id="autoEnterAppAdd">添加应用</button></div>
-        <div id="autoEnterAppList" class="app-rule-list"></div>
+        <div class="fd">未选中的应用只粘贴，不自动回车。只在「允许自动粘贴」的应用里有意义（粘都没粘，就无从谈回车）。</div>
+        <div class="app-rule-add"><button type="button" class="sbtn sm" data-rule="autoEnter">添加应用</button></div>
+        <div id="autoEnterAppList" class="app-rule-list" data-rule="autoEnter"></div>
       </div>
     </div>
 

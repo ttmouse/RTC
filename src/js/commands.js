@@ -79,12 +79,16 @@ async function persistCommandEntry(section, key, value) {
 
 /** 启动时预载指令映射（放入内存同步表） */
 export async function initLearnedCommands() {
-  const { aliases, actions, snippets } = await loadCommandMap();
-  commandCache = aliases;
-  actionCache = actions;
-  snippetCache = snippets;
-  loaded = true;
-  console.log(`[command] 指令表已加载 ${Object.keys(commandCache).length} 条别名 / ${Object.keys(actionCache).length} 条动作 / ${Object.keys(snippetCache).length} 条短语`);
+  try {
+    const { aliases, actions, snippets } = await loadCommandMap();
+    commandCache = aliases;
+    actionCache = actions;
+    snippetCache = snippets;
+    loaded = true;
+    console.log(`[command] 指令表已加载 ${Object.keys(commandCache).length} 条别名 / ${Object.keys(actionCache).length} 条动作 / ${Object.keys(snippetCache).length} 条短语`);
+  } catch (e) {
+    console.error('[command] initLearnedCommands 失败，指令管理页仍可打开:', e);
+  }
   initCommandMenu();
 }
 
@@ -576,10 +580,23 @@ function bindCommandPage() {
 
 /** 绑定右上角图标入口：点开语音指令管理页 */
 function initCommandMenu() {
+  if (cmdMenuBound) return;
   const btn = document.getElementById('cmdBtn');
-  if (!btn || cmdMenuBound) return;
+  if (!btn) {
+    // DOM 还没就绪（罕见，但模块加载和 DOMContentLoaded 谁先到不一定），
+    // 等 DOMContentLoaded 再试一次。不用无限重试：DOMContentLoaded 一定触发。
+    document.addEventListener('DOMContentLoaded', () => initCommandMenu(), { once: true });
+    return;
+  }
   cmdMenuBound = true;
-  btn.onclick = (e) => { e.stopPropagation(); void openCommandPage(); };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); void openCommandPage(); });
+}
+
+// DOMContentLoaded 备用初始化：不影响正常运行但确保指令入口一定可用。
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+  initCommandMenu();
+} else {
+  document.addEventListener('DOMContentLoaded', () => initCommandMenu(), { once: true });
 }
 
 /** 从语音中识别选区 AI 操作（"翻译一下"） */
@@ -819,7 +836,8 @@ async function executeSelectionAiCommand({ action }) {
 
 /** 执行“当前前台应用 → ⌘F → 输入搜索词 → 回车” */
 async function executeCurrentAppSearchCommand({ query }) {
-  const app = await getFrontmostApp();
+  const info = await getFrontmostApp();
+  const app = info && info.name;
   if (!app) {
     toast('没有识别到当前应用，未执行搜索');
     return;

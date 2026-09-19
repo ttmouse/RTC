@@ -2,17 +2,24 @@ import { state, ASR_PRICE, rmsToMeterPct, clampVADThreshold, normalizeEngine, en
 import { $ } from './ui.js';
 import { fetchLocalConfig, patchLocalConfig } from './storage.js';
 import { apiUrl, wsProxyUrl } from './api.js';
+import { setMeterTick } from './meter.js';
 
 let costWriteTimer = null;
 let settingsWriteTimer = null;
 
+/**
+ * 摆 VAD 阈值刻度。这是刻度的**唯一**写入点（拖动、启动、载入配置都走这里）。
+ * 刻度在 DOM 上其实是两层：外层深红（条没盖住时可见）＋ 条内部的纸色反白
+ * （条盖住时可见，见 style.css 的 #levelMeterTickInv 注释）。
+ * 外层在这里直接定位；内层位置要跟着条的宽度每帧变，所以只把百分比交给 meter.js，
+ * 由它的 rAF 循环去摆——两层的 left 都源自同一个 pct，不会算出两个不同的刻度。
+ */
 export function renderVADThresholdMarker() {
   const tick = $('levelMeterTick');
   const threshold = state.vadThreshold || 0.006;
-  if (tick) {
-    const pct = rmsToMeterPct(threshold);
-    tick.style.left = pct.toFixed(1) + '%';
-  }
+  const pct = rmsToMeterPct(threshold);
+  if (tick) tick.style.left = pct.toFixed(1) + '%';
+  setMeterTick(pct);
 }
 
 // OpenAI 兼容服务商预设（选预设自动填 baseUrl/model，也可切「自定义」手动填）
@@ -34,6 +41,26 @@ export function aiProviderLabel(key) {
 }
 
 /**
+ * 名单里有没有「就是这个应用」。
+ *
+ * 名单里存的是设置页从**系统应用列表**里挑出来的 `.app` 包名（`WeChat`），而前台查询
+ * 给的是 macOS 的本地化显示名（`微信`）——同一次核对里两边经常对不上。所以判定比的
+ * 不是名字相等，而是**身份**：包名 / 显示名 / bundle id 三个里任意一个相等就算命中
+ * （大小写不敏感）。
+ *
+ * 真实事故（别再改回字符串相等）：`config.json` 的 `autoEnterApps` 里存的是
+ * `["Cindy", "WeChat"]`，而记录里前台应用实际是 `微信`——`WeChat` 永远匹配不上，
+ * 用户加了微信，微信里却一直收不到自动回车，而且没有任何地方会告诉他为什么。
+ */
+export function appInList(apps, target) {
+  if (!target || !Array.isArray(apps) || !apps.length) return false;
+  const keys = [target.name, target.bundle, target.id]
+    .filter(k => typeof k === 'string' && k.trim())
+    .map(k => k.trim().toLowerCase());
+  return apps.some(name => typeof name === 'string' && keys.includes(name.trim().toLowerCase()));
+}
+
+/**
  * 这次粘贴要不要跟着按一下回车。
  *
  * 回车发出去是收不回的，所以「自动发送」不能对所有应用一视同仁（在编辑器里被
@@ -41,68 +68,112 @@ export function aiProviderLabel(key) {
  * - 总闸（底栏那个「自动发送」开关）关着 → 一律不按；
  * - 总闸开着 → 没配名单就沿用老行为（所有应用都按）；配了名单就只给名单里的按。
  *
- * `targetApp` 是这次粘贴的目标应用名（可能为 null：网页版 / 前台是本程序 / 查询失败）。
- * 拿不到目标时**不按**：宁可让用户伸手按一下，也不能把不知道发去哪的话送出去。
+ * `target` 是这次粘贴的目标应用身份（`{ name, bundle, id }`，可能为 null：网页版 /
+ * 前台是本程序 / 查询失败）。拿不到目标时**不按**：宁可让用户伸手按一下，
+ * 也不能把不知道发去哪的话送出去。名单里的名字和应用身份不一定同名（`WeChat` vs
+ * `微信`），判定统一走 appInList。
  */
-export function shouldAutoEnter(targetApp) {
+export function shouldAutoEnter(target) {
   if (!state.autoEnter) return false;
   const apps = state.autoEnterApps;
   if (!Array.isArray(apps) || !apps.length) return true;
-  return !!targetApp && apps.includes(targetApp);
+  return appInList(apps, target);
 }
 
-// 设置页的应用名单先改草稿，点击「保存」才写入 state；取消不会偷偷改变运行中的规则。
-let autoEnterAppsDraft = [];
+/**
+ * 这次定型要不要真的按 Cmd+V（自动粘贴）。
+ *
+ * 与 shouldAutoEnter 是同一套两层判定，只有「不在名单里」的结果不同：自动发送不在
+ * 名单里只是不按回车，字已经粘进去了；自动粘贴不在名单里就是**一个字都不出手**——
+ * 不按 Cmd+V、也不偷偷改用户的剪贴板（用户明确选的语义：字只留在 RTC 的记录里）。
+ *
+ * - 总闸（底栏那个「自动粘贴」开关）关着 → 一律不粘；
+ * - 总闸开着 → 没配名单就沿用老行为（所有应用都粘）；配了名单就只给名单里的粘。
+ *
+ * 为什么要有名单：这份开关一开，识别到的话会跟着光标跑。开会时忘了关、或者随手切到
+ * 别的窗口，会议内容就被打进聊天框了——这类事故收不回来（见
+ * docs/product-direction/innovation-backlog-2026-09-14.md 第 4 条）。
+ */
+export function shouldAutoPaste(target) {
+  if (!state.autoPaste) return false;
+  const apps = state.autoPasteApps;
+  if (!Array.isArray(apps) || !apps.length) return true;
+  return appInList(apps, target);
+}
+
+/**
+ * 设置页里的两份应用名单（自动粘贴 / 自动发送）。
+ *
+ * 都是先改草稿，点「保存」才写进 state；取消不会偷偷改变运行中的规则。两张名单的
+ * 交互与 DOM 结构完全一样，所以只写一套代码，差别只是 state 字段名、DOM id 与文案，
+ * 都登记在这张表里——以后再加第三张名单只需要加一行。
+ *
+ * 名单里存包名（系统应用列表给的稳定身份），**不是**显示名：显示名会跟着系统语言变。
+ */
+const APP_RULE_LISTS = {
+  autoPaste: { stateKey: 'autoPasteApps', listId: 'autoPasteAppList', label: '自动粘贴' },
+  autoEnter: { stateKey: 'autoEnterApps', listId: 'autoEnterAppList', label: '自动发送' },
+};
+
+const appRuleDrafts = { autoPaste: [], autoEnter: [] };
 const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
-export function renderAutoEnterApps() {
-  autoEnterAppsDraft = Array.isArray(state.autoEnterApps) ? [...state.autoEnterApps] : [];
-  const list = $('autoEnterAppList');
+/** 打开设置页 / 载入配置后调用：两份名单都从 state 重建草稿并渲染 */
+export function renderAppRuleLists() {
+  for (const kind of Object.keys(APP_RULE_LISTS)) {
+    const saved = state[APP_RULE_LISTS[kind].stateKey];
+    appRuleDrafts[kind] = Array.isArray(saved) ? [...saved] : [];
+    renderAppRuleDraft(kind);
+  }
+}
+
+/** 从本机应用列表里挑一个加进某张名单 */
+export function addAppRule(kind, app) {
+  if (!appRuleDrafts[kind]) return;
+  const name = typeof app === 'string' ? app.trim() : '';
+  if (!name || appRuleDrafts[kind].includes(name)) return;
+  appRuleDrafts[kind] = [...appRuleDrafts[kind], name];
+  renderAppRuleDraft(kind);
+}
+
+/** 点某一行右侧的开关 = 把这个应用移出这张名单（行里剩的都是「已加入」的） */
+export function toggleAppRule(kind, app) {
+  if (!appRuleDrafts[kind] || typeof app !== 'string' || !app) return;
+  appRuleDrafts[kind] = appRuleDrafts[kind].includes(app)
+    ? appRuleDrafts[kind].filter(name => name !== app)
+    : [...appRuleDrafts[kind], app];
+  renderAppRuleDraft(kind);
+}
+
+function renderAppRuleDraft(kind) {
+  const cfg = APP_RULE_LISTS[kind];
+  const list = cfg ? $(cfg.listId) : null;
   if (!list) return;
-  renderAutoEnterAppRows(list);
-}
-
-export function addAutoEnterApp(app) {
-  app = typeof app === 'string' ? app.trim() : '';
-  if (!app || autoEnterAppsDraft.includes(app)) return;
-  autoEnterAppsDraft = [...autoEnterAppsDraft, app];
-  renderAutoEnterAppsDraft();
-}
-
-export function toggleAutoEnterApp(app) {
-  if (typeof app !== 'string' || !app) return;
-  autoEnterAppsDraft = autoEnterAppsDraft.includes(app)
-    ? autoEnterAppsDraft.filter(name => name !== app)
-    : [...autoEnterAppsDraft, app];
-  renderAutoEnterAppsDraft();
-}
-
-function renderAutoEnterAppRows(list) {
-  const apps = [...new Set(autoEnterAppsDraft)];
+  const apps = [...new Set(appRuleDrafts[kind])];
   if (!apps.length) {
     list.innerHTML = '<div class="app-rule-empty">还没有添加应用</div>';
     return;
   }
   list.innerHTML = apps.map(app => {
-    const on = autoEnterAppsDraft.includes(app);
+    const on = appRuleDrafts[kind].includes(app);
     const safeApp = escapeHtml(app);
-    return `<div class="app-rule-row"><span class="app-rule-name">${safeApp}</span><button type="button" class="settingsToggle app-rule-toggle${on ? ' on' : ''}" data-app="${safeApp}" aria-pressed="${on}" aria-label="${on ? '关闭' : '开启'} ${safeApp} 自动发送"></button></div>`;
+    return `<div class="app-rule-row"><span class="app-rule-name">${safeApp}</span><button type="button" class="settingsToggle app-rule-toggle${on ? ' on' : ''}" data-app="${safeApp}" aria-pressed="${on}" aria-label="${on ? '关闭' : '开启'} ${safeApp} ${cfg.label}"></button></div>`;
   }).join('');
 }
 
-function renderAutoEnterAppsDraft() {
-  const list = $('autoEnterAppList');
-  if (!list) return;
-  renderAutoEnterAppRows(list);
+/** 点「保存」时把两份草稿一起写进 state */
+export function commitAppRules() {
+  for (const kind of Object.keys(APP_RULE_LISTS)) {
+    state[APP_RULE_LISTS[kind].stateKey] = [...appRuleDrafts[kind]];
+  }
 }
 
-export function commitAutoEnterApps() {
-  state.autoEnterApps = [...autoEnterAppsDraft];
-}
-
-export function resetAutoEnterAppsDraft() {
-  autoEnterAppsDraft = [];
-  renderAutoEnterAppsDraft();
+/** 点「恢复默认」时清空两份草稿（真正落盘要等「保存」） */
+export function resetAppRulesDraft() {
+  for (const kind of Object.keys(APP_RULE_LISTS)) {
+    appRuleDrafts[kind] = [];
+    renderAppRuleDraft(kind);
+  }
 }
 
 function settingsFromState() {
@@ -111,9 +182,11 @@ function settingsFromState() {
     engine: state.asrEngine,
     qwen3ModelDir: state.qwen3ModelDir,
     vadThreshold: state.vadThreshold,
+    vadMode: state.vadMode,
     silenceTimeout: state.silenceTimeout,
     gainMultiplier: state.gainMultiplier,
     autoPaste: state.autoPaste,
+    autoPasteApps: state.autoPasteApps,
     autoEnter: state.autoEnter,
     autoEnterApps: state.autoEnterApps,
     filterOn: state.filterOn,
@@ -125,14 +198,13 @@ function settingsFromState() {
 function applySettings(config) {
   const s = config.settings || {};
   state.vadThreshold = s.vadThreshold != null ? clampVADThreshold(s.vadThreshold) : 0.006;
+  state.vadMode = s.vadMode === 'manual' ? 'manual' : 'auto';
   state.silenceTimeout = s.silenceTimeout || 2000;
   state.gainMultiplier = s.gainMultiplier || 1;
   state.autoPaste = s.autoPaste || false;
   state.autoEnter = s.autoEnter || false;
-  // 只收字符串数组：配置是明文文件，用户和外部工具都会直接改它（原则 5）。
-  state.autoEnterApps = Array.isArray(s.autoEnterApps)
-    ? s.autoEnterApps.filter(a => typeof a === 'string' && a.trim()).map(a => a.trim())
-    : [];
+  state.autoPasteApps = readAppList(s.autoPasteApps);
+  state.autoEnterApps = readAppList(s.autoEnterApps);
   state.sfxOn = s.sfx !== false;   // 旧配置无此字段 → 默认开启
   state.filterOn = typeof s.filterOn === 'boolean' ? s.filterOn : true;
   state.apiKey = s.key || '';
@@ -276,6 +348,7 @@ export async function loadASRSettings() {
   $('apiKey').value = state.apiKey;
   if ($('qwen3ModelDir')) $('qwen3ModelDir').value = state.qwen3ModelDir;
   syncAIForm();
+  if ($('vadMode')) $('vadMode').value = state.vadMode;
   if ($('silenceTimeout')) {
     $('silenceTimeout').value = state.silenceTimeout;
     $('silenceTimeoutLabel').textContent = state.silenceTimeout + 'ms';
@@ -287,7 +360,17 @@ export async function loadASRSettings() {
   syncToggleUI();
   updateEngineBadge();
   renderVADThresholdMarker();
-  renderAutoEnterApps();
+  renderAppRuleLists();
+}
+
+/**
+ * 读一份应用名单。只收字符串数组：配置是明文文件，用户和外部工具都会直接改它
+ * （原则 5：你的记录就是普通文件），坏数据只丢掉，不让整个设置页读不出来。
+ */
+function readAppList(value) {
+  return Array.isArray(value)
+    ? value.filter(a => typeof a === 'string' && a.trim()).map(a => a.trim())
+    : [];
 }
 
 async function saveASRSettingsNow() {
