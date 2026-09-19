@@ -1,5 +1,7 @@
 import { state } from './state.js';
 import { apiUrl } from './api.js';
+import { setLineTarget, setLinePasteState, specFromActiveApp } from './pastebadge.js';
+import { shouldShowTimestamp } from './timeGrouping.js';
 
 export function $(id) {
   return document.getElementById(id);
@@ -61,23 +63,43 @@ export function computeRunStatus() {
   const wsPending = !!ws && (ws.readyState === WebSocket.CONNECTING || (wsOpen && !state.asrReady));
   const serverUp = serverReachable();
   const serverDown = state.serverOk === false && !serverUp;
+  // 本地引擎的识别还依赖本机的模型服务（127.0.0.1:8933，见 model.js 的探测）。
+  // 它没起来而状态区还写「就绪」，用户就会以为能录，实际一个字都不会出——
+  // 这正是 core-product-principles 第 3 条要禁的假状态。
+  // 只有本地引擎才可能为 true；百炼走云端，model.js 在此时把该字段置 null。
+  const audioDead = !!state.audioStalled;
+  const modelDown = state.modelServiceOk === false;
 
   // ① 麦克风拿不到（权限被拒/无设备）：优先暴露，此时不可能在录音
   if (state.micError) return { key: 'mic-error', text: '麦克风不可用', dot: 'err', time: 'none' };
+  // ①b 录音中但麦克风回调一次都不来：管道已经断了（睡眠唤醒、设备被切走）。
+  // 这排在最前面是因为它比「识别中」更确定也更紧急：音频根本没离开这台机器，
+  // 无论 ASR 连没连上，用户现在说的话都不会被存下来。
+  // 判据是结构性的（回调停了，见 audio.js 的 startAudioFlowWatch），
+  // 不是「安静」——用户不说话是正常的，那种情况仍然是「识别中」。
+  if (recording && audioDead) return { key: 'no-audio', text: '没有声音输入', dot: 'err', time: 'rec' };
   // ② 录音中：ASR 任务就绪→识别中；服务不可达→服务未连接；任务协商中→正在连接；其余为缓冲等待
   if (recording) {
     if (state.asrReady) return { key: 'recognizing', text: '识别中', dot: 'on', time: 'rec' };
     if (serverDown) return { key: 'offline', text: '服务未连接', dot: 'err', time: 'rec' };
+    // 模型服务没起来时，ASR 任务永远协商不出来（要等 15 秒超时才报错并停录），
+    // 所以这里排在「正在连接」之前，如实告诉用户卡在哪
+    if (modelDown) return { key: 'model-down', text: '模型服务未启动', dot: 'err', time: 'rec' };
     if (wsPending) return { key: 'connecting', text: '正在连接', dot: '', time: 'rec' };
     return { key: 'recording', text: '录音中', dot: 'on', time: 'rec' };
   }
   // ③ 空闲 + 服务不可达：不得再显示「就绪」
   if (serverDown) return { key: 'offline', text: '服务未连接', dot: 'err', time: 'none' };
+  // ③b 空闲 + 代理服务正常但本地模型服务未启动：同样不是「就绪」
+  if (modelDown) return { key: 'model-down', text: '模型服务未启动', dot: 'err', time: 'uptime' };
   // ④ 首次探测尚未回来
   if (state.serverOk === null && !serverUp) return { key: 'connecting', text: '正在连接', dot: '', time: 'none' };
   // ⑤ 空闲 + 服务正常
   return { key: 'ready', text: '就绪', dot: '', time: 'uptime' };
 }
+
+/** 异常状态说法的统一清单（点与文字都用告警色，见 style.css 的 .up-offline） */
+const ABNORMAL_KEYS = new Set(['offline', 'mic-error', 'model-down', 'no-audio']);
 
 export function renderRunStatus() {
   const st = computeRunStatus();
@@ -86,9 +108,23 @@ export function renderRunStatus() {
   const timeEl = $('statusTime');
   if (textEl) {
     textEl.textContent = st.text;
-    textEl.classList.toggle('up-offline', st.key === 'offline' || st.key === 'mic-error');
+    textEl.classList.toggle('up-offline', ABNORMAL_KEYS.has(st.key));
   }
   if (dotEl) dotEl.className = st.dot;
+  const statusEl = $('status');
+  if (statusEl) {
+    // 异常时补一句「怎么办」：状态文字只说出了问题，用户下一步得知道去哪看。
+    // 用 data-tip 而不是 title——两者会用时弹（见 style.css 那节注释）。
+    if (st.key === 'model-down') {
+      statusEl.dataset.tip = '本地识别依赖本机的模型服务（127.0.0.1:8933），它没有在运行。打开设置 →「识别方式」可以看原因并一键重启。';
+    } else if (st.key === 'no-audio') {
+      // 异常必须带下一步，而且这一步真的有用：重建麦克风是这句话背后的动作，
+      // 停止再开始录音就是手工做同一件事（会重新取一次麦克风与新开音频会话）。
+      statusEl.dataset.tip = '录音里没有收到麦克风的声音（睡眠唤醒、或换了输入设备时会出现）。点录音按钮停一下再开一次；如果还不行，退出重开应用。';
+    } else {
+      delete statusEl.dataset.tip;
+    }
+  }
   if (!timeEl) return;
   if (st.time === 'rec' && state.recStartTs) {
     timeEl.textContent = fmtDuration((Date.now() - state.recStartTs) / 1000);
@@ -97,7 +133,34 @@ export function renderRunStatus() {
   } else {
     timeEl.textContent = '';
   }
-  timeEl.classList.toggle('up-offline', st.key === 'offline');
+  timeEl.classList.toggle('up-offline', st.key === 'offline' || st.key === 'model-down');
+}
+
+/**
+ * 启动运行状态机：探测 /api/status 拿服务运行时长基准，之后每秒重渲染。
+ * 服务不可达时置 serverOk=false，状态机据此显示「服务未连接」并停止累加时长。
+ */
+let statusProbeTimer = null;
+
+/**
+ * 立刻重探一次程序自己的服务（/api/status），并安排下一次校准。
+ * 导出它是为了唤醒后立刻重核：睡一觉回来服务可能已经不一样了，
+ * 而状态区平时是 60 秒才校准一次——「就绪」这两个字如果停留在旧结论上就是在说谎。
+ */
+export async function refreshServerStatus() {
+  try {
+    const res = await fetch(apiUrl('/api/status'));
+    if (!res.ok) throw new Error('status ' + res.status);
+    const data = await res.json();
+    if (data && typeof data.uptime === 'number') state.serverUptime = data.uptime;
+    state.serverOk = true;
+  } catch {
+    state.serverOk = false;
+  }
+  renderRunStatus();
+  // 离线时快速重试（否则「服务未连接」会停留到下一次 1 分钟校准）；正常时 60s 校准一次
+  clearTimeout(statusProbeTimer);
+  statusProbeTimer = setTimeout(refreshServerStatus, state.serverOk ? 60000 : 5000);
 }
 
 /**
@@ -105,25 +168,7 @@ export function renderRunStatus() {
  * 服务不可达时置 serverOk=false，状态机据此显示「服务未连接」并停止累加时长。
  */
 export function initRunStatus() {
-  let retryTimer = null;
-
-  const fetchUptime = async () => {
-    try {
-      const res = await fetch(apiUrl('/api/status'));
-      if (!res.ok) throw new Error('status ' + res.status);
-      const data = await res.json();
-      if (data && typeof data.uptime === 'number') state.serverUptime = data.uptime;
-      state.serverOk = true;
-    } catch {
-      state.serverOk = false;
-    }
-    renderRunStatus();
-    // 离线时快速重试（否则「服务未连接」会停留到下一次 1 分钟校准）；正常时 60s 校准一次
-    clearTimeout(retryTimer);
-    retryTimer = setTimeout(fetchUptime, state.serverOk ? 60000 : 5000);
-  };
-
-  fetchUptime();
+  void refreshServerStatus();
   setInterval(() => {
     if (state.serverOk === true) state.serverUptime += 1;
     renderRunStatus();
@@ -230,13 +275,13 @@ function buildDaySep(day) {
   return sep;
 }
 
-/** 构造一行（时间 + 文本）；isInterim 时带光标 */
+/** 构造一行（应用去向 + 文本）；时间作为列表中的独立分隔条展示 */
 function buildLine(dateObj, text, isInterim) {
-  const { day, time } = tsParts(dateObj);
+  const { day } = tsParts(dateObj);
   const div = document.createElement('div');
   div.className = 'line';
-  div.innerHTML = `<span class="ts">${time}</span>` +
-    `<span class="txt${isInterim ? ' interim' : ''}"></span>`;
+  div.dataset.ts = dateObj.toISOString();
+  div.innerHTML = `<span class="txt${isInterim ? ' interim' : ''}"></span>`;
   const el = div.querySelector('.txt');
   if (isInterim) {
     el.innerHTML = esc(text) + '<span class="cursor"></span>';
@@ -246,12 +291,42 @@ function buildLine(dateObj, text, isInterim) {
   return { day, el: div };
 }
 
-export function addLine(dateObj, text, isInterim) {
+/**
+ * 按微信的时间规则刷新整条列表：后台每条记录仍保留精确时间，前端只在
+ * 时间组开始前插入一个居中的独立时间分隔条。整表重算是必要的，因为向前
+ * 翻页可能改变边界处下一条消息是否应该显示时间。
+ */
+export function refreshTimestampVisibility() {
+  const list = $('list');
+  if (!list) return;
+  list.querySelectorAll('.timeSep').forEach(sep => sep.remove());
+  const lines = [...list.querySelectorAll('.line')];
+  let lastShown = null;
+  for (const line of lines) {
+    const current = new Date(line.dataset.ts || '');
+    if (!shouldShowTimestamp(current, lastShown)) continue;
+    const sep = document.createElement('div');
+    sep.className = 'timeSep';
+    sep.textContent = tsParts(current).time;
+    sep.setAttribute('aria-label', `时间 ${sep.textContent}`);
+    list.insertBefore(sep, line);
+    lastShown = current;
+  }
+}
+
+/**
+ * 追加一行记录（直播转写的每一句走这里）。
+ *
+ * `activeApp` 是说话时的前台应用快照；`pasteStatus` 独立表示是否执行了自动粘贴。
+ * 两者不传时，行先按普通正文创建，稍后由 asr.js 异步补上。
+ * 返回这一行的元素，供调用方稍后补状态；被去重跳过时返回 null。
+ */
+export function addLine(dateObj, text, isInterim, activeApp, pasteStatus) {
   if (!isInterim) {
     const lastLine = $('list').querySelector('.line:last-child');
     if (lastLine) {
       const lastTxt = lastLine.querySelector('.txt');
-      if (lastTxt && lastTxt.textContent === text) return;
+      if (lastTxt && lastTxt.textContent === text) return null;
     }
   }
   const { day, el } = buildLine(dateObj, text, isInterim);
@@ -262,7 +337,11 @@ export function addLine(dateObj, text, isInterim) {
     $('list').appendChild(buildDaySep(day));
   }
   $('list').appendChild(el);
+  refreshTimestampVisibility();
   scrollListToBottom();
+  if (activeApp !== undefined) setLineTarget(el, specFromActiveApp(activeApp));
+  if (pasteStatus !== undefined) setLinePasteState(el, pasteStatus === 'pasted');
+  return el;
 }
 
 // ---------- 聊天式向前翻页 ----------
@@ -334,6 +413,9 @@ export function prependEntries(entries) {
   let prevDay = null;
   entries.forEach((entry, i) => {
     const { day, el } = buildLine(new Date(tsOf(entry)), entry.text, false);
+    // 没有 activeApp 的旧事件不补造前台应用，只显示可知的正文状态。
+    setLineTarget(el, specFromActiveApp(entry.activeApp));
+    setLinePasteState(el, entry.pasteStatus === 'pasted');
     if (day !== prevDay) {
       prevDay = day;
       if (i !== skipSepAt) frag.appendChild(buildDaySep(day));
@@ -342,6 +424,7 @@ export function prependEntries(entries) {
   });
   const hint = $('listHint');
   list.insertBefore(frag, hint && hint.parentNode === list ? hint.nextSibling : list.firstChild);
+  refreshTimestampVisibility();
   if (hadContent) {
     list.scrollTop += list.scrollHeight - prevHeight;
   } else {

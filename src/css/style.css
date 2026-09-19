@@ -111,17 +111,29 @@
   #jumpBottom:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
   #jumpBottom svg{ flex-shrink:0; }
 
-  /* 不加行分隔线：转写是连续口语流水，不是网格。靠行距区分即可，
-     一屏的分隔线从 8 条降到 1 条（只剩 .daysep 的日期区块边界）。 */
-  .line{ padding:8px 0; display:flex; gap:12px; align-items:baseline;
-         cursor:pointer; transition:background-color .12s linear; }
-  /* 悬停：整条记录非常淡的背景提示可点击；点击 .txt 会复制整句（已有逻辑） */
+  /* 不加行分隔线：转写是连续口语流水，不是网格。时间组用独立居中的分隔条。 */
+  /* 左右各留 12px 内边距：悬停色块原来和内容一样宽，应用图标直接贴在色块边缘上
+     （上下有 8px、左右是 0），看着像被色块切掉一块。
+     内边距与**等量负外边距**成对出现：内容位置因此一个像素都不动（徽标仍与
+     顶栏标题、底栏同一条竖线对齐），只有色块本身向两侧各长出 12px。
+     不要只写 padding 不写 margin —— 那会把整列记录往右推 12px，和上面顶栏错开。 */
+  .line{ padding:8px 12px; margin:0 -12px; display:flex; gap:8px; align-items:flex-start;
+         border-radius:8px; cursor:pointer; transition:background-color .12s linear; }
+  /* 悬停：整条记录非常淡的圆角矩形提示可点击；点击 .txt 会复制整句（已有逻辑） */
   .line:hover{ background:rgba(26,22,17,.04); }
-  /* 日期已由 .daysep 统管，这里只留时间，左栏从两行压到一行 */
-  .ts{ color:var(--ink-faint); font-size:10px; font-family:var(--mono);
-       flex-shrink:0; min-width:56px; text-align:right; letter-spacing:.02em; }
+  /* 微信式时间分隔条：不属于任何一条消息，独立居中展示。 */
+  .timeSep{ display:block; width:100%; box-sizing:border-box;
+             color:var(--ink-faint); font-size:10px; font-family:var(--mono);
+             text-align:center; letter-spacing:.02em; font-variant-numeric:tabular-nums;
+             margin:18px auto 6px; }
   .txt{ color:var(--ink); font-size:15px; line-height:1.7; flex:1;
         text-wrap:pretty; }
+  /* 识别结果仍然保留，但没有执行自动粘贴时降为近灰色；应用图标仍表示说话时前台应用。 */
+  .txt.pasteNotDone{ color:var(--ink-faint); }
+  /* 已完成自动粘贴的正文末尾加一个轻量内联图标；识别中的临时文本不显示。 */
+  .pasteDoneIcon{ display:inline-flex; width:12px; height:12px; margin-left:6px;
+        vertical-align:-1px; color:var(--ink-faint); }
+  .pasteDoneIcon svg{ width:100%; height:100%; display:block; }
   .cursor{ display:inline-block; width:2px; height:1em; background:var(--seal);
            vertical-align:-2px; margin-left:2px; }
   .interim{ color:var(--ink-soft); font-style:italic; }
@@ -604,6 +616,22 @@
     #settingsPage .settingsPageBody > .s-group{ animation:none; }
     .footerToggle.toggled, #btn.toggled{ animation:none; }
   }
+  /* 记录行内的去向徽标：这句粘给了哪个应用（图标 / 名字），或者没粘出去（⊘）。
+     见 src/js/pastebadge.js 文头。刻意很弱：记录本身是主角，去向是内容左侧注脚。
+     徽标插在 .txt 前面，和微信式消息行的头像位置一致。 */
+  .pasteBadge{ flex-shrink:0; display:inline-flex; align-items:center; justify-content:center;
+        min-width:21px; height:21px; margin-top:2px; font-size:11px; line-height:1;
+        cursor:default; -webkit-user-select:none; user-select:none; }
+  /* 弱是弱在图标上：图标/标记半透明，悬停才实；应用名是文字，不压不透明度——
+     11px 的浅墨色已经是能读的底线，再叠透明会低于可读对比度（check:ux 会报） */
+  .pasteBadge img{ width:21px; height:21px; border-radius:3px; display:block;
+        opacity:1; transition:opacity .15s; }
+  .line:hover .pasteBadge img{ opacity:1; }
+  .pasteBadge svg{ width:20px; height:20px; color:var(--ink-faint);
+        opacity:.75; transition:opacity .15s; }
+  .line:hover .pasteBadge svg{ opacity:1; }
+  .pasteBadgeName{ color:var(--ink-soft); }
+  /* 这里没有悬停提示：徽标只回答「这句去哪了」，用户明确说过没提的需求不做 */
   #err{ color:var(--seal-deep); font-size:12px; padding:5px 20px; display:none;
         background:#f3e3dc; position:relative; z-index:2; font-family:var(--font); }
   #updateBanner{ display:flex; align-items:center; gap:10px; padding:6px 16px;
@@ -759,4 +787,3 @@
   @media(max-width:520px){
     .modal-overlay .modal-box{ width:100vw; max-width:100vw; max-height:100vh; border-radius:0; }
   }
-
