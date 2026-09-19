@@ -33,6 +33,8 @@
 ### 📋 自动粘贴
 
 - **一键粘贴** — 识别结果自动复制到剪贴板，并可自动粘贴到光标位置（需辅助功能权限）
+- **按应用生效** — 自动粘贴与自动发送各有一份应用名单，只有名单里的应用（如微信、Cindy）会收到文字；名单外的应用既不粘贴也不回车，字只留在记录里。名单为空 = 沿用旧行为，所有应用都生效
+- **去向逐条可见** — 每条记录右端标出这句粘给了哪个应用（那个应用的图标），没粘出去就是 ⊘
 - **来源记录** — 粘贴时自动记录「发给了哪个软件」，历史可追溯
 - **自动发送** — 按前台应用自动按回车发送（可配置应用白名单，避免误发送到编辑器）
 - **提示音反馈** — 自动粘贴成功播放提示音，确认已送达
@@ -154,6 +156,8 @@ pip install sherpa-onnx numpy websockets
 | 麦克风增益 | 1x | 麦克风信号放大倍数 |
 | 噪音过滤 | 开启 | 自动丢弃短文本/英文噪音 |
 | 自动粘贴 | 关闭 | 识别结果自动粘贴到光标位置 |
+| 自动粘贴名单 | 空 | 只给名单内的应用自动粘贴；为空 = 所有应用都粘 |
+| 自动发送名单 | 空 | 只给名单内的应用自动回车；为空 = 所有应用都回车 |
 
 ## 换行逻辑说明
 
@@ -202,6 +206,8 @@ scripts/              # CLI 工具与开发脚本
   transcript.mjs      # 转写记录查询
   dev.mjs             # npm run dev:web 热更新开发服务器
   check-static.mjs    # npm test（语法/导入/资源/JSON检查）
+  check-undefined.mjs # npm run check:js（名字体检：漏 import / 错导出名，症状是功能静默失效）
+  check-ux.mjs        # npm run check:ux（把页面真跑起来量几何：裁切/点不动/对比度）
   build-sidecar.sh    # 编译 Tauri sidecar 二进制
 docs/                 # 产品文档中心（Agent 可读）
   README.md           # 文档索引
@@ -346,6 +352,11 @@ rtc board write-document /tmp/body.md        # 正文（Markdown）
 | 接口 | 说明 |
 |------|------|
 | `GET /api/transcripts/events?from=...&to=...&q=...` | 查询转写记录 |
-| `GET /api/meeting-board/sessions?date=...` | 按静默间隔整理的会议场次 |
+| `GET /api/meeting-board/sessions?date=...` | 按静默间隔整理的**当天**会议场次 |
+| `GET /api/meeting-board/search?q=...&limit=...` | 跨日期检索会议场次（白板下拉用它开历史会议） |
 | `GET /api/meeting-board/definition?sessionId=...` | 会议白板文档内容 |
 | `PUT /api/meeting-board/analysis?sessionId=...` | 外部 AI 写入分析结果 |
+
+`/search` 不带 `q` 时给「最近若干场」（跨天，最新在前），带 `q` 时按标题 / 逐字稿 /
+已保存正文匹配，多个词按「都命中」收窄。它只读不写（不像 `/sessions` 会顺手补写缺失的
+`.md`）：检索是读操作，不该因为敲键盘而写盘。
