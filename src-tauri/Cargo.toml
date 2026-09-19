@@ -26,6 +26,10 @@ arboard = { version = "3.6.1", default-features = false }
 core-foundation = "0.10"
 # 查「当前最前台的应用」（粘贴目标）。这三个 crate 本来就在依赖树里（tauri 的传递
 # 依赖），这里只是提成直接依赖并显式打开需要的 feature，不引入新的第三方代码。
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWorkspace", "NSRunningApplication", "libc"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSString"] }
+objc2 = { version = "0.6", features = ["alloc"] }
+# NSImage / NSBitmapImageRep：把前台应用的图标编成 PNG（底标那个小图标）。
+# 这两个类和 NSData / NSDictionary 都在 objc2-app-kit 自己的 feature 里标好了。
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWorkspace", "NSRunningApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "libc"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSString", "NSData", "NSDictionary"] }
+# 图标转 data URL 用（已在依赖树里，0.21 是 tauri 自己用的版本，没有新增下载）
+base64 = "0.21"
