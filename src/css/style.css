@@ -255,6 +255,8 @@
   /* 激活态：深灰实心（不用主题红，避免与录制按钮的红色状态抢视觉） */
   .footerToggle.on{ opacity:1; background:var(--ink-soft); border-color:var(--ink-soft); color:var(--paper); }
   .footerToggle.on:hover{ background:var(--ink); border-color:var(--ink); }
+  /* 指令模式开启时沿用底栏开关的深灰反馈，不抢录音状态的印章红。 */
+  #ftCommand.on{ opacity:1; background:var(--ink-soft); border-color:var(--ink-soft); color:var(--paper); }
   /* 切换确认：开关和中间那颗录制按钮都自己做一下短促的「按下」脉冲
      （JS 在 setAutoPaste / setAutoEnter / setRecordBtn 里加 .toggled）。
      开关这一侧取代的是原先顶部弹出的一行「自动粘贴已开启 / 已关闭」：那行字离

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { state } from '../src/js/state.js';
 import { appInList, shouldAutoPaste, shouldAutoEnter } from '../src/js/settings.js';
-import { pasteBadgeSpec, specFromTargetApp } from '../src/js/pastebadge.js';
+import { pasteBadgeSpec, specFromActiveApp, specFromTargetApp } from '../src/js/pastebadge.js';
 
 // 「话会跑到哪里去」的判定（ui-interaction-spec 第 6 节 / core-product-principles 第 3 条）。
 //
@@ -96,6 +96,8 @@ check('认不出目标却粘了（网页版没有系统能力）→ 不写假的
   pasteBadgeSpec({ paste: true }).label === '已粘出去');
 check('没粘 → ⊘，不带原因',
   JSON.stringify(pasteBadgeSpec({ paste: false, appName: 'Dia' })) === JSON.stringify({ kind: 'none', name: null, label: '没粘出去' }));
+check('说话时未识别前台应用 → 保留未识别图标',
+  specFromActiveApp(null).kind === 'unknown' && specFromActiveApp(null).label === '说话时未识别前台应用');
 check('历史记录：事件里有应用名 → 显示那个应用的图标',
   specFromTargetApp('微信').kind === 'app' && specFromTargetApp('微信').name === '微信');
 check('历史记录：事件里没有目标 → ⊘',
