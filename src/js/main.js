@@ -1,12 +1,14 @@
-import { $, renderRunStatus, initRunStatus, toast, setRecordBtn, flashPulse, initListAutoScroll, listNearTop } from './ui.js';
+import { $, renderRunStatus, initRunStatus, refreshServerStatus, toast, setRecordBtn, flashPulse, initListAutoScroll, listNearTop } from './ui.js';
 import { state, meterPctToRms, clampVADThreshold } from './state.js';
 import { DEFAULT_RULES, flushCorrectionRules, loadCorrectionRules, saveCorrectionRules } from './correction.js';
 import { ensurePastePermission } from './clipboard.js';
-import { connectASR, setAsrStopHandler } from './asr.js';
-import { getAudioConstraints, startAudio, stopRec } from './audio.js';
+import { connectASR, resetVAD, setAsrStopHandler } from './asr.js';
+import { getAudioConstraints, startAudio, stopRec, streamIsDead, rebuildAudioInput, startAudioFlowWatch } from './audio.js';
+import { watchWake } from './lifecycle.js';
 import { clearHistory, loadEarlier, renderHistory } from './history.js';
-import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, syncCollapsibleGroups, refreshGroupSummaries, toggleGroup, renderAutoEnterApps, addAutoEnterApp, toggleAutoEnterApp, commitAutoEnterApps, resetAutoEnterAppsDraft, AI_PROVIDERS } from './settings.js';
-import { renderModelStatus, getModelStatus } from './model.js';
+import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, syncCollapsibleGroups, refreshGroupSummaries, toggleGroup, renderAppRuleLists, addAppRule, toggleAppRule, commitAppRules, resetAppRulesDraft, AI_PROVIDERS } from './settings.js';
+// 底标那行小字住自己的模块（settings.js 只负责“设置变了就重画”，不转发它）
+import { renderModelStatus, getModelStatus, watchModelService, probeModelService } from './model.js';
 import { initLearnedCommands, pickApplication } from './commands.js';
 import { checkForUpdates, setupUpdateUI, updateVersionInfo } from './updater.js';
 import { playStart, playToggle } from './sfx.js';
@@ -65,9 +67,19 @@ $('btn').onclick = async () => {
     toast('请先在设置中配置百炼 API Key');
     return;
   }
+  // 本机模型服务确定没在跑时直接拦下：状态区已经写着「模型服务未启动」，
+  // 再放行到 ASR 那条路只会让用户对着「模型服务未启动」空等 15 秒超时。
+  // （只在探测已确认（连续失败 + 过了冷启动宽限）时为 false，见 model.js）
+  if (state.modelServiceOk === false) {
+    toast('本地模型服务未启动，识别无法工作：打开设置 →「识别方式」看原因并重启');
+    return;
+  }
   state.wantRecording = true;
   playStart();   // 在 getUserMedia / 建立 WS 之前先响，避免提示音被麦克风录进识别结果
-  if (!state.stream) {
+  // 旧流还要能用才行：`state.stream` 这个对象留着，不代表设备还在干活。
+  // 睡眠唤醒后 macOS 会让旧麦克风句柄失效（音轨 ended），这时只判断 `!state.stream`
+  // 会老老实实复用一条死流——界面正常、录音正常、一个字都不会出。
+  if (streamIsDead(state.stream)) {
     try {
       state.stream = await navigator.mediaDevices.getUserMedia({ audio: getAudioConstraints() });
       state.micError = '';
@@ -96,6 +108,7 @@ $('btn').onclick = async () => {
     state.vadSilenceCount = 0;
     state.vadHeartbeat = 0;
     state.vadBuf.length = 0;
+    resetVAD();
     connectASR();
   } catch (e) {
     console.error('[start]', e);
@@ -108,6 +121,24 @@ $('btn').onclick = async () => {
     state.stream = null;
   }
 };
+
+/**
+ * 机器刚睡醒（见 lifecycle.js 的 watchWake）。
+ *
+ * 睡一觉回来，三样东西可能都已经死了：麦克风句柄、WebAudio 会话、ASR 的 TCP 连接——
+ * 而且死得悄无声息，界面照样写「就绪」。所以这里直接做两件事：
+ *   1. 立刻重探两个服务（状态区平时 60 秒才校准一次，停在旧结论上就是在说谎）；
+ *   2. 正在录音的话，重建音频输入并重开一条 ASR 连接（睡眠会掐断原来的连接，
+ *      而它在 readyState 上看起来还是开着的）。
+ * 窗口被完全遮挡时定时器也会被节流（属于假唤醒），所以动作必须便宜且幂等：
+ * 没在录音就只重探服务，不碰任何东西。
+ */
+function handleSystemWake() {
+  void refreshServerStatus();
+  void probeModelService();
+  if (!state.recording) return;
+  void rebuildAudioInput().then(ok => { if (ok) connectASR(); });
+}
 
 // 降噪 / 回声消除没有开关：默认开启（state.filterOn 由 audio.js getAudioConstraints 读取），
 // 设置页不再暴露该选项。保留状态字段，历史上关掉过的用户其偏好依然生效。
@@ -138,7 +169,7 @@ function showSettings(show) {
     syncCollapsibleGroups();
     // 「识别方式」的选中态与展开面板由 updateEngineBadge() 内部同步（单一写入点）
     updateEngineBadge();
-    renderAutoEnterApps();
+    renderAppRuleLists();
   }
 }
 
@@ -150,14 +181,16 @@ $('settingsPage').addEventListener('click', (e) => {
     toggleGroup(head.id.replace(/GroupHead$/, ''));
     return;
   }
+  // 两份名单（自动粘贴 / 自动发送）的行结构一样，用行所在的名单容器区分改哪一份
   const appToggle = e.target.closest('.app-rule-toggle');
   if (appToggle) {
-    toggleAutoEnterApp(appToggle.dataset.app);
+    const box = appToggle.closest('.app-rule-list');
+    if (box) toggleAppRule(box.dataset.rule, appToggle.dataset.app);
     return;
   }
-  const addApp = e.target.closest('#autoEnterAppAdd');
+  const addApp = e.target.closest('.app-rule-add [data-rule]');
   if (addApp) {
-    void pickApplication(addApp, '', addAutoEnterApp);
+    void pickApplication(addApp, '', app => addAppRule(addApp.dataset.rule, app));
     return;
   }
   // 「恢复默认」后所有摘要文案都会变，统一重算一遍
@@ -246,7 +279,7 @@ document.addEventListener('click', (e) => {
 $('settingsBtn').onclick = () => showSettings(true);
 $('settingsClose').onclick = () => showSettings(false);
 $('settingsSaveBtn').onclick = async () => {
-  commitAutoEnterApps();
+  commitAppRules();
   state.apiKey = $('apiKey').value.trim();
   readAIForm();
   saveASRSettings();
@@ -265,7 +298,9 @@ $('settingsResetBtn').onclick = async () => {
   setKeyVisible(false);
   const testStatus = $('apiKeyTestStatus');
   if (testStatus) { testStatus.textContent = ''; testStatus.className = 'key-test-status'; }
-  // VAD 灵敏度无面板控件（唯一入口是主界面电平尺上的可拖刻度），只重置状态
+  // VAD 自动模式默认开启；手动模式仍可通过主界面刻度调节
+  state.vadMode = 'auto';
+  $('vadMode').value = 'auto';
   state.vadThreshold = 0.006;
   state.silenceTimeout = 2000;
   $('silenceTimeout').value = 2000;
@@ -275,7 +310,7 @@ $('settingsResetBtn').onclick = async () => {
   $('gainMultiplierLabel').textContent = '1x';
   state.autoPaste = false;
   state.autoEnter = false;
-  resetAutoEnterAppsDraft();
+  resetAppRulesDraft();
   state.filterOn = true;
   // AI 服务商恢复默认（自定义：清空；预设：保留预设值）
   const prevProvider = state.aiConfig.provider;
@@ -342,6 +377,9 @@ function changeEngine(next) {
   playToggle(true);
   saveASRSettings();
   updateEngineBadge();
+  // 切到本地引擎要立刻重探模型服务：否则上一次探测（可能是引擎为百炼时报的 null）
+  // 会让异常提示晚 1 分钟才出现，而用户此刻已经以为可以录了
+  void probeModelService();
   if (state.recording) {
     stopRec();
     state.stream = null;
@@ -496,6 +534,13 @@ $('aiApiKey').addEventListener('blur', () => {
 $('aiTestBtn').onclick = testAIConnection;
 
 
+$('vadMode').onchange = function () {
+  state.vadMode = this.value === 'manual' ? 'manual' : 'auto';
+  resetVAD();
+  renderVADThresholdMarker();
+  saveASRSettings();
+};
+
 $('silenceTimeout').oninput = function () {
   state.silenceTimeout = parseInt(this.value);
   $('silenceTimeoutLabel').textContent = state.silenceTimeout + 'ms';
@@ -622,6 +667,11 @@ window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => toggleAutoPaste()
   setupUpdateUI();
   updateVersionInfo();
   initRunStatus();
+  // 本地模型服务的看护（主界面状态区据此显示「模型服务未启动」）
+  watchModelService();
+  // 睡眠唤醒后主动重建录音链路（见 handleSystemWake）；录音期间看护音频是否真的在流动
+  watchWake(handleSystemWake);
+  startAudioFlowWatch();
   await renderHistory(true);
   $('btn').click();
   // 启动 6 秒后静默检查更新；发现新版本时显示顶部横幅提醒
