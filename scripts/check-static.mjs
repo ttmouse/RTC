@@ -47,6 +47,18 @@ for (const file of HTML_FILES) {
     .find((m) => m[2].trim());
   if (inline) fail(`${file}: 存在内联脚本（与 CSP 冲突，且无法被静态检查覆盖）`);
 
+  // HTML 注释必须成对闭合。这不是洁癖：注释没闭合时，解析器会一路吞到**下一个** `-->`
+  // 为止，中间的元素会被整段当成注释文本丢掉——DOM 里根本没有它们，页面也不报错。
+  // 真实案例：在 HTML 注释里手滑写了 CSS 的 `*/` 收尾（而不是 `-->`），
+  // 结果电平条、刻度线、峰值线三个元素连同行内结构全部消失，而 npm test 全绿。
+  // 这里只做「配对」这一个判断——不解析 HTML，够用且不会误报。
+  const commentOpens = (html.match(/<!--/g) || []).length;
+  const commentCloses = (html.match(/-->/g) || []).length;
+  if (commentOpens !== commentCloses) {
+    fail(`${file}: HTML 注释未闭合（<!-- × ${commentOpens}，--> × ${commentCloses}）`
+      + '——未闭合的注释会吞掉后面的元素，页面还不报错');
+  }
+
   // 引用的 css/js 必须真的存在，否则运行时 404、页面无声降级。
   // 跳过以 / 开头的路径：那是服务端动态路由（例如开发模式的 /__dev_reload.js），
   // 不对应 src/ 下的文件。
@@ -146,6 +158,51 @@ for (const file of JSON_FILES) {
   }
 }
 
+// ── 6) CSS：括号平衡 + 规则外的游离声明 ──
+// 真实案例（本仓库）：某个 style.css 里留下一个没有选择器的声明块，浏览器不报错，
+// 而是把**紧随其后的那条规则**一起丢掉——症状是按钮悄悄退化成系统默认样式
+// （录制按钮变成一块灰方块）。这跟 HTML 注释没闭合是同一类毛病：语法上「能解析」，
+// 语义上少了一整块，静态灯全绿。
+const CSS_DIRS = [path.join(root, 'meeting-board/src')];
+const cssFiles = ['src/css/style.css', 'meeting-board/src/style.css'];
+(function collect(dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === 'node_modules') continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) collect(p);
+    else if (e.name.endsWith('.css')) cssFiles.push(rel(p));
+  }
+})(CSS_DIRS[0]);
+
+for (const file of [...new Set(cssFiles)].sort()) {
+  const cssPath = path.join(root, file);
+  if (!fs.existsSync(cssPath)) fail(`${file}: 文件不存在（CSS 检查清单里的文件被删了）`);
+  // 注释先去掉：注释里的花括号和分号不该参与配对判断。
+  const css = fs.readFileSync(cssPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  let depth = 0; let buf = ''; let line = 1; let stmtLine = 1;
+  const orphans = [];
+  for (const ch of css) {
+    if (ch === '\n') { line += 1; continue; }
+    if (ch === '{') { depth += 1; buf = ''; stmtLine = line; continue; }
+    if (ch === '}') { depth -= 1; buf = ''; stmtLine = line; continue; }
+    // 深度 0 上的 `;`：要么是 @import / @charset 这类语句（合法），要么就是游离声明（会吞掉下一条规则）。
+    if (ch === ';' && depth === 0) {
+      const stmt = buf.trim();
+      if (stmt && !stmt.startsWith('@')) orphans.push(`第 ${stmtLine} 行附近: ${stmt.slice(0, 60)}`);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  if (depth !== 0) {
+    fail(`${file}: 花括号不配对（${depth > 0 ? '少' : '多'} ${Math.abs(depth)} 个 ${depth > 0 ? '}' : '{'}）——不配对会把后面的规则整段吞掉`);
+  }
+  if (orphans.length) {
+    fail(`${file}: 规则外有 ${orphans.length} 处游离声明，浏览器会连它后面那条规则一起丢掉\n      ${orphans.join('\n      ')}`);
+  }
+}
+
 fs.rmSync(syntaxTmpDir, { recursive: true, force: true });
 
-console.log(`static checks passed (${jsFiles.length} frontend modules, ${BACKEND_JS.length} backend scripts, ${PY_FILES.length} python files, ${JSON_FILES.length} json files)`);
+console.log(`static checks passed (${jsFiles.length} frontend modules, ${BACKEND_JS.length} backend scripts, ${PY_FILES.length} python files, ${JSON_FILES.length} json files, ${[...new Set(cssFiles)].length} stylesheets)`);
