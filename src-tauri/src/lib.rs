@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
@@ -51,6 +52,13 @@ mod mac_accessibility {
 struct AppState {
     node_server: Mutex<Option<Child>>,
     asr_server: Mutex<Option<Child>>,
+    /// 本机 ASR（模型）服务最近的日志行（stderr 环形缓冲）。
+    ///
+    /// 打包后的 .app 从访达启动时没有 stderr：python 侧的崩溃原因（缺依赖、端口被占、
+    /// 模型文件损坏）只会走 eprintln!，用户手上一条都拿不到。于是界面只能写一句
+    /// 「模型服务未启动」，说不出为什么，也没有下一步——用户唯一的出路是退出重开。
+    /// 留最近若干行，设置页在异常时把它翻成人话。
+    asr_log: Mutex<VecDeque<String>>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -365,17 +373,27 @@ fn paste_text(text: String, auto_enter: Option<bool>) -> Result<PasteOutcome, St
     Ok(outcome)
 }
 
-/// 当前最前台的应用名（`paste_text` 的 Cmd+V 会打到它身上）。
+/// 当前最前台的应用（`paste_text` 的 Cmd+V 会打到它身上），带显示名 / 包名 / bundle id。
 ///
-/// 前端在「这一次定型会真的自动粘贴」时调用，把结果随这句话一起入库，
+/// 前端在自动粘贴总闸开着时调用，一份结果两处用：判「这次该不该粘」
+/// （应用名单按身份匹配，见 settings.appInList）以及随这句话一起入库，
 /// 于是记录里能看出「这句是发到微信的」。
 ///
 /// 返回 `None` 有三种情况，调用方一律当「不知道」，不影响这句话照常入库：
 /// 前台是本程序自己（说明这次 Cmd+V 打回了本窗口，没有任何输入框能接住）、
 /// 非 macOS / 网页版没有系统级能力、以及查询本身失败。
 #[tauri::command]
-fn frontmost_app() -> Option<String> {
-    mac_frontmost::frontmost_name()
+fn frontmost_app() -> Option<mac_frontmost::FrontmostApp> {
+    mac_frontmost::frontmost_app()
+}
+
+/// 某个应用图标的 PNG data URL（记录行上「这句去哪了」的徽标用）。
+///
+/// `name` 三种身份都收：.app 包名（设置页名单里存的）、显示名（事件记录里存的）、
+/// bundle id。理由与缩图细节见 mac_frontmost.rs；前端按名字缓存，一个应用一个会话只问一次。
+#[tauri::command]
+fn app_icon(name: String) -> Option<String> {
+    mac_frontmost::icon_png_data_url(&name)
 }
 
 /// 激活指定应用。
@@ -457,6 +475,99 @@ fn accessibility_permission() -> bool {
 fn request_accessibility_permission() -> bool {
     mac_accessibility::request_trust();
     mac_accessibility::is_trusted()
+}
+
+/// 本机 ASR（模型）服务当前的状况。
+///
+/// 界面在「模型服务未启动」时要靠它说清「为什么」：进程还在不在、是本应用启动的
+/// 还是复用了别人起的，以及最近的服务日志（日志是用户唯一能拿到的失败线索）。
+#[derive(serde::Serialize)]
+struct LocalAsrStatus {
+    /// 这个进程是本应用启动的（本应用持有句柄）。false = 复用了别人起的服务，
+    /// 本应用重启不了它，只能请用户在启动它的地方重启。
+    managed: bool,
+    running: bool,
+    pid: Option<u32>,
+    /// 8933（模型管理 HTTP）有人在听
+    port_open: bool,
+    log_tail: Vec<String>,
+}
+
+fn asr_status_snapshot(app: &tauri::AppHandle) -> LocalAsrStatus {
+    let state = app.state::<AppState>();
+    let (managed, running, pid) = {
+        let mut guard = state.asr_server.lock().unwrap();
+        let pid = guard.as_ref().map(|c| c.id());
+        let running = match guard.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        };
+        if !running {
+            // 进程已经退出：句柄留着没用，还会让下一次重启误以为有个活的要杀
+            guard.take();
+        }
+        (pid.is_some(), running, pid)
+    };
+    let log_tail = state
+        .asr_log
+        .lock()
+        .map(|l| l.iter().cloned().collect())
+        .unwrap_or_default();
+    LocalAsrStatus {
+        managed,
+        running,
+        pid,
+        port_open: port_open(8933),
+        log_tail,
+    }
+}
+
+/// 本机模型服务的当前状况（设置页在「模型服务未启动」时用它拿原因）。
+#[tauri::command]
+fn local_asr_status(app: tauri::AppHandle) -> LocalAsrStatus {
+    asr_status_snapshot(&app)
+}
+
+/// 重启本机模型服务——设置页「模型服务未启动」时的恢复入口。
+///
+/// 为什么需要它：python 侧中途退出（崩溃、端口被别的程序抢走、依赖被卸载）时，
+/// Rust 只在 setup 里拉起过一次、之后没有任何看护，界面也没有按钮。用户唯一的出路
+/// 是退出重开应用，而且全程看不到原因——「模型服务未启动」是一句没有下文的话。
+///
+/// 刻意标成 async：非 async 的命令跑在主线程上，这里要等端口放开、再等最多 30 秒
+/// 的服务就绪，会把整个窗口冻住。
+#[tauri::command]
+async fn restart_local_asr(app: tauri::AppHandle) -> Result<LocalAsrStatus, String> {
+    let state = app.state::<AppState>();
+    let previous = state.asr_server.lock().unwrap().take();
+    if let Some(mut child) = previous {
+        let _ = child.kill();
+        let _ = child.wait();
+    } else if port_open(8932) {
+        // 复用来的服务（dev 模式下可能是用户自己在终端跑的）：不动别人的进程
+        return Err("本机识别服务不是本应用启动的（开发模式复用了终端里的进程）：请在启动它的终端里重启".into());
+    }
+
+    // 等端口真正放开：kill 之后 socket 不会立刻消失，紧接着起新进程会绑不上 8932 直接退出
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && port_open(8932) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let child = match start_asr_server(&app) {
+        Some(c) => c,
+        None => return Err("起不来：找不到 python3 或 asr_local/server.py".into()),
+    };
+    let pid = child.id();
+    *state.asr_server.lock().unwrap() = Some(child);
+
+    if !wait_for_tcp("127.0.0.1", 8933, 30) {
+        return Err(format!(
+            "重启后 30 秒内没能连上 8933（进程 PID {}），多半是启动就崩了",
+            pid
+        ));
+    }
+    Ok(asr_status_snapshot(&app))
 }
 
 /// 获取项目根目录（开发模式从 src-tauri 上到父目录，生产模式从 resource_dir 开始）
@@ -691,10 +802,12 @@ fn start_asr_server(app_handle: &tauri::AppHandle) -> Option<Child> {
         {
             Ok(mut child) => {
                 if let Some(stderr) = child.stderr.take() {
+                    let handle = app_handle.clone();
                     std::thread::spawn(move || {
                         use std::io::BufRead;
                         for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
                             eprintln!("[asr-sidecar] {}", line);
+                            push_asr_log(&handle, line);
                         }
                     });
                 }
@@ -765,10 +878,14 @@ fn start_asr_server(app_handle: &tauri::AppHandle) -> Option<Child> {
             // 读回 stderr：Python 侧崩溃信息（缺依赖/端口占用/模型损坏）
             // 此前被 Stdio::piped() 吞掉，用户只剩一个无信息的 "Load failed"。
             if let Some(stderr) = child.stderr.take() {
+                // 除了打到控制台，还进环形缓冲：打包后的 .app 没有控制台，
+                // 设置页要拿这几行才能说清「模型服务未启动」到底是为什么。
+                let handle = app_handle.clone();
                 std::thread::spawn(move || {
                     use std::io::BufRead;
                     for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
                         eprintln!("[asr_local] {}", line);
+                        push_asr_log(&handle, line);
                     }
                 });
             }
@@ -821,6 +938,30 @@ fn wait_for_tcp(host: &str, port: u16, timeout_secs: u64) -> bool {
         std::thread::sleep(Duration::from_millis(300));
     }
     false
+}
+
+/// 本机 ASR 服务日志的保留行数（一个 python traceback 通常二三十行，80 行够覆盖最近一次崩溃）
+const ASR_LOG_CAP: usize = 80;
+
+/// 记一行本机 ASR 服务日志（超出容量丢最早的）。
+fn push_asr_log(app: &tauri::AppHandle, line: String) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut log) = state.asr_log.lock() {
+            while log.len() >= ASR_LOG_CAP {
+                log.pop_front();
+            }
+            log.push_back(line);
+        }
+    }
+}
+
+/// 本机是否有东西在监听这个端口（只连一下，不发数据）。
+fn port_open(port: u16) -> bool {
+    TcpStream::connect_timeout(
+        &format!("127.0.0.1:{}", port).parse().unwrap(),
+        Duration::from_millis(300),
+    )
+    .is_ok()
 }
 
 /// 应用数据目录。
@@ -900,16 +1041,20 @@ pub fn run() {
         .manage(AppState {
             node_server: Mutex::new(None),
             asr_server: Mutex::new(None),
+            asr_log: Mutex::new(VecDeque::new()),
         })
         .invoke_handler(tauri::generate_handler![
             paste_text,
             frontmost_app,
+            app_icon,
             copy_to_clipboard,
             read_selected_text,
             activate_app,
             reveal_in_finder,
             accessibility_permission,
-            request_accessibility_permission
+            request_accessibility_permission,
+            local_asr_status,
+            restart_local_asr
         ])
         .setup(|app| {
             let handle = app.handle().clone();
