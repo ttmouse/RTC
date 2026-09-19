@@ -291,6 +291,12 @@
   #levelMeterBlock[data-tip]:hover::after{ transform:translateY(0); }
   /* 拖动过程中收起 Tips：它正好压住列表最后几行，而拖着的时候用户不需要再听解释 */
   #levelMeterBlock.dragging[data-tip]::after{ opacity:0; }
+  /* 状态区的 Tips（只在本机模型服务未启动时挂上）：文案比快捷键长，
+     左对齐 + 允许换行，否则居中的气泡会从左边界冒出去。 */
+  #status[data-tip]::after{ left:0; transform:translateY(2px);
+        width:max-content; max-width:min(300px, 62vw);
+        white-space:normal; text-align:left; line-height:1.5; }
+  #status[data-tip]:hover::after{ transform:translateY(0); }
   /* 全页面设置面板 */
   #settingsPage, #cmdPage, #statsPage{ position:fixed; inset:0; z-index:100; background:var(--paper);
         display:flex; flex-direction:column; }
@@ -403,6 +409,29 @@
   .s-group .localTuning{ margin:13px 0 0 13px; padding-top:12px; border-top:1px solid var(--rule); }
   .s-group .localTuning.hidden{ display:none; }
   .s-group .localTuning .s-field{ border-bottom:none; }
+  /* ── 「模型服务未启动」的恢复入口（插在识别方式第一张卡片之前）
+     它不是一句提示，是一件待办：说明 + 原因 + 重启按钮 + 日志。所以给它一块底和一条
+     告警竖线，和下面三个引擎选项区分开——一眼看出「这里坏了，下面才是可选项」。
+     正文色用 --ink-soft 而不是 --ink-faint：这段字用户必须在异常时读清（faint 在白底上
+     只有 3.1:1，UX-3 正在处理同一类问题，不再往上加新的）。 */
+  .model-service-down{ margin:6px 0 12px; padding:10px 12px 11px; border-left:2px solid var(--seal);
+        background:var(--paper-2); border-radius:0 var(--radius-sm) var(--radius-sm) 0;
+        font-size:11px; line-height:1.5; color:var(--ink-soft); max-width:none; }
+  .model-service-down .msd-title{ color:var(--ink); margin-bottom:4px; }
+  .model-service-down .msd-desc{ color:var(--ink-soft); margin-bottom:6px; }
+  .model-service-down .msd-reason{ color:var(--seal-deep); margin-bottom:8px; }
+  .model-service-down .msd-reason code{ font-family:var(--mono); font-size:11px;
+        background:var(--paper); border:1px solid var(--rule); border-radius:3px; padding:0 4px; }
+  .model-service-down .msd-actions{ display:flex; align-items:center; gap:10px; }
+  .model-service-down .msd-state{ color:var(--ink-soft); }
+  .model-service-down .msd-state.up-offline{ color:var(--seal); }
+  .model-service-down .msd-log{ margin-top:9px; }
+  .model-service-down .msd-log.hidden{ display:none; }
+  .model-service-down .msd-log summary{ cursor:pointer; color:var(--ink-soft); }
+  .model-service-down .msd-log pre{ margin:6px 0 0; padding:8px 9px; max-height:180px;
+        overflow:auto; background:var(--paper); border:1px solid var(--rule); border-radius:3px;
+        font-family:var(--mono); font-size:10px; line-height:1.45; color:var(--ink-soft);
+        white-space:pre-wrap; word-break:break-word; }
   /* ── 字段 ──
      字段之间只用留白：虚线去掉之后，层级改由「标签字重 + 说明色阶 + 分区实线」承担。 */
   .s-field{ padding:7px 0 9px; border-bottom:none; }
