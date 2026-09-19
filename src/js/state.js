@@ -29,6 +29,15 @@ export const state = {
   serverOk: null,         // 本地服务探测结果：null=尚未探测 / true=可达 / false=不可达
   serverUptime: 0,        // 服务运行时长基准（秒），来自 /api/status.uptime
   micError: '',           // 麦克风不可用原因（''=可用），由 getUserMedia 失败时写入
+  // 音频输入是否在流动（录音时看护，见 audio.js 的 startAudioFlowWatch）。
+  // audioTickAt = 最近一次麦克风回调的时刻；audioStalled = 已确认「录音中但一个采样都收不到」。
+  // 判据是结构性的（回调停了），不是「安静」——用户不说话是正常的，回调不来一定是管道断了。
+  audioTickAt: 0,
+  audioStalled: false,
+  // 本机模型服务（asr_local/server.py 的 8933）探测结果，由 model.js 写入。
+  // null 有两层含义：还没探测出来，或者当前引擎是百炼（云端）——本地模型服务与它无关，
+  // 此时状态区不该报这个异常。只有本地引擎才可能是 false（= 未启动）。
+  modelServiceOk: null,
   audioDuration: 0,
   asrLastTime: 0,
   asrLastText: '',
@@ -38,11 +47,16 @@ export const state = {
   asrLastBeginTime: -1,
   totalDuration: 0,
   vadThreshold: 0.006,
+  vadMode: 'auto',
   silenceTimeout: 2000,
   gainMultiplier: 1,
   autoPaste: false,
+  // 「哪些应用可以自动粘贴」的名单（存 `.app` 包名，如 WeChat）。空数组 = 沿用老行为：
+  // 总闸开着就对所有应用粘。判定见 settings.shouldAutoPaste —— 名字要和前台应用身份
+  // 对上才算命中（appInList 解释了名单里的 WeChat 与前台回的中文显示名为什么不是一回事）。
+  autoPasteApps: [],
   autoEnter: false,
-  // 「哪些应用可以自动回车」的名单（应用名，取自粘贴目标）。空数组 = 沿用老行为：
+  // 「哪些应用可以自动回车」的名单（存应用名身份，同 autoPasteApps）。空数组 = 沿用老行为：
   // 总闸开着就对所有应用回车。判定见 settings.shouldAutoEnter。
   autoEnterApps: [],
   sfxOn: true,             // 按钮提示音开关（sfx.js）
@@ -94,6 +108,11 @@ export function rmsToMeterPct(rms) {
 export function meterPctToRms(pct) {
   const db = METER_DB_MIN + (METER_DB_MAX - METER_DB_MIN) * (pct / 100);
   return Math.pow(10, db / 20);
+}
+
+/** 电平尺百分比（0~100）→ dBFS；仪表读数用它，保证数字和尺子严格同源 */
+export function meterPctToDb(pct) {
+  return METER_DB_MIN + (METER_DB_MAX - METER_DB_MIN) * (pct / 100);
 }
 
 /** 夹到合法阈值区间：保证阈值永远落在尺子范围内，刻度不会被算出界 */

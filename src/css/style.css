@@ -183,13 +183,49 @@
   #levelMeter{ display:flex; align-items:center; width:100%; height:12px; }
   #levelMeterBg{ position:relative; width:100%; height:6px; background:var(--rule);
         border-radius:999px; overflow:hidden; }
+  /* 层级（同一个 #levelMeterBg 内，从下到上）：
+       色带 #levelMeterPeak       z-index:1  最底，只在条右边的空白区露出来
+       刻度 #levelMeterTick       z-index:2  压在色带之上（色带会把它对比度拉到 3.07）
+       条  #levelMeterBar         z-index:3  压在刻度之上——这是「冲过阈值后刻度反白」
+                                             而不是「同色消失」的关键
+     条内部还有 #levelMeterTickInv，靠条的 overflow:hidden 裁切，不给 z-index。 */
   #levelMeterBar{ position:absolute; left:0; top:0; height:100%; width:0%;
-        border-radius:999px;
-        background:var(--ink-faint); transition:width .08s; }
+        border-radius:999px; z-index:3;
+        background:var(--ink-faint); overflow:hidden; }
+  /* 这里刻意**没有** transition。JS 每帧都要写 width（见 meter.js），
+     一旦挂上 CSS 过渡，每次写入都从「上一次的中间值」重新起步，
+     显示值会恒低于真实电平、并且常年追不上声音——典型的两套动画打架。
+      快起慢落的手感由 meter.js 的包络负责，CSS 不要再插一手 */
   #levelMeterBar.speech{ background:var(--seal); }
   #levelMeterBar.loud{ background:var(--seal-deep); }
+  /* 刻度线（VAD 阈值）分两层，保证「没被条盖住」和「被条盖住」都看得见：
+     曾经只有一条深红刻度压在条上面（z-index:2），结果是——电平冲过刻度、
+     条变成 loud 深红之后，深红刻度压在深红条上**完全同色**，恰恰在最该看清
+     「有没有超过阈值」的那一刻消失。
+     现在反过来：外层刻度压到条的**下面**（靠 DOM 顺序被条裁），
+     条盖住多少，外层就自然被裁掉多少；条内部再放一条纸色反白刻度补上这段。
+     给它 z-index:2 是为了压在峰值色带之上（色带半透明墨色会把刻度对比度从
+     5.19 拉到 3.07，低于 4.5 的可读线），但仍然低于条（条 z-index:3），
+     所以「冲过阈值 → 条盖住刻度 → 反白刻度接管」的机制不受影响。
+     层级表见上面 #levelMeterBar 的注释。 */
   #levelMeterTick{ position:absolute; top:-3px; bottom:-3px; width:1px;
         background:var(--seal-deep); z-index:2; }
+  /* 反白刻度：活在条内部，left 要用同一个百分比。
+     条是 overflow:hidden 的，所以它只在「条已覆盖刻度」时才露出来。
+     left 写的是相对条宽度的百分比——但刻度位置是相对**整条尺子**的，
+     而条的宽度正是 level%，所以这里需要 JS 半帧补偿：见 meter.js 的 syncTickInverted。
+     静态回退值 -100% 表示「先别露」，等第一帧 JS 接手 */
+  #levelMeterTickInv{ position:absolute; top:0; bottom:0; width:1px; left:-100%;
+        background:var(--paper); }
+  /* 峰值延迟条：从尺子左端铺到历史峰值，作为第二条完整进度条。
+     实时条在上层覆盖它的前段；实时条回落后，后面的灰色部分露出来，
+     用两条宽度的差表达「实时」与「延迟」的时间差。
+     用纯色 rgba 而不是 gradient：仪表每帧更新，避免渐变层造成额外重绘。
+     left/width 每帧由 meter.js 摆；静态回退 width:0 表示「先别露」 */
+  #levelMeterPeak{ position:absolute; top:0; bottom:0; left:0%; width:0; z-index:1;
+        border-radius:0 999px 999px 0;
+        background:rgba(26,22,17,.26); opacity:0;
+        transition:opacity .18s; }
   /* 底部三段式：左=模型胶囊，中=录音按钮（窗口正中），右=两个开关（贴右）；
      左右两段等宽弹性(flex:1 1 0)，中间按钮就落在窗口几何中心 */
   .actionRow{ display:flex; align-items:center;

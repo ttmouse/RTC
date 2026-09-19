@@ -104,8 +104,17 @@
          aria-label="VAD 灵敏度，可拖动调整，值越大越不敏感">
       <div id="levelMeter">
         <div id="levelMeterBg">
-          <div id="levelMeterBar"></div>
+          <!-- 刻度分内外两层，解决「被电平条盖住就看不见」：
+               外层 #levelMeterTick 是常规深红，露在条左边的部分用它；
+               内层 #levelMeterTickInv 放在条的内部，用纸色反白。
+               两层都跟着同一个 left%。条的宽度一变，内层被条裁掉多少就自动变多少，
+               所以「覆盖前深红 / 覆盖后反白」是纯几何结果，不需要 JS 每帧判断 -->
           <div id="levelMeterTick" style="left:45.8%"></div>
+          <div id="levelMeterBar">
+            <div id="levelMeterTickInv" style="left:45.8%"></div>
+          </div>
+          <!-- 延迟灰条：从左端铺到峰值位置，红色实时条回落后逐步露出 -->
+          <div id="levelMeterPeak" style="left:0%"></div>
         </div>
       </div>
     </div>
@@ -216,6 +225,15 @@
       </div>
 
       <!-- 拾音参数：仅本地引擎使用，选中本地引擎时直接显示在下方 -->
+      <div class="s-field">
+        <div class="fl">VAD 调整</div>
+        <div class="fd">自动适应环境噪声；手动模式使用主界面刻度</div>
+        <select id="vadMode" class="settingsSelect" aria-label="VAD 调整模式">
+          <option value="auto">自动</option>
+          <option value="manual">手动</option>
+        </select>
+      </div>
+
       <div class="localTuning" id="localTuningPanel">
         <div class="s-field">
           <div class="fl">静音超时</div>
