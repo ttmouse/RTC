@@ -302,6 +302,88 @@ ${boardOf(sid).document ? '    rtc board write-document <正文.md> ' + sid + ' 
 `);
 }
 
+/**
+ * 增量更新输出 — 只输出上次分析之后新增的片段 + 已有正文。
+ *
+ * 外部 AI 拿到的是：
+ *   1. 已有正文（白板上当前显示的内容）
+ *   2. 新增的逐字稿片段
+ * 任务：在已有正文基础上增量修改，不是重新生成。
+ */
+function printUpdateIncremental(session) {
+  const saved = boardOf(session.id);
+  const def = saved.definition || {};
+  const existingDoc = typeof saved.document === 'string' ? saved.document.trim() : '';
+  const lastUpdatedAt = saved.analysis?._updatedAt || '';
+
+  // 只取新增片段
+  const newEvents = session.events.filter((ev) => ev.ts > lastUpdatedAt);
+  if (!newEvents.length) {
+    console.log('[board] 自上次更新以来没有新内容');
+    return;
+  }
+
+  const newTranscript = newEvents.map((ev) => `[${fmtTime(ev.ts)}] ${ev.text}`).join('\n');
+  const firstNew = fmtTime(newEvents[0].ts);
+  const lastNew = fmtTime(newEvents.at(-1).ts);
+  const latestTs = newEvents.at(-1).ts;
+
+  console.log(`# 会议白板 · 增量更新\n`);
+  console.log(`## 场次\n- 场次 ID：${session.id}`);
+  console.log(`- 新增 ${newEvents.length} 条记录（${firstNew} — ${lastNew}）`);
+  console.log(`- 自上次更新以来新增的转写记录\n`);
+  console.log(`## 已有正文\n\n${existingDoc || '（空）'}\n`);
+  console.log(`## 新增逐字稿\n\n${newTranscript}\n`);
+  console.log(`## 写回方式
+
+这是一次**增量更新**：上面「已有正文」是白板上当前的内容，「新增逐字稿」是刚才新说的。
+请在已有正文基础上做局部修改：
+
+- 如果出现了新话题 → 新增一个段落
+- 如果新内容修正了之前的结论 → 调整已有段落
+- 不要重新从头写，保留已有正文的结构和内容
+
+### 1. 结构化结果（analysis.json）
+
+字段同全量更新，拷贝上面的已有 analysis 再局部修改最省事（缺的字段可省略）：
+
+\`\`\`json
+{
+  "title": "同上或更新",
+  "decisionsReached": [...],
+  "openQuestions": [...],
+  "actionItems": [...],
+  "_updatedAt": "${latestTs}"
+}
+\`\`\`
+
+**_updatedAt 必须设为最新的片段时间戳**（${latestTs}），下次增量更新从这里开始查。
+
+### 2. 正文（doc.md）
+
+修改后的完整 Markdown。不是增量追加，是**完整的更新版正文**，但所有未变动的内容保持原样。
+
+### 3. 写回
+
+    rtc board write-analysis <结果.json> ${session.id}
+    rtc board write-document <正文.md>  ${session.id}
+`);
+}
+
+/**
+ * watch 输出 — 轮询发现新内容时打印简短摘要。
+ * 外部 AI 可以再次调用 rtc board update --incremental 处理。
+ */
+function logWatchUpdate(session, pendingEvents) {
+  const firstTs = pendingEvents[0].ts;
+  const lastTs = pendingEvents.at(-1).ts;
+  const from = fmtTime(firstTs);
+  const to = fmtTime(lastTs);
+  const text = pendingEvents.map((ev) => ev.text).join('').slice(0, 120);
+  console.log(`[board:watch] ${new Date().toLocaleTimeString()} 新增 ${pendingEvents.length} 条（${from}—${to}）: ${text}…`);
+  console.log(`[board:watch] 执行 rtc board update --incremental 处理新内容`);
+}
+
 // ---------- 写回（走本地服务，服务端串行合并，避免覆盖别的写入者） ----------
 
 const ENDPOINTS = {
@@ -404,8 +486,12 @@ function printHelp() {
 
   sessions [--date D] [--json]      当天会议场次列表（* 标出最近一场）
   latest [--date D]                 打印最近一场的场次 ID（纯文本）
-  update [场次ID] [--date D]         全链路迭代：输出材料 → 等外部 AI 分析 → 写回白板
-                                      等价于 brief + write-analysis + write-document
+  update [场次ID] [--date D] [--incremental]
+                                      全链路迭代：读材料 → 分析 → 写回
+                                      --incremental 只处理增量片段（已有的正文不动）
+  watch [场次ID] [--interval N] [--date D]
+                                      持续轮询：每 N 分钟增量更新一次（默认 5 分钟）
+                                      直到会议结束或 Ctrl+C 停止
   外部 AI 完整工作流：
     rtc board update                   # 只要这一句，一次完成读 → 分析 → 写回
   transcript [场次ID] [--date D]    该场逐字稿（每行 [HH:MM] 内容）
@@ -431,6 +517,8 @@ async function main() {
   let date = '';
   let json = false;
   let append = false;
+  let incremental = false;
+  let interval = 0;
 
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i];
@@ -440,6 +528,10 @@ async function main() {
       json = true;
     } else if (a === '--append') {
       append = true;
+    } else if (a === '--incremental') {
+      incremental = true;
+    } else if (a === '--interval') {
+      interval = parseInt(argv[++i], 10) || 5;
     } else if (a === '--help' || a === '-h') {
       printHelp();
       return;
@@ -494,8 +586,33 @@ async function main() {
       break;
     }
     case 'update':
-      printUpdate(resolveSession(positionals[0], date));
+      if (incremental) {
+        printUpdateIncremental(resolveSession(positionals[0], date));
+      } else {
+        printUpdate(resolveSession(positionals[0], date));
+      }
       break;
+    case 'watch': {
+      const session = resolveSession(positionals[0], date);
+      const min = Math.max(1, interval || 5);
+      console.log(`[board:watch] 开始轮询场次 ${session.id}，每 ${min} 分钟增量更新一次（Ctrl+C 停止）`);
+      const loop = async () => {
+        try {
+          const newSession = resolveSession(positionals[0], date);
+          const saved = boardOf(newSession.id);
+          const lastAt = saved.analysis?._updatedAt || '';
+          const pending = newSession.events.filter((ev) => ev.ts > lastAt);
+          if (pending.length) {
+            logWatchUpdate(newSession, pending);
+          }
+        } catch (e) {
+          console.error(`[board:watch] 轮询出错: ${e.message}`);
+        }
+      };
+      await loop();
+      setInterval(loop, min * 60 * 1000);
+      break;
+    }
     case 'brief':
       printBrief(resolveSession(positionals[0], date));
       break;

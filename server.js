@@ -19,6 +19,9 @@ const WebSocket = require('ws');
 // ========== HTTP 服务（前端页面） ==========
 
 const PORT = Number(process.env.PORT || 8931);
+const BIND_HOST = process.env.RTC_HOST || '127.0.0.1';
+const REMOTE_ACCESS_TOKEN = process.env.RTC_AUTH_TOKEN || '';
+const REMOTE_MODE = !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(BIND_HOST);
 const TIMING_LOGS = process.env.ASR_TIMING_LOGS === '1' || process.env.RTC_TIMING_LOGS === '1';
 const DEV = process.env.RTC_DEV === '1'; // 开发模式：直接服务 src/（免 build），并提供 livereload 探针
 const RELOAD_PORT = Number(process.env.RELOAD_PORT || 8935);
@@ -117,7 +120,10 @@ const MIME = {
  * 规则：无 Origin 头（curl / 原生 fetch / Tauri webview 的自定义协议）放行；
  * 有 Origin 则必须是本服务自己的地址。前端改用同源相对路径后，正常链路根本不发跨域请求。
  */
-const ALLOWED_ORIGIN_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
+const ALLOWED_ORIGIN_HOSTS = new Set([
+  '127.0.0.1', 'localhost', '[::1]', '::1',
+  ...(process.env.RTC_HOST && process.env.RTC_HOST !== '0.0.0.0' ? [process.env.RTC_HOST] : []),
+]);
 
 function isAllowedOrigin(origin) {
   if (!origin) return true; // 非浏览器发起，或同源 GET 不带 Origin
@@ -141,6 +147,9 @@ function localDateStamp(input) {
 const MEETING_SILENCE_SEC = 300; // 静默 5 分钟切分会议段（与 scripts/transcript.mjs 一致）
 const MEETING_OUTPUT_DIR = process.env.RTC_MEETING_OUTPUT_DIR
   || path.join(os.homedir(), 'Documents', '会议纪要');
+const PRELIMINARY_MODEL = process.env.RTC_PRELIMINARY_MODEL || 'minicpm5-meeting';
+const PRELIMINARY_OLLAMA_URL = process.env.RTC_OLLAMA_URL || process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+const preliminaryRequests = new Map();
 
 const pad2 = n => String(n).padStart(2, '0');
 
@@ -566,7 +575,25 @@ function readJsonBody(req, callback) {
   });
 }
 
+function isLoopbackAddress(address) {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function hasValidRemoteToken(req, tokenFromUrl = '') {
+  if (!REMOTE_MODE || isLoopbackAddress(req.socket.remoteAddress)) return true;
+  const presented = String(req.headers['x-rtc-token'] || tokenFromUrl || '');
+  const expected = Buffer.from(REMOTE_ACCESS_TOKEN);
+  const actual = Buffer.from(presented);
+  return expected.length > 0 && expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
 const server = http.createServer((req, res) => {
+  // 远程监听时，非本机请求必须带访问令牌。CORS 不能替代认证，因为 curl 等请求没有 Origin。
+  if (!hasValidRemoteToken(req)) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: false, error: 'remote access token required' }));
+    return;
+  }
   // 允许 Tauri webview（tauri:// 协议）回退调用本机 HTTP 服务。
   // 只回显可信来源，不再用 `*`：`*` 会让任意网页跨域读到 /api/config 里的 API Key。
   const origin = req.headers.origin;
@@ -994,6 +1021,122 @@ const server = http.createServer((req, res) => {
   const boardPath = boardUrl.pathname;
   const defaultDefinition = { background: '', expectedOutput: '', roles: '', boundary: '' };
 
+  function preliminaryChatEndpoint(baseUrl) {
+    const base = String(baseUrl || '').replace(/\/+$/, '');
+    return /\/api\/chat$/i.test(base) ? base : `${base}/api/chat`;
+  }
+
+  function preliminarySourceFingerprint(text) {
+    return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+  }
+
+  function findBoardSession(id) {
+    const matched = /^rtc-meeting-(\d+)$/.exec(String(id || ''));
+    if (!matched) return null;
+    const start = new Date(Number(matched[1]) * 1000);
+    if (!Number.isFinite(start.getTime())) return null;
+    return detectSessions(readBoardDayEvents(localDateStamp(start)), MEETING_SILENCE_SEC)
+      .find((session) => meetingSessionId(session.start) === id) || null;
+  }
+
+  /**
+   * 逐字稿原文的行格式：与 `rtc board transcript`、/api/transcripts/events 的展示约定一致
+   * （每行 `[HH:MM] 内容`）。时刻取本地时间，和场次切分用的是同一套本地日期口径。
+   */
+  function formatTranscriptLines(session) {
+    const texts = (session && session.texts) || [];
+    // 事件里没有逐条时间戳（texts 只是字符串数组），所以按段序号均匀铺在场次时间轴上。
+    // 首段用场次开始时间，末段用结束时间：整份逐字稿仍然看得出「什么时候说的」。
+    const startMs = session.start.getTime();
+    const endMs = session.end.getTime();
+    const span = Math.max(0, endMs - startMs);
+    return texts.map((text, index) => {
+      const at = texts.length > 1 ? startMs + (span * index) / (texts.length - 1) : startMs;
+      const d = new Date(at);
+      return `[${pad2(d.getHours())}:${pad2(d.getMinutes())}] ${text}`;
+    }).join('\n');
+  }
+
+  function plausiblePreliminary(source, output) {
+    const text = String(output || '').trim();
+    const sourceChars = String(source || '').replace(/[\s\p{P}]/gu, '');
+    const outputChars = text.replace(/[\s\p{P}]/gu, '');
+    if (!text || !sourceChars || outputChars.length > sourceChars.length * 4) return false;
+    if (/没有提供|请直接粘贴|如果您有需要|例如您可以这样提供|请把需要整理的内容发给我/u.test(text)) return false;
+    const sourceSet = new Set([...sourceChars]);
+    const retained = [...new Set([...outputChars])].filter((char) => sourceSet.has(char)).length;
+    return retained / Math.max(1, new Set([...sourceChars]).size) >= 0.45;
+  }
+
+  async function runPreliminary整理(session, id, transcript, sourceFingerprint) {
+    let preliminary;
+    try {
+      const upRes = await fetch(preliminaryChatEndpoint(PRELIMINARY_OLLAMA_URL), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: PRELIMINARY_MODEL,
+          messages: [
+            {
+              role: 'system',
+              content: '你是 RTC 会议转写初步整理器。只修正明显的语音识别错误、补充标点、断句、分段，并清理口头禅和重复表达，让原始转写更容易阅读。必须保留原意、说话顺序、语气和不确定性，尽量只做最小修改。不要总结、提炼决策、生成待办或推测负责人、日期、数字、因果关系。相对时间和不确定内容原样保留。只输出整理后的正文，不要标题、说明、Markdown 代码块或思考过程。',
+            },
+            { role: 'user', content: `以下是原始会议转写，请只做初步整理：\n${transcript}` },
+          ],
+          stream: false,
+          options: { temperature: 0.2 },
+        }),
+        signal: AbortSignal.timeout(60000),
+      });
+      const data = await upRes.json().catch(() => ({}));
+      if (!upRes.ok) {
+        const detail = data.error?.message || data.error || `HTTP ${upRes.status}`;
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 200));
+      }
+      const content = data.message?.content || data.choices?.[0]?.message?.content || '';
+      if (!plausiblePreliminary(transcript, content)) throw new Error('Ollama 返回内容未通过原文保真校验');
+      preliminary = {
+        text: String(content).replace(/^```(?:markdown)?\s*|```\s*$/g, '').trim(),
+        status: 'ready',
+        model: PRELIMINARY_MODEL,
+        sourceFingerprint,
+        sourceCount: session.count,
+        updatedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      const message = error?.name === 'TimeoutError' ? 'Ollama 整理超时' : (error?.message || String(error));
+      console.warn(`[board] preliminary fallback (${id}): ${message}`);
+      preliminary = {
+        // 失败只回退展示原文；不写 document，也不修改 events。
+        text: transcript,
+        status: 'fallback',
+        model: PRELIMINARY_MODEL,
+        sourceFingerprint,
+        sourceCount: session.count,
+        updatedAt: new Date().toISOString(),
+        error: message.slice(0, 300),
+      };
+    }
+
+    // 重新读取最新快照后再写，避免整理期间用户保存的正文被旧快照覆盖。
+    const latest = readMeetingBoard();
+    latest.sessions = latest.sessions || {};
+    const entry = latest.sessions[id] || {};
+    // 本地模型和外部 AI agent 写的是**同一样东西**：AI 会议内容，也就是白板正文（document）。
+    // 所以整理成功就把结果落到 document 上，白板立刻有内容可看；更聪明的 agent 之后整篇替换它。
+    //
+    // 只在「正文还归本地模型所有」时写：正文是空的，或者还等于上一次本地模型的输出。
+    // 用户手改过、或 agent 写过，就到此为止——那是别人的成果，不能被下一轮整理悄悄冲掉。
+    const previousLocalText = entry.preliminary?.status === 'ready' ? String(entry.preliminary.text || '') : '';
+    const currentDocument = typeof entry.document === 'string' ? entry.document : '';
+    const ownsDocument = !currentDocument.trim() || (!!previousLocalText && currentDocument === previousLocalText);
+    latest.sessions[id] = { ...entry, preliminary };
+    if (preliminary.status === 'ready' && ownsDocument) latest.sessions[id].document = preliminary.text;
+    latest.activeSessionId = id;
+    await writeMeetingBoard(latest);
+    return preliminary;
+  }
+
   function readBoardDayEvents(date) {
     try {
       const raw = fs.readFileSync(path.join(EVENTS_DIR, `${date}.jsonl`), 'utf-8');
@@ -1007,6 +1150,45 @@ const server = http.createServer((req, res) => {
     return { id, start: session.start.toISOString(), end: session.end.toISOString(), count: session.count };
   }
 
+  /** 场次条目：列表接口和检索接口共用，否则下拉里两份结果的字段会长得不一样。 */
+  function boardSessionEntry(session, date, stored) {
+    const info = sessionInfo(session);
+    const saved = stored[info.id] || {};
+    return {
+      ...info,
+      date,
+      title: saved.title || saved.analysis?.title || `会议 ${formatLocal(session.start).slice(11)}`,
+      hasAnalysis: !!saved.analysis,
+      hasPreliminary: !!saved.preliminary,
+      hasDocument: typeof saved.document === 'string' && !!saved.document.trim(),
+      docPath: sessionDocPath(info.id),
+      saved,
+    };
+  }
+
+  /** 每天一个 jsonl，文件名就是日期。倒序 = 从最近的一天往回找。 */
+  function listEventDates() {
+    try {
+      return fs.readdirSync(EVENTS_DIR)
+        .filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+        .map((f) => f.slice(0, 10))
+        .sort()
+        .reverse();
+    } catch { return []; }
+  }
+
+  /** 命中时给一句上下文：取第一条命中的逐字稿截一段，让人看得出「为什么这场会被搜出来」。 */
+  function sessionSnippet(texts, term, width = 90) {
+    if (!term) return '';
+    const lower = term.toLowerCase();
+    const hit = texts.find((text) => text.toLowerCase().includes(lower));
+    if (!hit) return '';
+    const at = hit.toLowerCase().indexOf(lower);
+    const start = Math.max(0, at - Math.floor(width / 3));
+    const end = Math.min(hit.length, start + width);
+    return `${start > 0 ? '…' : ''}${hit.slice(start, end).trim()}${end < hit.length ? '…' : ''}`;
+  }
+
   // GET /api/meeting-board/sessions?date=YYYY-MM-DD — 按静默间隔整理当天会议场次
   if (req.method === 'GET' && boardPath === '/api/meeting-board/sessions') {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(boardUrl.searchParams.get('date') || '')
@@ -1017,17 +1199,46 @@ const server = http.createServer((req, res) => {
     // 旧版顶层字段只保留给未带 sessionId 的兼容读取，不能在这里复制给新场次。
     // 否则每次出现新场次，旧白板正文都会被伪装成这场会议的内容。
     const result = sessions.map((session) => {
-      const info = sessionInfo(session);
-      const saved = stored[info.id] || {};
-      const docPath = sessionDocPath(info.id);
+      const { saved, ...entry } = boardSessionEntry(session, date, stored);
       // 自动同步：session 有文档但 .md 文件缺失时补写
       if (saved && typeof saved.document === 'string' && saved.document.trim()) {
-        writeSessionDoc(info.id, saved.document);
+        writeSessionDoc(entry.id, saved.document);
       }
-      return { ...info, title: saved.title || saved.analysis?.title || `会议 ${formatLocal(session.start).slice(11)}`, hasAnalysis: !!saved.analysis, hasDocument: typeof saved.document === 'string' && !!saved.document.trim(), docPath };
+      return entry;
     });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, date, sessions: result }));
+    return;
+  }
+
+  // GET /api/meeting-board/search?q=&limit= — 跨日期检索会议场次
+  //
+  // 白板的场次下拉靠它才能开到历史会议：不带 q 时给「最近若干场」（跨天，最新在前），
+  // 带 q 时按标题 / 逐字稿 / 已保存正文匹配。多个词按「都命中」处理——空格分隔是收窄
+  // 条件，不是扩大命中面。
+  //
+  // 与 /sessions 的分工：那个接口是「今天」的权威列表（前端轮询它判断场次有没有变化），
+  // 这个接口只负责「给人挑」，所以不做自动补写 .md 的副作用：每次敲键盘都去写盘，
+  // 等于把一次检索变成一次写操作。
+  if (req.method === 'GET' && boardPath === '/api/meeting-board/search') {
+    const rawQuery = (boardUrl.searchParams.get('q') || '').trim();
+    const terms = rawQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    const limit = Math.min(200, Math.max(1, Number(boardUrl.searchParams.get('limit')) || 60));
+    const stored = readMeetingBoard().sessions || {};
+    const result = [];
+    for (const date of listEventDates()) {
+      const daySessions = detectSessions(readBoardDayEvents(date), MEETING_SILENCE_SEC);
+      // 同一天里最新的场次也排在前面，和下拉「从上往下越来越旧」的读法一致。
+      for (let i = daySessions.length - 1; i >= 0 && result.length < limit; i--) {
+        const { saved, ...entry } = boardSessionEntry(daySessions[i], date, stored);
+        const haystack = `${entry.title}\n${daySessions[i].texts.join('\n')}\n${saved.document || ''}`.toLowerCase();
+        if (!terms.every((term) => haystack.includes(term))) continue;
+        result.push({ ...entry, snippet: sessionSnippet(daySessions[i].texts, terms[0]) });
+      }
+      if (result.length >= limit) break;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, q: rawQuery, sessions: result }));
     return;
   }
 
@@ -1045,11 +1256,17 @@ const server = http.createServer((req, res) => {
     const saved = id && board.sessions && board.sessions[id];
     // 明确请求某个尚未保存内容的场次时必须返回空白，不能回落到旧版顶层正文。
     const legacy = !id;
+    // 逐字稿原文：白板在 AI 整理出结果之前就能显示它，用户不必盯着一个空面板等。
+    // 它是现读 events jsonl 得到的，不落盘、不进 document，也不覆盖任何用户编辑——
+    // 与 preliminary 一样属于「旁路」，区别只是它不需要等模型。
+    const session = id ? findBoardSession(id) : null;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
       definition: (saved && saved.definition) || (legacy ? board.definition : defaultDefinition),
       analysis: (saved && saved.analysis) || (legacy ? board.analysis : null),
+      preliminary: (saved && saved.preliminary) || (legacy ? board.preliminary : null),
+      transcript: session ? formatTranscriptLines(session) : (legacy ? '' : ''),
       document: (saved && saved.document) || (legacy ? board.document : ''),
     }));
     return;
@@ -1108,6 +1325,40 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ ok: false, error: e.message }));
       });
     });
+    return;
+  }
+
+  // POST /api/meeting-board/preliminary — Ollama 初步整理（旁路字段，不触碰原始转写和白板正文）
+  if (req.method === 'POST' && boardPath === '/api/meeting-board/preliminary') {
+    const id = boardUrl.searchParams.get('sessionId');
+    const session = findBoardSession(id);
+    if (!session) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: '找不到会议场次' }));
+      return;
+    }
+    const transcript = session.texts.join('\n');
+    const sourceFingerprint = preliminarySourceFingerprint(transcript);
+    const board = readMeetingBoard();
+    const saved = board.sessions?.[id]?.preliminary;
+    const force = boardUrl.searchParams.get('force') === '1';
+    if (!force && saved?.sourceFingerprint === sourceFingerprint &&
+        (saved.status !== 'ready' || plausiblePreliminary(transcript, saved.text))) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, status: 'cached', preliminary: saved }));
+      return;
+    }
+    const active = preliminaryRequests.get(id);
+    if (active) {
+      res.writeHead(202, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, status: 'pending', preliminary: saved || null }));
+      return;
+    }
+    const task = runPreliminary整理(session, id, transcript, sourceFingerprint);
+    preliminaryRequests.set(id, task);
+    task.then(() => preliminaryRequests.delete(id), () => preliminaryRequests.delete(id));
+    res.writeHead(202, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, status: 'pending', preliminary: saved || null }));
     return;
   }
 
@@ -1440,9 +1691,19 @@ const server = http.createServer((req, res) => {
         text,
         ts: ts.toISOString(),
         engine: incoming.engine || null,
-        // 粘贴目标应用（“微信”）：自动粘贴时前端问过「现在最前面是谁」（见
-        // src/js/frontmost.js）；不是自动粘贴、或者没问到就是 null。只收字符串
-        // 并截断：数组/对象这类脏值会让下游读记录的脚本炸掉，宁可不记。
+        // activeApp 是说话时的前台应用快照，和 pasteStatus 分开，避免把
+        // 「当时在哪个应用说话」误读成「文字已粘贴到哪个应用」。
+        activeApp: incoming.activeApp && typeof incoming.activeApp === 'object'
+          ? {
+              name: typeof incoming.activeApp.name === 'string' ? incoming.activeApp.name.trim().slice(0, 64) : null,
+              bundle: typeof incoming.activeApp.bundle === 'string' ? incoming.activeApp.bundle.trim().slice(0, 128) : null,
+              id: typeof incoming.activeApp.id === 'string' ? incoming.activeApp.id.trim().slice(0, 128) : null,
+            }
+          : null,
+        pasteStatus: ['pasted', 'not-pasted'].includes(incoming.pasteStatus)
+          ? incoming.pasteStatus
+          : 'not-pasted',
+        // 兼容旧事件：旧字段仍保留，读取端可继续显示旧记录的去向。
         targetApp: typeof incoming.targetApp === 'string' && incoming.targetApp.trim()
           ? incoming.targetApp.trim().slice(0, 64)
           : null,
@@ -1732,7 +1993,12 @@ const LOCAL_ASR_URL = process.env.LOCAL_ASR_URL || 'ws://127.0.0.1:8932';
 
 const wss = new WebSocket.Server({ server });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, request) => {
+  const wsUrl = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
+  if (!hasValidRemoteToken(request, wsUrl.searchParams.get('token'))) {
+    ws.close(1008, 'remote access token required');
+    return;
+  }
   let upstream = null;
   let engine = null;
   let closed = false;
@@ -1921,8 +2187,13 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-  console.log(`WebSocket proxy at ws://localhost:${PORT}`);
+if (REMOTE_MODE && !REMOTE_ACCESS_TOKEN) {
+  console.error('[server] RTC_HOST 启用远程监听时必须同时设置 RTC_AUTH_TOKEN');
+  process.exit(1);
+}
+
+server.listen(PORT, BIND_HOST, () => {
+  console.log(`Server running at http://${BIND_HOST}:${PORT}`);
+  console.log(`WebSocket proxy at ws://${BIND_HOST}:${PORT}`);
   console.log(`Engines: bailian (cloud) / local (SenseVoice @ ${LOCAL_ASR_URL})`);
 });
