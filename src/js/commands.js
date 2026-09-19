@@ -33,6 +33,121 @@ let actionCache = {}; // 动作指令表：整句说法 → 动作（enter 等�
 let snippetCache = {}; // 快捷短语表：整句说法 → 要粘贴出去的一段文本
 let loaded = false;
 
+/** 持续指令模式默认关闭；开启后，直到用户手动关闭才把定型语音交给指令路由。 */
+export function isCommandModeArmed() {
+  return state.commandModeArmed === true;
+}
+
+export function setCommandModeArmed(armed) {
+  state.commandModeArmed = !!armed;
+  const button = document.getElementById('ftCommand');
+  if (button) {
+    button.classList.toggle('on', state.commandModeArmed);
+    button.setAttribute('aria-pressed', String(state.commandModeArmed));
+    button.setAttribute('aria-label', state.commandModeArmed ? '指令模式已开启，持续处理语音指令' : '开启持续指令模式');
+    button.dataset.tip = state.commandModeArmed ? '指令模式已开启 · 再点一次关闭' : '指令模式 · 开启后持续生效';
+  }
+}
+
+/** 保留旧函数名供 ASR 调用；持续模式下只检查闸门，不自动关闭。 */
+export function consumeCommandMode() {
+  return isCommandModeArmed();
+}
+
+/**
+ * 给 TypeSafe 的候选集：只暴露 RTC 已经拥有的能力，不允许模型发明动作。
+ * 同一个应用的多个别名合并成一个候选，避免候选数量随说法无限膨胀。
+ */
+function semanticCommandOptions() {
+  const options = [];
+  const seenApps = new Set();
+  const aliasesByApp = new Map();
+  for (const [alias, app] of Object.entries(commandCache)) {
+    if (typeof app !== 'string' || !app.trim()) continue;
+    if (!aliasesByApp.has(app)) aliasesByApp.set(app, []);
+    aliasesByApp.get(app).push(alias);
+  }
+  for (const app of aliasesByApp.keys()) {
+    if (seenApps.has(app)) continue;
+    seenApps.add(app);
+    const aliases = aliasesByApp.get(app).slice(0, 8).join('、');
+    const identity = `系统应用 ${app}（用户可能说：${aliases}）`;
+    options.push({ id: `open:${app}`, label: `打开${app}`, description: `打开${identity}` });
+    options.push({ id: `search:${app}`, label: `在${app}中搜索`, description: `打开${identity}，然后搜索用户口述的关键词` });
+  }
+  for (const [phrase, action] of Object.entries(actionCache)) {
+    if (!phrase || !action) continue;
+    options.push({ id: `action:${action}`, label: phrase, description: `执行已有动作「${phrase}」` });
+  }
+  options.push({ id: 'none', label: '不是指令', description: '这句话是普通转写内容，不执行任何动作' });
+  return options;
+}
+
+/**
+ * 本地快速判断是否值得进入指令路由。
+ * 普通聊天直接走原有自动粘贴，避免为了得到 `none` 而等待一次网络模型请求。
+ */
+export function isLikelyCommandText(text) {
+  return /打开|启动|关闭|退出|切换|搜索|查找|找到|点击|按下|回车|确认|发送|发给|粘贴|复制|清空|新建|保存|运行|执行|进入/.test(normalizePhrase(text));
+}
+
+/** 持续指令模式：只在用户主动打开后调用 TypeSafe，直到用户手动关闭。 */
+export async function runCommandMode(text) {
+  const phrase = normalizePhrase(text);
+  if (!phrase) return false;
+  const exact = tryHandleSpecialCommand(phrase);
+  if (exact) return true;
+  // 已经明确表达「打开某应用并搜索」时走本地快速路径，避免把参数化动作交给模型后
+  // 只得到「不是指令」却丢掉了搜索词；TypeSafe 仍负责其它自然语言指令的选择。
+  const appSearch = parseFlexibleAppSearchCommand(phrase);
+  if (appSearch) {
+    await executeAppSearchCommand(appSearch);
+    return true;
+  }
+  const options = semanticCommandOptions();
+  const criteria = Object.fromEntries(options.map(option => [option.id, option.description]));
+  try {
+    const response = await fetch(apiUrl('/api/typesafe/command'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: phrase, options: criteria }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok || !data.choice || data.choice === 'none') {
+      if (data.error) toast(`指令模式未执行：${data.error}`);
+      else toast('没有识别为可执行指令，内容已保留');
+      return false;
+    }
+    const confidence = Number(data.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0.75) {
+      toast('指令不够明确，内容已保留');
+      return false;
+    }
+    if (data.choice.startsWith('open:')) {
+      const app = data.choice.slice(5);
+      return await activate(app, app);
+    }
+    if (data.choice.startsWith('search:')) {
+      const app = data.choice.slice(7);
+      const search = parseFlexibleAppSearchCommand(phrase);
+      if (!search || search.app !== app) {
+        toast('已识别到搜索指令，但没有提取出搜索词');
+        return false;
+      }
+      await executeAppSearchCommand({ ...search, app });
+      return true;
+    }
+    if (data.choice.startsWith('action:')) {
+      const action = data.choice.slice(7);
+      return runActionCommand(action, phrase);
+    }
+  } catch (error) {
+    console.error('[command-mode] TypeSafe 判断失败:', error);
+    toast('指令判断失败，内容已保留');
+  }
+  return false;
+}
+
 /** 读取指令映射：/api/commands（含内置默认，首次自动落盘） + 兼容旧 settings.commandAliases */
 async function loadCommandMap() {
   let map = {};
@@ -590,6 +705,14 @@ function initCommandMenu() {
   }
   cmdMenuBound = true;
   btn.addEventListener('click', (e) => { e.stopPropagation(); void openCommandPage(); });
+  const modeButton = document.getElementById('ftCommand');
+  if (modeButton) {
+    modeButton.addEventListener('click', () => {
+      setCommandModeArmed(!isCommandModeArmed());
+      if (isCommandModeArmed()) toast('指令模式已开启：后续语音会按指令判断');
+    });
+    setCommandModeArmed(false);
+  }
 }
 
 // DOMContentLoaded 备用初始化：不影响正常运行但确保指令入口一定可用。
@@ -617,6 +740,23 @@ function parseCurrentAppSearchCommand(text) {
 function parseAppSearchCommand(text) {
   const normalized = String(text || '').trim().replace(/[。！？；，、,.!?;\s]+$/g, '');
   const match = normalized.match(/^(?:打开|启动|开启)\s*(.+?)\s*(?:[，,、]\s*)?(?:找到|搜索|查找)\s*(.+)$/);
+  if (!match) return null;
+  const alias = match[1].trim();
+  const query = match[2].trim();
+  if (!alias || !query) return null;
+  const app = commandCache[alias] || commandCache[alias.toLowerCase()];
+  return app ? { app, alias, query } : null;
+}
+
+/**
+ * 指令模式下的自然说法参数提取。
+ * 语义动作由 TypeSafe 选择；这里只从原句取出已有流程需要的搜索词。
+ * 症状备忘：此前候选集只有 open_app，没有 search_app，所以「帮我打开微信，然后找到 TT」
+ * 既不符合旧正则，也没有可供 TypeSafe 选择的搜索动作，最终会被当成普通转写。
+ */
+function parseFlexibleAppSearchCommand(text) {
+  const normalized = String(text || '').trim().replace(/[。！？；，、,.!?;\s]+$/g, '');
+  const match = normalized.match(/^(?:(?:你)?帮我\s*)?(?:打开|启动|开启)\s*(.+?)\s*(?:[，,、]\s*)?(?:然后|并且|并|再)?\s*(?:去\s*)?(?:找到|搜索|查找)\s*(.+)$/);
   if (!match) return null;
   const alias = match[1].trim();
   const query = match[2].trim();

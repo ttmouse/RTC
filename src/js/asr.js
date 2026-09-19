@@ -4,7 +4,7 @@ import { $, esc, toast, addLine, scrollListToBottom, renderRunStatus } from './u
 import { applyCorrection } from './correction.js';
 import { pasteToCursor } from './clipboard.js';
 import { getFrontmostApp } from './frontmost.js';
-import { tryHandleSpecialCommand, learnSpecialCommand } from './commands.js';
+import { tryHandleSpecialCommand, learnSpecialCommand, consumeCommandMode, runCommandMode, isLikelyCommandText } from './commands.js';
 import { saveEntry } from './history.js';
 import { saveTotalDuration, updateEngineBadge, shouldAutoPaste, shouldAutoEnter } from './settings.js';
 import { setLineTargets, setLinePasteState, specFromActiveApp } from './pastebadge.js';
@@ -19,6 +19,13 @@ function trackPasteLine(el) {
 }
 
 const VAD_SILENCE_BLOCKS = 10;
+// 起说门槛：连着这么多块都在门槛以上，才认「有人说话」。
+// 为什么不是一块就认（2026-09-19 用户提的）：一块就认的话，一瞬的噪声——敲键盘、
+// 碰一下麦克风、鼠标点击、桌椅响——就能让菜单栏闪一下「说话中」。那种闪烁不是信息，是干扰。
+// 门槛取 3 块是故意的：音频回调约 11.7 次/秒（4096 采样 @48k），3 块 ≈ 0.26 秒墙钟、
+// 对应的真实音频约 85ms（降采样到 16k 后每块 256ms 的 1/3）。这个延迟人耳几乎察觉不到，
+// 但足以滤掉一次性的爆音；真要挡住一秒的关门声，代价是说话后近一秒菜单栏才变，得不偿失。
+const VAD_ONSET_BLOCKS = 3;
 const VAD_PAD_BLOCKS = 3;
 const VAD_HEARTBEAT_BLOCKS = 54;
 const SILENCE_FRAMES = 16;
@@ -31,28 +38,6 @@ let adaptiveVAD = null;
 
 export function setAsrStopHandler(handler) {
   state.asrStopHandler = handler;
-}
-
-/**
- * 按句末标点切分，标点保留在句尾。
- *
- * 原来是 `delta.split(/(?<=[。！？；])/)`——正则后行断言（lookbehind）。V8/Node 支持，
- * 但 WebKit 到 Safari 16.4 才支持：这是**解析期**语法错误，不是运行期异常，所以
- * 在 macOS 10.15/11/12 的 WKWebView 里整个 asr.js 加载失败，main.js 的模块图直接断掉，
- * 表现为点开就白屏。而 tauri.conf.json 写的 minimumSystemVersion 正是 10.15。
- * 手写一遍没有任何正则特性依赖，行为完全一致。
- */
-function splitAfterPunctuation(text) {
-  const out = [];
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    if ('。！？；'.includes(text[i])) {
-      out.push(text.slice(start, i + 1));
-      start = i + 1;
-    }
-  }
-  if (start < text.length) out.push(text.slice(start));
-  return out;
 }
 
 export function connectASR() {
@@ -123,6 +108,13 @@ export function connectASR() {
       }
       const data = JSON.parse(text);
 
+      if (data.type === 'bailian-interim') {
+        if (data.sentence && data.sentence.text) {
+          handleASRResult(data.sentence, Date.now(), eng);
+        }
+        return;
+      }
+
       if (data.type === 'connected') {
         ws.send(JSON.stringify({
           header: { action: 'run-task', task_id: state.asrTaskId, streaming: 'duplex' },
@@ -175,7 +167,7 @@ export function connectASR() {
         }
       } else if (event === 'result-generated') {
         const sentence = data.payload && data.payload.output && data.payload.output.sentence;
-        if (sentence && sentence.text) handleASRResult(sentence, Date.now());
+        if (sentence && sentence.text) handleASRResult(sentence, Date.now(), eng);
       }
     } catch (ex) {
       console.error('[ws] onmessage error:', ex);
@@ -202,7 +194,18 @@ export function resetVAD() {
   adaptiveVAD = new AdaptiveVAD({ threshold: state.vadThreshold, mode: state.vadMode });
 }
 
-export function vadSend(down, pcm) {
+/**
+ * 电平 → 说话状态（**唯一判断处**）。返回这次的电平与生效门槛，调用方再决定要不要送音频。
+ *
+ * 为什么单独抽出来：本地引擎（SenseVoice）的音频不走前端 VAD 闸门（分段由
+ * asr_local/server.py 自己那套同样的自适应 VAD 做），但菜单栏的「说话中」需要同一套结论。
+ * 两处各写一份判断，迟早出现「电平尺在跳、菜单栏说没人说话」。
+ *
+ * 起说与结束都带时间门槛（VAD_ONSET_BLOCKS / VAD_SILENCE_BLOCKS），
+ * 所以菜单栏不会因为一下噪声就闪。状态真的翻转时才调 renderRunStatus()：
+ * 平时状态区一秒一轮，而说话状态必须即时映上去（说完半句话才变就失去意义了）。
+ */
+function updateSpeechState(down) {
   let sum = 0;
   for (let i = 0; i < down.length; i++) sum += down[i] * down[i];
   const rms = Math.sqrt(sum / down.length);
@@ -211,35 +214,79 @@ export function vadSend(down, pcm) {
   if (state.vadMode === 'auto') state.vadThreshold = threshold;
   // 让云端引擎也使用同一套自适应门槛；手动模式则保持用户设置。
   const vadRms = state.vadMode === 'auto' ? threshold : state.vadThreshold;
+  const loud = rms >= vadRms;
+
+  if (state.vadState === 'silent') {
+    // 起说要连着几块都过门槛（见 VAD_ONSET_BLOCKS）；中间掉一块就从头数，
+    // 所以一瞬的爆音连不起来，不会把菜单栏点亮。
+    if (loud) {
+      state.vadSpeechBlocks++;
+      if (state.vadSpeechBlocks >= VAD_ONSET_BLOCKS) {
+        state.vadState = 'speech';
+        state.vadSpeechBlocks = 0;
+        state.vadSilenceCount = 0;
+        // 「最近听到」的计时从**确认说话**才开始（不是每块大声都记）：
+        // 否则一次 85ms 的噪声也会让菜单栏留 1.2 秒的回执——正是用户要避开的闪烁。
+        state.speechHeardAt = Date.now();
+        // 这里**故意不响音效**：试过两版（三角波短 tick / 正弦慢起音）用户都不要，
+        // 理由与当时用过的参数写在 src/js/sfx.js 底部，不要顺手加回来。
+        renderRunStatus(); // 菜单栏换成「说话中」
+      }
+    } else {
+      state.vadSpeechBlocks = 0;
+    }
+  } else if (!loud) {
+    state.vadSilenceCount++;
+    if (state.vadSilenceCount >= VAD_SILENCE_BLOCKS) {
+      state.vadState = 'silent';
+      state.vadSilenceCount = 0;
+      state.vadHeartbeat = 0;
+      state.vadSpeechBlocks = 0;
+      // 说完一句（静了约 0.85 秒）才退回：句间自然的呼吸停顿不会让字在两说法间闪
+      renderRunStatus();
+    }
+  } else {
+    // 说话中且仍在出声：刷新「最近听到」的时刻。
+    // 菜单栏的「已听到」回执按它算，所以说完 30 秒的长句和说一个短词都能拿到回执；
+    // 只在起说时记一次的话，长句结束时这个时间戳已经过期，回执永远不会出现。
+    state.vadSilenceCount = 0;
+    state.speechHeardAt = Date.now();
+  }
+  return { rms, threshold: vadRms };
+}
+
+/**
+ * 只更新「现在有没有人在说话」，不碰发送（本地引擎用）。
+ * 菜单栏的「说话中」靠它——本地引擎的音频不过前端 VAD 闸门，但说话状态是共用的。
+ */
+export function trackSpeech(down) {
+  updateSpeechState(down);
+}
+
+export function vadSend(down, pcm) {
+  const wasSilent = state.vadState === 'silent';
+  updateSpeechState(down);
+  const speaking = state.vadState === 'speech';
 
   state.vadBuf.push(pcm);
   if (state.vadBuf.length > VAD_PAD_BLOCKS) state.vadBuf.shift();
 
-  if (state.vadState === 'silent') {
-    if (rms >= vadRms) {
-      state.vadState = 'speech';
-      state.vadSilenceCount = 0;
-      for (const b of state.vadBuf) sendPCM(b);
-    } else {
-      state.vadHeartbeat++;
-      if (state.vadHeartbeat >= VAD_HEARTBEAT_BLOCKS) {
-        state.vadHeartbeat = 0;
-        sendPCM(pcm);
-      }
+  if (wasSilent && !speaking) {
+    // 一直安静：隔一阵送一块当心跳，让服务侧知道连接还活着
+    state.vadHeartbeat++;
+    if (state.vadHeartbeat >= VAD_HEARTBEAT_BLOCKS) {
+      state.vadHeartbeat = 0;
+      sendPCM(pcm);
     }
-  } else {
-    sendPCM(pcm);
-    if (rms < vadRms) {
-      state.vadSilenceCount++;
-      if (state.vadSilenceCount >= VAD_SILENCE_BLOCKS) {
-        state.vadState = 'silent';
-        state.vadSilenceCount = 0;
-        state.vadHeartbeat = 0;
-      }
-    } else {
-      state.vadSilenceCount = 0;
-    }
+    return;
   }
+  if (wasSilent && speaking) {
+    // 刚起说：静默期攒下的前置音频一起送出去，首字不被切掉
+    for (const b of state.vadBuf) sendPCM(b);
+    return;
+  }
+  // 本来就在说话（含刚静下来的这一块）：照送——静音尾巴是服务侧判断句尾的依据
+  sendPCM(pcm);
 }
 
 function checkSilence(pcm) {
@@ -381,15 +428,16 @@ function deferredStatus() {
  * 记录里（用户选的语义，和关掉自动粘贴一样）。在名单里 → 先 Cmd+V，再按自动发送
  * 名单决定要不要跟一个回车。
  */
-function applyPaste(text, paste) {
-  // 先把这一批行拿过来并清空：决策是异步的，这中间可能已经开始下一批了
-  const lines = pendingPasteLines;
-  pendingPasteLines = [];
+function applyPaste(text, paste, lineOverride = null) {
+  // 先把这一批行拿过来并清空：决策是异步的，这中间可能已经开始下一批了。
+  // 指令模式的普通话使用 lineOverride，避免把这句混进下一批普通转写。
+  const lines = lineOverride || pendingPasteLines;
+  if (!lineOverride) pendingPasteLines = [];
   if (!paste) {
     setLinePasteState(lines, false);
     return Promise.resolve('not-pasted');
   }
-  paste
+  return paste
     .then(d => {
       // 图标表示说话时的前台应用，文本颜色表示是否执行自动粘贴。
       setLineTargets(lines, specFromActiveApp(d.app));
@@ -415,11 +463,56 @@ function applyPaste(text, paste) {
     });
 }
 
-function handleASRResult(sentence, browserReceivedAt) {
+function handleASRResult(sentence, browserReceivedAt, resultEngine) {
   const text = sentence.text;
   if (!text) return;
-  const isFinal = !!(sentence.end_time > 0);
+  const localResult = isLocalEngine(normalizeEngine(resultEngine || state.asrEngine));
+  const isFinal = localResult
+    ? !!(sentence.end_time > 0)
+    : !!(sentence.sentence_end === true || sentence.end_time > 0);
   const corrected = applyCorrection(text);
+  if (isFinal && consumeCommandMode()) {
+    // 指令模式先判断：已有指令执行；普通话则继续走自动粘贴，不能因为开了指令模式而丢掉原有工作流。
+    const all = $('list').querySelectorAll('.line');
+    const lastLine = all.length ? all[all.length - 1] : null;
+    const lastTxt = lastLine ? lastLine.querySelector('.txt') : null;
+    const activeApp = getFrontmostApp();
+    const statusGate = deferredStatus();
+    let line = lastLine;
+    if (lastTxt && lastTxt.classList.contains('interim')) {
+      lastTxt.innerHTML = '';
+      lastTxt.textContent = corrected;
+      lastTxt.className = 'txt';
+    } else {
+      line = addLine(new Date(), corrected, false);
+    }
+    if (line) setLinePasteState([line], false);
+    Promise.resolve(activeApp).then(app => {
+      if (line) setLineTargets([line], specFromActiveApp(app));
+    });
+    saveEntry(corrected, activeApp, statusGate.promise, resultEngine);
+    if (!isLikelyCommandText(corrected)) {
+      // 明显是普通话时不请求模型，立即恢复自动粘贴的原有时序。
+      const paste = resolvePaste(activeApp);
+      applyPaste(corrected.replace(/[。！？；，、\s]+$/, ''), paste, line ? [line] : [])
+        .then(status => statusGate.resolve(status));
+      return;
+    }
+    void runCommandMode(corrected).then(handled => {
+      if (handled) {
+        statusGate.resolve('not-pasted');
+        return;
+      }
+      const paste = resolvePaste(activeApp);
+      applyPaste(corrected.replace(/[。！？；，、\s]+$/, ''), paste, line ? [line] : [])
+        .then(status => statusGate.resolve(status));
+    }).catch(() => {
+      const paste = resolvePaste(activeApp);
+      applyPaste(corrected, paste, line ? [line] : [])
+        .then(status => statusGate.resolve(status));
+    });
+    return;
+  }
   if (isFinal && tryHandleSpecialCommand(corrected)) {
     // 指令已执行（打开应用/触发回车等）。这句话仍是用户说的话，
     // 照常渲染到页面并存入历史，只是不再输出/粘贴到外部位。
@@ -440,7 +533,7 @@ function handleASRResult(sentence, browserReceivedAt) {
     Promise.resolve(activeApp).then(app => {
       if (line) setLineTargets([line], specFromActiveApp(app));
     });
-    saveEntry(corrected, activeApp, 'not-pasted');
+    saveEntry(corrected, activeApp, 'not-pasted', resultEngine);
     return;
   }
   if (isFinal) {
@@ -484,7 +577,7 @@ function handleASRResult(sentence, browserReceivedAt) {
     }
   }
 
-  if (isLocalEngine(normalizeEngine(state.asrEngine))) {
+  if (localResult) {
     const all = $('list').querySelectorAll('.line');
     const lastLine = all[all.length - 1];
     const lastTxt = lastLine ? lastLine.querySelector('.txt') : null;
@@ -509,7 +602,7 @@ function handleASRResult(sentence, browserReceivedAt) {
       const activeApp = getFrontmostApp();
       const paste = resolvePaste(activeApp);
       const pasteResult = applyPaste(corrected, paste);
-      saveEntry(corrected, activeApp, pasteResult);
+      saveEntry(corrected, activeApp, pasteResult, resultEngine);
     } else {
       if (lastIsInterim) {
         lastTxt.innerHTML = esc(corrected) + '<span class="cursor"></span>';
@@ -521,70 +614,46 @@ function handleASRResult(sentence, browserReceivedAt) {
     state.asrLastText = corrected;
     return;
   }
-  let delta = corrected;
-  if (corrected.startsWith(state.finalizedText)) {
-    delta = corrected.slice(state.finalizedText.length);
+  // 百炼中间帧只更新一条临时行，不保存、不计数、不粘贴；最终帧再一次性定型。
+  // sentence_id 只用来区分当前 VAD 段，不把它当中文自然句边界。
+  const sentenceId = sentence.sentence_id ?? null;
+  if (state.asrSentenceId !== sentenceId) {
+    if (state.pendingLine) state.pendingLine.remove();
+    state.pendingLine = null;
+    state.asrSentenceId = sentenceId;
   }
 
-  if (!delta.trim() || /^[。！？；，、\s]+$/.test(delta)) {
-    if (isFinal && state.pendingLine) finalizePending();
+  if (!isFinal) {
+    if (!state.pendingLine) {
+      state.pendingLine = addLine(new Date(), corrected, true);
+    } else {
+      const txt = state.pendingLine.querySelector('.txt');
+      if (txt) txt.innerHTML = esc(corrected) + '<span class="cursor"></span>';
+    }
+    state.pendingLine._ptext = corrected;
+    scrollListToBottom();
+    state.asrLastText = corrected;
     return;
   }
 
-  // 这次定型马上会整体粘出去（见下面的 isFinal 分支）：提前发起「现在最前面是谁」
-  // 的查询，这一批入库的句子都带上「发给了谁」。粘出去的正文可能横跨多段，目标就
-  // 记在同一批记录上，不另外造一种「粘贴记录」（记录格式保持只有 segment 一种）。
-  const activeApp = isFinal ? getFrontmostApp() : null;
-  const paste = isFinal ? resolvePaste(activeApp) : null;
-  const statusGate = isFinal ? deferredStatus() : null;
-
-  const segs = splitAfterPunctuation(delta);
-  const complete = segs.filter(s => /[。！？；]$/.test(s));
-  const pending = segs.filter(s => !/[。！？；]$/.test(s)).join('');
-
-  let firstComplete = true;
-  for (const s of complete) {
-    const t = s.trim();
-    if (!t) continue;
-    if (firstComplete && state.pendingLine) {
-      const txt = state.pendingLine.querySelector('.txt');
-      txt.innerHTML = '';
-      txt.textContent = t;
-      txt.className = 'txt';
-      trackPasteLine(state.pendingLine);
-      state.pendingLine = null;
-    } else {
-      trackPasteLine(addLine(new Date(), t, false));
-    }
-    firstComplete = false;
-    saveEntry(t, activeApp, statusGate ? statusGate.promise : 'not-pasted');
-    state.sentCount++;
-    if ($('count')) $('count').textContent = `本次 ${state.sentCount} 句`;
-  }
-  if (complete.length) {
-    state.finalizedText = corrected.slice(0, corrected.length - pending.length);
-  }
-
-  if (pending.trim()) {
-    if (!state.pendingLine) {
-      trackPasteLine(addLine(new Date(), pending, true));
-      const all = $('list').querySelectorAll('.line');
-      state.pendingLine = all[all.length - 1];
-    } else {
-      const txt = state.pendingLine.querySelector('.txt');
-      if (txt) txt.innerHTML = esc(pending) + '<span class="cursor"></span>';
-    }
-    state.pendingLine._ptext = pending;
-  } else if (state.pendingLine) {
-    state.pendingLine.remove();
+  const activeApp = getFrontmostApp();
+  const paste = resolvePaste(activeApp);
+  const statusGate = deferredStatus();
+  let line = state.pendingLine;
+  if (line) {
+    const txt = line.querySelector('.txt');
+    txt.innerHTML = '';
+    txt.textContent = corrected;
+    txt.className = 'txt';
     state.pendingLine = null;
+  } else {
+    line = addLine(new Date(), corrected, false);
   }
-
-  if (isFinal) {
-    finalizePending(activeApp, statusGate ? statusGate.promise : 'not-pasted');
-    state.finalizedText = corrected;
-    applyPaste(corrected.replace(/[。！？；，、\s]+$/, ''), paste)
-      .then(status => { if (statusGate) statusGate.resolve(status); });
-  }
+  trackPasteLine(line);
+  state.sentCount++;
+  if ($('count')) $('count').textContent = `本次 ${state.sentCount} 句`;
+  saveEntry(corrected, activeApp, statusGate.promise, resultEngine);
+  applyPaste(corrected.replace(/[。！？；，、\s]+$/, ''), paste)
+    .then(status => statusGate.resolve(status));
   state.asrLastText = corrected;
 }
