@@ -6,9 +6,18 @@ import { pasteToCursor } from './clipboard.js';
 import { getFrontmostApp } from './frontmost.js';
 import { tryHandleSpecialCommand, learnSpecialCommand } from './commands.js';
 import { saveEntry } from './history.js';
-import { saveTotalDuration, updateEngineBadge, shouldAutoEnter } from './settings.js';
+import { saveTotalDuration, updateEngineBadge, shouldAutoPaste, shouldAutoEnter } from './settings.js';
+import { setLineTargets, setLinePasteState, specFromActiveApp } from './pastebadge.js';
+import { AdaptiveVAD } from './vad.js';
 
-const VAD_RMS = 0.012;
+// 这一批「去向还没确定」的记录行：本地引擎一句一行，百炼是几段一起粘。决策一回来就把
+// 去向贴到这些行上（见 pastebadge.js），然后清空。
+let pendingPasteLines = [];
+function trackPasteLine(el) {
+  if (el) pendingPasteLines.push(el);
+  return el;
+}
+
 const VAD_SILENCE_BLOCKS = 10;
 const VAD_PAD_BLOCKS = 3;
 const VAD_HEARTBEAT_BLOCKS = 54;
@@ -18,6 +27,7 @@ const SILENCE_THRESH = 300;
 // 只保留最近 10 秒，恢复连接后补发，超出部分丢弃并明确告知用户。
 const PCM_BUFFER_MAX_MS = 10000;
 const PCM_CHUNK_MS = 4096 / 16000 * 1000;
+let adaptiveVAD = null;
 
 export function setAsrStopHandler(handler) {
   state.asrStopHandler = handler;
@@ -54,6 +64,7 @@ export function connectASR() {
   state.asrTaskId = 'asr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
   renderRunStatus(); // 进入「正在连接」
   let connectionTimedOut = false;
+  let ws = null;   // 本次连接的 socket；回调里一律认它，不认 state.asrWs
 
   const proxyUrl = wsProxyUrl();
   const eng = normalizeEngine(state.asrEngine);
@@ -68,6 +79,7 @@ export function connectASR() {
   }
 
   const connectTimeout = setTimeout(() => {
+    if (state.asrWs !== ws) return;   // 这条连接早就不作数了（已停录或已重连）
     if (!state.asrReady && state.recording) {
       connectionTimedOut = true;
       const msg = isLocal
@@ -81,18 +93,25 @@ export function connectASR() {
   }, 15000);
 
   try {
-    state.asrWs = new WebSocket(proxyUrl);
+    ws = new WebSocket(proxyUrl);
   } catch (e) {
     clearTimeout(connectTimeout);
     toast('连接失败: ' + e.message);
     return;
   }
+  state.asrWs = ws;
 
-  state.asrWs.onopen = () => {
-    state.asrWs.send(JSON.stringify(connectMsg));
+  // 这一条连接的三个回调都只跟**自己这条 socket** 说话，不再回头去读 state.asrWs。
+  // 因为 state.asrWs 随时可能已经换成下一条：停录后就没了、重连后就是新的。
+  // 老写法（回调里写 state.asrWs.send / 直接改 state）在「刚连上就停录、或马上重连」时
+  // 会拿到 null 或拿到新连接——轻则控制台一条 TypeError（用户看不见但没人知道它坏了），
+  // 重则把旧连接的状态写回 state，把新连接误报成「没连上」。这正是「等待之后要重新确认
+  // 对象身份」的那条规则：对象可能已经不是刚才那一个了。
+  ws.onopen = () => {
+    ws.send(JSON.stringify(connectMsg));
   };
 
-  state.asrWs.onmessage = async (e) => {
+  ws.onmessage = async (e) => {
     try {
       let text;
       if (e.data instanceof Blob) {
@@ -105,7 +124,7 @@ export function connectASR() {
       const data = JSON.parse(text);
 
       if (data.type === 'connected') {
-        state.asrWs.send(JSON.stringify({
+        ws.send(JSON.stringify({
           header: { action: 'run-task', task_id: state.asrTaskId, streaming: 'duplex' },
           payload: {
             task_group: 'audio', task: 'asr', function: 'recognition',
@@ -114,7 +133,8 @@ export function connectASR() {
               format: 'pcm', sample_rate: 16000, enable_punctuation_prediction: true,
               engine: eng,   // sensevoice / qwen3 → 本地 Python 引擎切换
               qwen3_model_dir: eng === 'qwen3' && state.qwen3ModelDir ? state.qwen3ModelDir : undefined,
-              vad_threshold: state.vadThreshold, silence_timeout: state.silenceTimeout,
+              vad_threshold: state.vadThreshold, vad_mode: state.vadMode,
+              silence_timeout: state.silenceTimeout,
               auto_paste: state.autoPaste,
             },
             input: {},
@@ -162,30 +182,41 @@ export function connectASR() {
     }
   };
 
-  state.asrWs.onerror = () => {
+  ws.onerror = () => {
+    if (state.asrWs !== ws) return;   // 已经是下一条连接的事了，别把它的状态写坏
     clearTimeout(connectTimeout);
     if (connectionTimedOut) return;
     toast(`连接异常：无法连接到本地代理服务 (${proxyUrl})，请确认服务已启动`);
     state.asrReady = false;
     renderRunStatus();
   };
-  state.asrWs.onclose = () => {
+  ws.onclose = () => {
+    if (state.asrWs !== ws) return;   // 同上：旧连接的关闭不代表现在这条断了
     clearTimeout(connectTimeout);
     state.asrReady = false;
     renderRunStatus();
   };
 }
 
+export function resetVAD() {
+  adaptiveVAD = new AdaptiveVAD({ threshold: state.vadThreshold, mode: state.vadMode });
+}
+
 export function vadSend(down, pcm) {
   let sum = 0;
   for (let i = 0; i < down.length; i++) sum += down[i] * down[i];
   const rms = Math.sqrt(sum / down.length);
+  if (!adaptiveVAD) resetVAD();
+  const threshold = adaptiveVAD.update(rms);
+  if (state.vadMode === 'auto') state.vadThreshold = threshold;
+  // 让云端引擎也使用同一套自适应门槛；手动模式则保持用户设置。
+  const vadRms = state.vadMode === 'auto' ? threshold : state.vadThreshold;
 
   state.vadBuf.push(pcm);
   if (state.vadBuf.length > VAD_PAD_BLOCKS) state.vadBuf.shift();
 
   if (state.vadState === 'silent') {
-    if (rms >= VAD_RMS) {
+    if (rms >= vadRms) {
       state.vadState = 'speech';
       state.vadSilenceCount = 0;
       for (const b of state.vadBuf) sendPCM(b);
@@ -198,7 +229,7 @@ export function vadSend(down, pcm) {
     }
   } else {
     sendPCM(pcm);
-    if (rms < VAD_RMS) {
+    if (rms < vadRms) {
       state.vadSilenceCount++;
       if (state.vadSilenceCount >= VAD_SILENCE_BLOCKS) {
         state.vadState = 'silent';
@@ -305,10 +336,10 @@ export function disconnectBailian() {
   renderRunStatus();
 }
 
-// `targetApp` 由调用方透传给 saveEntry：只有「这句话马上就要粘出去」的调用点
-// 才会传（见下面 handleASRResult 的两处），其余（静音收尾、停录收尾）不传。
-export function finalizePending(targetApp) {
+// 定型时同时保存说话时的前台应用和独立的粘贴状态。
+export function finalizePending(activeApp, status) {
   if (!state.pendingLine) return;
+  if (activeApp === undefined) activeApp = getFrontmostApp();
   const txt = state.pendingLine.querySelector('.txt');
   const t = state.pendingLine._ptext || '';
   state.pendingLine = null;
@@ -319,20 +350,69 @@ export function finalizePending(targetApp) {
   state.finalizedText += t;
   state.sentCount++;
   if ($('count')) $('count').textContent = `本次 ${state.sentCount} 句`;
-  saveEntry(t, targetApp);
+  saveEntry(t, activeApp, status);
 }
 
 /**
- * 粘贴，并按「粘到哪个应用」决定这次要不要跟一个回车。
+ * 这次定型粘不粘、粘给谁。一个决策两处用：真的把字送出去（applyPaste），以及随记录
+ * 入库的 `activeApp` 与 `pasteStatus`。两处必须来自同一次判定，所以这里只问一次
+ * 前台应用，把结果复用出去。
  *
- * 必须等目标应用回来才能发按键：自动发送是按应用配的（见 settings.shouldAutoEnter），
- * 不知道目标就没法判。这个等待只是一次本机查询（微秒级，见 frontmost.js），不等网络；
- * 查不到目标就交给 shouldAutoEnter 判（没配名单时沿用老行为）。
+ * 名单是按应用分的（settings.shouldAutoPaste），所以粘贴判定必须等目标回来；
+ * 前台快照本身则无论自动粘贴开关是否打开都要记录。
  */
-function pasteWithTargetApps(text, targetApp) {
-  Promise.resolve(targetApp)
-    .then(app => pasteToCursor(text, shouldAutoEnter(app)))
-    .catch(() => pasteToCursor(text, shouldAutoEnter(null)));
+function resolvePaste(activeApp) {
+  return Promise.resolve(activeApp)
+    .catch(() => null)
+    .then(app => ({ app, paste: !!state.autoPaste && shouldAutoPaste(app) }));
+}
+
+/** 只记录粘贴动作是否被执行，前台应用另由 activeApp 保存。 */
+function deferredStatus() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+/**
+ * 真的把字送出去，或者按名单决定不送。
+ *
+ * 不在自动粘贴名单里 → **什么都不做**：不按 Cmd+V、也不碰剪贴板，字只留在 RTC 的
+ * 记录里（用户选的语义，和关掉自动粘贴一样）。在名单里 → 先 Cmd+V，再按自动发送
+ * 名单决定要不要跟一个回车。
+ */
+function applyPaste(text, paste) {
+  // 先把这一批行拿过来并清空：决策是异步的，这中间可能已经开始下一批了
+  const lines = pendingPasteLines;
+  pendingPasteLines = [];
+  if (!paste) {
+    setLinePasteState(lines, false);
+    return Promise.resolve('not-pasted');
+  }
+  paste
+    .then(d => {
+      // 图标表示说话时的前台应用，文本颜色表示是否执行自动粘贴。
+      setLineTargets(lines, specFromActiveApp(d.app));
+      if (!d.paste) {
+        setLinePasteState(lines, false);
+        return 'not-pasted';
+      }
+      return pasteToCursor(text, shouldAutoEnter(d.app))
+        .then(status => {
+          const pasted = status === 'ok';
+          setLinePasteState(lines, pasted);
+          return pasted ? 'pasted' : 'not-pasted';
+        })
+        .catch(() => {
+          setLinePasteState(lines, false);
+          return 'not-pasted';
+        });
+    })
+    .catch(e => {
+      setLinePasteState(lines, false);
+      console.error('[paste] 粘贴决策失败，这句没有粘出去:', e);
+      return 'not-pasted';
+    });
 }
 
 function handleASRResult(sentence, browserReceivedAt) {
@@ -344,16 +424,23 @@ function handleASRResult(sentence, browserReceivedAt) {
     // 指令已执行（打开应用/触发回车等）。这句话仍是用户说的话，
     // 照常渲染到页面并存入历史，只是不再输出/粘贴到外部位。
     const all = $('list').querySelectorAll('.line');
-    const lastTxt = all.length ? all[all.length - 1].querySelector('.txt') : null;
+    const lastLine = all.length ? all[all.length - 1] : null;
+    const lastTxt = lastLine ? lastLine.querySelector('.txt') : null;
+    const activeApp = getFrontmostApp();
+    let line = lastLine;
     if (lastTxt && lastTxt.classList.contains('interim')) {
       // 指令句若已作为临时行显示，定型为最终文本，避免重复行
       lastTxt.innerHTML = '';
       lastTxt.textContent = corrected;
       lastTxt.className = 'txt';
     } else {
-      addLine(new Date(), corrected, false);
+      line = addLine(new Date(), corrected, false);
     }
-    saveEntry(corrected);
+    if (line) setLinePasteState([line], false);
+    Promise.resolve(activeApp).then(app => {
+      if (line) setLineTargets([line], specFromActiveApp(app));
+    });
+    saveEntry(corrected, activeApp, 'not-pasted');
     return;
   }
   if (isFinal) {
@@ -404,22 +491,25 @@ function handleASRResult(sentence, browserReceivedAt) {
     const lastIsInterim = !!(lastTxt && lastTxt.classList.contains('interim'));
 
     if (isFinal) {
+      let lineEl = null;
       if (lastIsInterim) {
         lastTxt.innerHTML = '';
         lastTxt.textContent = corrected;
         lastTxt.className = 'txt';
+        lineEl = lastLine;
       } else {
-        addLine(new Date(), corrected, false);
+        lineEl = addLine(new Date(), corrected, false);
       }
+      trackPasteLine(lineEl);
       state.sentCount++;
       if ($('count')) $('count').textContent = `本次 ${state.sentCount} 句`;
       // 会粘出去：提前发起「现在最前面是谁」的查询，把目标随这句话一起记下（见
       // frontmost.js）。查询与粘贴是并行的两条路，谁也不等谁，粘贴的手感不变。
-      const pasteTarget = state.autoPaste ? getFrontmostApp() : null;
-      saveEntry(corrected, pasteTarget);
-      if (state.autoPaste) {
-        pasteWithTargetApps(corrected, pasteTarget);
-      }
+      // 粘不粘由名单定（resolvePaste / applyPaste）。
+      const activeApp = getFrontmostApp();
+      const paste = resolvePaste(activeApp);
+      const pasteResult = applyPaste(corrected, paste);
+      saveEntry(corrected, activeApp, pasteResult);
     } else {
       if (lastIsInterim) {
         lastTxt.innerHTML = esc(corrected) + '<span class="cursor"></span>';
@@ -444,7 +534,9 @@ function handleASRResult(sentence, browserReceivedAt) {
   // 这次定型马上会整体粘出去（见下面的 isFinal 分支）：提前发起「现在最前面是谁」
   // 的查询，这一批入库的句子都带上「发给了谁」。粘出去的正文可能横跨多段，目标就
   // 记在同一批记录上，不另外造一种「粘贴记录」（记录格式保持只有 segment 一种）。
-  const pasteTarget = (isFinal && state.autoPaste) ? getFrontmostApp() : null;
+  const activeApp = isFinal ? getFrontmostApp() : null;
+  const paste = isFinal ? resolvePaste(activeApp) : null;
+  const statusGate = isFinal ? deferredStatus() : null;
 
   const segs = splitAfterPunctuation(delta);
   const complete = segs.filter(s => /[。！？；]$/.test(s));
@@ -459,12 +551,13 @@ function handleASRResult(sentence, browserReceivedAt) {
       txt.innerHTML = '';
       txt.textContent = t;
       txt.className = 'txt';
+      trackPasteLine(state.pendingLine);
       state.pendingLine = null;
     } else {
-      addLine(new Date(), t, false);
+      trackPasteLine(addLine(new Date(), t, false));
     }
     firstComplete = false;
-    saveEntry(t, pasteTarget);
+    saveEntry(t, activeApp, statusGate ? statusGate.promise : 'not-pasted');
     state.sentCount++;
     if ($('count')) $('count').textContent = `本次 ${state.sentCount} 句`;
   }
@@ -474,7 +567,7 @@ function handleASRResult(sentence, browserReceivedAt) {
 
   if (pending.trim()) {
     if (!state.pendingLine) {
-      addLine(new Date(), pending, true);
+      trackPasteLine(addLine(new Date(), pending, true));
       const all = $('list').querySelectorAll('.line');
       state.pendingLine = all[all.length - 1];
     } else {
@@ -488,11 +581,10 @@ function handleASRResult(sentence, browserReceivedAt) {
   }
 
   if (isFinal) {
-    finalizePending(pasteTarget);
+    finalizePending(activeApp, statusGate ? statusGate.promise : 'not-pasted');
     state.finalizedText = corrected;
-    if (state.autoPaste) {
-      pasteWithTargetApps(corrected.replace(/[。！？；，、\s]+$/, ''), pasteTarget);
-    }
+    applyPaste(corrected.replace(/[。！？；，、\s]+$/, ''), paste)
+      .then(status => { if (statusGate) statusGate.resolve(status); });
   }
   state.asrLastText = corrected;
 }

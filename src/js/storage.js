@@ -1,6 +1,6 @@
 import { apiUrl } from './api.js';
 
-export async function appendTranscriptEvent(text, ts, engine, targetApp) {
+export async function appendTranscriptEvent(text, ts, engine, activeApp, pasteStatus) {
   const response = await fetch(apiUrl('/api/transcripts/events'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -10,9 +10,9 @@ export async function appendTranscriptEvent(text, ts, engine, targetApp) {
         text,
         ts: ts || new Date().toISOString(),
         engine: engine || null,
-        // 粘贴目标应用名（“微信”）：自动粘贴时前端问过“现在最前面是谁”（见
-        // frontmost.js），不是自动粘贴、或者没问到就是 null。
-        targetApp: targetApp || null,
+        // 记录说话时的前台应用快照，与粘贴结果分开保存。
+        activeApp: activeApp || null,
+        pasteStatus: pasteStatus || 'not-pasted',
       },
     }),
   });

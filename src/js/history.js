@@ -30,23 +30,28 @@ export function setTodayCount(count) {
 /**
  * 一条转写记录入库。
  *
- * `targetApp` 是「这句话最终粘给了哪个软件」，只在自动粘贴时会传（见 asr.js）。
- * 它可能是个 Promise —— 「现在最前面是谁」是提前发起、跟语句定型并行跑的查询，
- * 等它只是为了把目标一起写进去。等不到（网页版 / 前台是本程序自己 / 查询失败）
- * 就写 null，**绝不因为认不出目标就少记一句话**（产品原则 4：旁路不挡主路径）。
+ * `activeApp` 是说话时的前台应用快照，`pasteStatus` 是独立的粘贴结果。
+ * 两者都可能是 Promise，因为前台查询与识别定型并行进行；查询失败只影响旁路字段，
+ * 不影响正文入库。
  */
-export async function saveEntry(text, targetApp) {
+export async function saveEntry(text, activeApp, pasteStatus) {
   const ts = new Date().toISOString();
   // engine 在 await 之前取好：等待期间用户可能切换引擎，记录该记当时那个。
   const engine = state.asrEngine || null;
-  let app = null;
+  let foreground = null;
+  let status = 'not-pasted';
   try {
-    app = (await Promise.resolve(targetApp)) || null;
+    foreground = (await Promise.resolve(activeApp)) || null;
   } catch (e) {
-    app = null;
+    foreground = null;
   }
   try {
-    await appendTranscriptEvent(text, ts, engine, app);
+    status = (await Promise.resolve(pasteStatus)) || 'not-pasted';
+  } catch (e) {
+    status = 'not-pasted';
+  }
+  try {
+    await appendTranscriptEvent(text, ts, engine, foreground, status);
     setTodayCount((state.todayCount || 0) + 1);
   } catch (e) {
     console.error('[transcript] JSONL append failed:', e.message || e);
@@ -105,7 +110,12 @@ export async function loadEarlier() {
         state.rendered.add(key);
         return true;
       })
-      .map(e => ({ t: e.ts, text: e.text }));
+      .map(e => ({
+        t: e.ts,
+        text: e.text,
+        activeApp: e.activeApp || null,
+        pasteStatus: e.pasteStatus || (e.targetApp ? 'pasted' : 'not-pasted'),
+      }));
     if (!fresh.length) {
       state.historyExhausted = true;
       setListTopHint('更早没有记录了');
@@ -139,6 +149,9 @@ export async function renderHistory(force) {
     id: event.eventId,
     t: event.ts,
     text: event.text,
+    // activeApp 与 pasteStatus 是两条独立事实；旧事件用 targetApp 兼容展示。
+    activeApp: event.activeApp || null,
+    pasteStatus: event.pasteStatus || (event.targetApp ? 'pasted' : 'not-pasted'),
   }));
 
   if (!entries.length) {
@@ -176,7 +189,7 @@ export async function renderHistory(force) {
     // （「好」「谢谢」「下一个」），按文本去重会让第二条永远不显示——数据在 JSONL 里，
     // 界面上却是空的。eventId 已经能可靠区分事件，不需要再猜。
     state.rendered.add(key);
-    addLine(d, entry.text, false);
+    addLine(d, entry.text, false, entry.activeApp, entry.pasteStatus);
   }
 
   const emp = $('list').querySelector('.empty');
