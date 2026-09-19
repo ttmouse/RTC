@@ -22,7 +22,7 @@ export const STRINGS = {
   // 给他看另一个平台的命令只会添乱。由 isWindows 决定显示哪句。
   agentConnectCmdWin: [
     '帮我接上 Omia：powershell -ExecutionPolicy Bypass -File "C:\\Program Files\\Xiaoer Omia\\omia-cli\\connect.ps1"'
-      + "（🔴 资源在安装根目录下、不在 resources 里；装到别的盘就在安装目录找 omia-cli\\connect.ps1。"
+      + "（! 资源在安装根目录下、不在 resources 里；装到别的盘就在安装目录找 omia-cli\\connect.ps1。"
       + "你不是 Claude Code / Codex / Hermes 的话，末尾加 -Exec '<你的一次性命令> $t' 自报）",
     'Connect Omia for me: powershell -ExecutionPolicy Bypass -File "C:\\Program Files\\Xiaoer Omia\\omia-cli\\connect.ps1"'
       + " (resources sit in the install root, not under resources; if that path is wrong, find"
@@ -291,7 +291,7 @@ export const STRINGS = {
   winClose: ["关闭", "Close"],
   updCheckNow: ["检查", "Check"],
   updChecking: ["正在检查更新…", "Checking for updates…"],
-  updLatest: ["已是最新版 🌿", "You're on the latest 🌿"],
+  updLatest: ["已是最新版", "You're on the latest"],
   updCheckFail: ["检查失败（可能连不上更新服务器），可去官网下载最新版", "Couldn't reach the update server — grab the latest from the website"],
   updGoSite: ["去官网下载", "Open website"],
   // 首页/开场
@@ -407,7 +407,7 @@ export const STRINGS = {
   t_jpg: ["JPEG", "JPEG"],
   // 邀请码激活
   // 试用提示（轻提示，非浮层）
-  trialWelcome: ["👂 一个月免费试用", "👂 One month free"],
+  trialWelcome: ["一个月免费试用", "One month free"],
   trialOver: ["请在设置中输入邀请码继续使用", "Enter an invite code in Settings to continue"],
   // 设置面板里的激活行（一直存在，不受试用期影响）
   settingsNeedsCode: ["设置 · 试用已结束，输入邀请码继续使用", "Settings · Trial ended — enter an invite code to continue"],
@@ -423,7 +423,7 @@ export const STRINGS = {
   setLegal: ["法律信息", "Legal"],
   ossOpen: ["第三方开源许可", "Open source licenses"],
   // 使用情况统计开关（Jane 2026-08-27 B3）：永不接触文件名/路径/内容。
-  // 🔴 2026-08-28 采集范围扩了（打开方式 / 使用时长 / 是否编辑 / 是否转格式 / 失败分类），
+  // 2026-08-28 采集范围扩了（打开方式 / 使用时长 / 是否编辑 / 是否转格式 / 失败分类），
   //    **三处文案必须同步改**：这里 / 首次告知 telemetryNotice / 官网隐私政策第 11 条。
   //    少改一处 = 收集的比公示的多，这是红线不是文案问题。见 lib/telemetry.ts 顶部注释。
   telemetryTitle: ["使用情况统计", "Usage Statistics"],
@@ -451,9 +451,9 @@ export const STRINGS = {
   ossSearch: ["搜索组件名…", "Search components…"],
   ossCount: ["个开源组件", "open source components"],
 
-  actTitle: ["试用愉快 👂 输入邀请码即可长期使用", "Enjoying it? 👂 Enter an invite code to keep using"],
+  actTitle: ["试用愉快！输入邀请码即可长期使用", "Enjoying it? Enter an invite code to keep using"],
   actHowToFree: ["关注公众号「小耳」免费领码", "Follow Xiaoer to get a free code"],
-  // 🔴 价格双轨：中文＝国内 Z-Pay 扫码 ¥58 / 英文＝海外 Waffo 刷卡 $19.90。
+  // 价格双轨：中文＝国内 Z-Pay 扫码 ¥58 / 英文＝海外 Waffo 刷卡 $19.90。
   //    2026-09-03 前英文写的是 $9.9，那是从没上线过的旧口径；Waffo 上真实产品是 $19.90，
   //    接海外付款时若不改，就是「页面写 $9.9、实际扣 $19.90」。
   actBuyTitle: ["购买永久版 ¥58", "Buy lifetime — $19.90"],
@@ -473,7 +473,7 @@ export const STRINGS = {
   actCodePlaceholder: ["OMON-XXXX-XXXX", "OMON-XXXX-XXXX"],
   actActivate: ["激活", "Activate"],
   actLater: ["稍后", "Later"],
-  actOk: ["已激活，感谢支持 🌿", "Activated — thank you 🌿"],
+  actOk: ["已激活，感谢支持", "Activated — thank you"],
   actBadFormat: ["邀请码格式不对", "Invalid code format"],
   actBadSig: ["邀请码无效", "Invalid code"],
   actExpired: ["邀请码已过期", "Code expired"],

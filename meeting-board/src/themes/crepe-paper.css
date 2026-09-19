@@ -1903,21 +1903,21 @@
 }
 /* note=蓝 / tip=绿 / important=紫 / warning=琥珀 / caution=红 */
 .milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-note    { background: #eaf0f7; border-left-color: #3b6db3; color: #2f3b49; }
-.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-note    .crepe-callout-tag::before { content: "ℹ️  笔记"; color: #3b6db3; }
+.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-note    .crepe-callout-tag::before { content: "i 笔记"; color: #3b6db3; }
 .milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-tip     { background: #eef6e6; border-left-color: #4a7a23; color: #3a4a2e; }
-.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-tip     .crepe-callout-tag::before { content: "💡  提示"; color: #4a7a23; }
+.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-tip     .crepe-callout-tag::before { content: "i 提示"; color: #4a7a23; }
 .milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-important { background: #f1ecf9; border-left-color: #7a5bb3; color: #3f3550; }
-.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-important .crepe-callout-tag::before { content: "❗  重要"; color: #7a5bb3; }
+.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-important .crepe-callout-tag::before { content: "! 重要"; color: #7a5bb3; }
 .milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-warning { background: #f9f3e0; border-left-color: #b8860b; color: #4d432a; }
-.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-warning .crepe-callout-tag::before { content: "⚠️  注意"; color: #9c7209; }
+.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-warning .crepe-callout-tag::before { content: "! 注意"; color: #9c7209; }
 .milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-caution { background: #f9e9e7; border-left-color: #c0392b; color: #4d2f2b; }
-.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-caution .crepe-callout-tag::before { content: "🚫  警告"; color: #c0392b; }
+.milkdown-host .milkdown .ProseMirror blockquote.crepe-callout-caution .crepe-callout-tag::before { content: "X 警告"; color: #c0392b; }
 /* 英文模式标题（.lang-en 在 .milkdown-host 上，两 class 优先级高于默认中文规则）*/
-.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-note .crepe-callout-tag::before { content: "ℹ️  Note"; }
-.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-tip .crepe-callout-tag::before { content: "💡  Tip"; }
-.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-important .crepe-callout-tag::before { content: "❗  Important"; }
-.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-warning .crepe-callout-tag::before { content: "⚠️  Warning"; }
-.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-caution .crepe-callout-tag::before { content: "🚫  Caution"; }
+.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-note .crepe-callout-tag::before { content: "i Note"; }
+.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-tip .crepe-callout-tag::before { content: "i Tip"; }
+.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-important .crepe-callout-tag::before { content: "! Important"; }
+.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-warning .crepe-callout-tag::before { content: "! Warning"; }
+.milkdown-host.lang-en .milkdown .ProseMirror blockquote.crepe-callout-caution .crepe-callout-tag::before { content: "X Caution"; }
 
 /* 行内代码 */
 .milkdown-host .milkdown .ProseMirror code:not(.cm-content code) {

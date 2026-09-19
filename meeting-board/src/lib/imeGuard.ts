@@ -1,9 +1,9 @@
 // imeGuard —— 挡住「中文输入法选词那一下的回车」。
 //
-// 🔴 病症（Jane 2026-08-08 报）：用中文输入法打字，按回车本来是**确认候选词**，
+// ! 病症（Jane 2026-08-08 报）：用中文输入法打字，按回车本来是**确认候选词**，
 //    结果整句话直接发出去了。
 //
-// 🔴 为什么原来那句 `!e.nativeEvent.isComposing` 不管用：两家内核的事件顺序是反的。
+// ! 为什么原来那句 `!e.nativeEvent.isComposing` 不管用：两家内核的事件顺序是反的。
 //
 //      Chrome / Edge：keydown(isComposing=true) → compositionend
 //      Safari / WKWebView：compositionend → keydown(isComposing=**false**)
