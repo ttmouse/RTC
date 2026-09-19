@@ -650,6 +650,9 @@ class Session:
         self.silence_ms = 0
         self.seg_start_ms = 0
         self.rms_threshold = RMS_THRESHOLD
+        self.vad_mode = "auto"
+        self.noise_floor = 0.0
+        self.noise_samples = deque(maxlen=48)
         self.auto_paste = False
         self.pre_frames = deque(maxlen=int(PRE_ROLL_MS / FRAME_MS))
         self.seg_id = None
@@ -677,6 +680,7 @@ class Session:
             thr = params.get("vad_threshold")
             if thr is not None:
                 self.rms_threshold = float(thr)
+            self.vad_mode = "manual" if params.get("vad_mode") == "manual" else "auto"
             ap = params.get("auto_paste")
             if ap is not None:
                 self.auto_paste = bool(ap)
@@ -724,6 +728,15 @@ class Session:
             frame_bytes = raw[i : i + VAD_FRAME].tobytes()
             frame_ms = len(frame_f) / 16
             self.pre_frames.append(frame_bytes)
+
+            if self.vad_mode == "auto":
+                quiet = self.noise_floor == 0 or rms < max(self.rms_threshold * 0.85, self.noise_floor * 1.35)
+                if quiet:
+                    self.noise_samples.append(rms)
+                    ordered = sorted(self.noise_samples)
+                    p25 = ordered[int((len(ordered) - 1) * 0.25)]
+                    self.noise_floor = p25 if self.noise_floor == 0 else self.noise_floor * 0.92 + p25 * 0.08
+                    self.rms_threshold = min(0.05, max(0.001, self.noise_floor * 2.8, self.noise_floor + 0.0025))
 
             if rms >= self.rms_threshold:
                 self.last_speech_wall_ms = time.monotonic() * 1000
