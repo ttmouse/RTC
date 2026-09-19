@@ -570,20 +570,62 @@ $('corrReset').onclick = async () => {
   await flushCorrectionRules();
 };
 
-// 搜索框：停止输入 250ms 后重查一次，避免每敲一个字就打一次接口。
+// 搜索：顶栏一个图标（#searchBtn），点开才展开 #queryBar 这一行。它默认不占版面，
+// 因为「翻旧记录」是低频动作——常驻一条输入框等于天天邀请人去搜索。搜索能力本身没变，
+// 只是从「常驻一行」改成「按需展开」。
+// 展开状态放在 body.search-open 上（不写内联 display）：设置页 / 语音指令页「整页打开时
+// 把主界面让开」用的是内联 display，不会和它互相覆盖。
 // 这里必须判空：dev 模式下改 src/ 会触发热重载，页面有可能拿到「新 JS + 旧 HTML」的
 // 中间态；一旦 $('searchInput') 为 null 却不判空，整个模块会在求值阶段抛错，
 // 后面的启动流程（含首次 renderHistory）全部不执行，界面就成空列表。
 const searchInput = $('searchInput');
+const searchBtn = $('searchBtn');
 let searchTimer = null;
+
+function rerenderForSearch() {
+  void renderHistory(true).catch(err => {
+    console.error('[transcript] history load failed:', err.message || err);
+  });
+}
+
+function setSearchOpen(open) {
+  document.body.classList.toggle('search-open', open);
+  if (searchBtn) searchBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open && searchInput) searchInput.focus();
+}
+
+// 收起时若还留着关键词，列表就继续被一份看不见的过滤条件压着（「我的记录怎么少了一半」），
+// 所以收起 = 连关键词一起清掉、回到全部记录。关键词还在时框本身是可见的，状态从不偷偷存在。
+function closeSearch() {
+  setSearchOpen(false);
+  if (!searchInput || !state.searchQuery) return;
+  searchInput.value = '';
+  state.searchQuery = '';
+  rerenderForSearch();
+}
+
+if (searchBtn) searchBtn.onclick = () => {
+  if (document.body.classList.contains('search-open')) closeSearch();
+  else setSearchOpen(true);
+};
+
 if (searchInput) searchInput.oninput = (e) => {
   state.searchQuery = e.target.value.trim();
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    void renderHistory(true).catch(err => {
-      console.error('[transcript] history load failed:', err.message || err);
-    });
-  }, 250);
+  searchTimer = setTimeout(rerenderForSearch, 250);
+};
+
+// Esc：有词先清词，词空了才收起——一步一跳，不会「按一下把关键词和搜索框一起弄没了」。
+if (searchInput) searchInput.onkeydown = (e) => {
+  if (e.key !== 'Escape') return;
+  e.stopPropagation();
+  if (searchInput.value) {
+    searchInput.value = '';
+    state.searchQuery = '';
+    rerenderForSearch();
+    return;
+  }
+  closeSearch();
 };
 
 // 聊天式向前翻页：滚到列表顶部附近时自动加载更早的记录。

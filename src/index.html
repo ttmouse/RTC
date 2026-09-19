@@ -10,6 +10,11 @@
 <header>
   <h1>实时逐字稿</h1>
   <div class="header-actions">
+    <!-- 搜索入口：翻旧记录是低频动作，所以顶栏只留一个图标，点开才展开 #queryBar。
+         它和右侧几个入口共用同一组盒模型（见 style.css 的顶栏图标共用规则）。 -->
+    <button id="searchBtn" title="搜索转写记录" aria-label="搜索转写记录" aria-expanded="false" aria-controls="queryBar">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    </button>
     <div class="statsWrap">
       <button id="statsBtn" title="今日记录统计" aria-label="今日记录统计" aria-expanded="false" aria-haspopup="dialog">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><path d="M8 17v-4"/><path d="M13 17V7"/><path d="M18 17v-7"/></svg>
@@ -80,6 +85,8 @@
 </div>
 
 <div id="queryBar">
+  <!-- 默认不显示（样式表里 display:none，由 body.search-open 打开），不是删掉：
+       搜索能力本身没变，只是从「常驻一行」改成「按需展开」。 -->
   <input type="search" id="searchInput" placeholder="搜索全部转写记录" autocomplete="off" spellcheck="false" aria-label="搜索转写记录">
 </div>
 

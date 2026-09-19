@@ -39,22 +39,27 @@
   #dot.err{ background:var(--seal-deep); }
   .header-actions{ display:flex; align-items:center; gap:10px; }
   .statsWrap{ position:relative; display:flex; align-items:center; }
-  #statsBtn{ display:inline-flex; align-items:center; gap:4px; background:none; border:none;
-        color:var(--ink-soft); padding:4px; border-radius:var(--radius-sm); cursor:pointer;
-        font-family:var(--mono); font-size:11px; font-variant-numeric:tabular-nums;
-        line-height:1; }
-  #statsBtn:hover{ color:var(--seal); }
-  #statsBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
-  #statsBtn svg{ display:block; width:15px; height:15px; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
-  /* 会议白板入口曾经漏在这条样式之外：浏览器给了它默认的浅灰底和系统边框，
-     夹在语音指令 / 设置两个无边框图标中间像个贴歪的方块。
-     三个入口图标必须始终共用这一组盒模型，新增顶栏图标按钮照抄这行加名字。 */
-  #settingsBtn, #cmdBtn, #meetingBoardBtn{ background:none; border:none; color:var(--ink-soft); padding:4px;
-        border-radius:var(--radius-sm); cursor:pointer; line-height:0;
+  /* 顶栏这一排图标（统计 / 推荐 / 搜索 / 语音指令 / 白板 / 设置）********
+     六个入口共用四段规则：盒模型 / svg / 悬停 / 焦点。新增顶栏入口时加进这四段，别再各写一套。
+     这一条被漏过两次：白板图标当时没进规则，浏览器给了它默认的浅灰底和系统边框，夹在
+     语音指令和设置两个无边框图标中间像个贴歪的方块；后来统计和推荐又各写了一套一模一样的
+     盒模型，改一处就漏两处。
+     悬停不再变印章红，而是给一层浅色的纸底（--paper-2）加图标转墨色：红是稀缺色，
+     留给录音中的圆点、输入光标和键盘焦点（见规范第 1 节）。 */
+  #statsBtn, #shareBtn, #searchBtn, #cmdBtn, #meetingBoardBtn, #settingsBtn{
+        background:none; border:none; color:var(--ink-soft); padding:4px;
+        border-radius:var(--radius); cursor:pointer; line-height:0;
         display:inline-flex; align-items:center; justify-content:center; }
-  #settingsBtn svg, #cmdBtn svg, #meetingBoardBtn svg{ display:block; width:15px; height:15px; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
-  #settingsBtn:hover, #cmdBtn:hover, #meetingBoardBtn:hover{ color:var(--seal); }
-  #settingsBtn:focus-visible, #cmdBtn:focus-visible, #meetingBoardBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  #statsBtn svg, #shareBtn svg, #searchBtn svg, #cmdBtn svg, #meetingBoardBtn svg, #settingsBtn svg{
+        display:block; width:15px; height:15px; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  #statsBtn:hover, #shareBtn:hover, #searchBtn:hover, #cmdBtn:hover, #meetingBoardBtn:hover, #settingsBtn:hover{
+        background:var(--paper-2); color:var(--ink); }
+  #statsBtn:focus-visible, #shareBtn:focus-visible, #searchBtn:focus-visible, #cmdBtn:focus-visible,
+  #meetingBoardBtn:focus-visible, #settingsBtn:focus-visible{
+        outline:2px solid var(--seal); outline-offset:2px; }
+  /* 统计入口在共用盒模型之上补一条：它多带一个今日条数 */
+  #statsBtn{ gap:4px; font-family:var(--mono); font-size:11px; font-variant-numeric:tabular-nums;
+        line-height:1; }
   /* 语音指令入口：右上角图标。点它打开整页的指令管理（#cmdPage）。
      以前这点开是个只读小面板——想看和想改都得去编辑 commands.json，
      而 open -a 认的是 .app 包名，写「飞书」会报应用不存在，改错了很难自查。 */
@@ -150,13 +155,20 @@
 
   #queryBar{ padding:6px 20px; background:transparent;
              gap:8px; flex-wrap:wrap;
-             align-items:center; position:relative; z-index:2; display:flex; }
+             align-items:center; position:relative; z-index:2; display:none; }
+  /* 搜索是一条按需展开的次级入口：默认不占版面，只在顶栏留一个图标（#searchBtn）。
+     显隐走 body.search-open 这个类、不写内联 display —— 设置页 / 语音指令页「整页打开时
+     把主界面让开」用的是内联 display，收起时把内联值清空，这里自然回落到样式表判断。 */
+  body.search-open #queryBar{ display:flex; }
   #searchInput{ flex:1; min-width:0; padding:9px 14px; border:1px solid var(--rule);
                 border-radius:999px; background:var(--paper); font-size:12px; line-height:1.2;
                 font-family:var(--font); color:var(--ink); outline:none;
                 -webkit-appearance:none; appearance:none; accent-color:var(--seal); }
   #searchInput::placeholder{ color:var(--ink-faint); }
-  #searchInput:focus{ border-color:var(--seal); }
+  /* 聚焦不用印章红：这个框一打开就红一下太吵，红是稀缺色，留给真正稀缺的地方
+     （录音点、悬停提示）。用调色板里已有的偏灰墨色 --ink-faint：比默认边框 --rule
+     明显深，聚焦仍然看得出来，又不喧宾夺主。 */
+  #searchInput:focus{ border-color:var(--ink-faint); }
 
   footer{ background:var(--paper-2); border-top:1px solid var(--rule);
           padding:10px 20px 12px; display:grid; gap:8px;
@@ -736,12 +748,8 @@
   input[type="range"]:focus-visible{ outline:2px solid var(--seal); outline-offset:4px; }
 
 /* ── 推荐 RTC ── */
-#shareBtn{ background:none; border:none; color:var(--ink-soft); padding:4px;
-      border-radius:var(--radius-sm); cursor:pointer; line-height:0;
-      display:inline-flex; align-items:center; justify-content:center; }
-#shareBtn svg{ display:block; }
-#shareBtn:hover{ color:var(--seal); }
-#shareBtn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+/* #shareBtn 的盒模型 / 悬停 / 焦点跟顶栏那一排共用（见文件上方的四段规则），
+   这里只留它自己的状态：面板开着时图标转印章红。 */
 #shareBtn.on{ color:var(--seal); }
 
 /* 推荐 RTC 居中弹窗 */

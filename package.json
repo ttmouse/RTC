@@ -10,6 +10,7 @@
         "dev:web": "node scripts/dev.mjs",
         "test": "node scripts/check-static.mjs && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/main-status.test.mjs && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/model-recovery.test.mjs && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/audio-recovery.test.mjs && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/app-rule-lists.test.mjs && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/vad.test.mjs && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/time-grouping.test.mjs",
         "check:ux": "node scripts/check-ux.mjs",
+        "check:search": "node tests/search-toggle.browser.mjs",
         "check:js": "node scripts/check-undefined.mjs",
         "rtc": "node scripts/rtc.mjs",
         "rtc:transcript": "node scripts/transcript.mjs",
