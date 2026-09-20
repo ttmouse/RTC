@@ -5,7 +5,7 @@
   "id": "E-002",
   "kind": "evidence",
   "status": "active",
-  "summary": "2026-09-20 的未提交工作区通过 npm test；其中按住说话 42/42、菜单栏说话状态 27/27，但未做桌面 App 人工验收",
+  "summary": "2026-09-20 的未提交工作区通过 npm test；其中按住说话 51/51、菜单栏说话状态 27/27，但未做桌面 App 人工验收",
   "scope": [
     "tests/push-to-talk.test.mjs",
     "tests/tray-speaking.test.mjs",
@@ -30,7 +30,7 @@
 
 ## 对应版本
 
-检查时 Git 分支为 `feature/push-to-talk`，HEAD 为 `1a3c0c3` (`chore: checkpoint current project work`)，
+最近一次检查时 Git 分支为 `feature/push-to-talk`，HEAD 为 `d50a99a`，
 按住说话的后续改动仍在**未提交工作区**。所以本证据不是某个可独立检出的 Git commit 的证明；
 在这批改动正式提交后，应重跑并把 commit 写入新证据或补充记录。
 
@@ -44,7 +44,7 @@ npm test
 
 结果：退出码 0。与本次决定直接相关的两组输出为：
 
-- `tests/push-to-talk.test.mjs`：42 passed, 0 failed；
+- `tests/push-to-talk.test.mjs`：51 passed, 0 failed；
 - `tests/tray-speaking.test.mjs`：27 passed, 0 failed。
 
 它们明确覆盖：
@@ -54,6 +54,8 @@ npm test
 - 按下的刷新早于 180ms 计时器，松开的刷新早于识别冲刷；
 - 快捷键句强制粘贴，连续听写仍遵守自动粘贴规则；
 - 连续听写的粘贴成功音仍保留；
+- 主界面不再出现按住说话开关，启用状态与快捷键统一在设置页保存；
+- 录制新快捷键会自动打开启用草稿，但设置保存前不会改变当前生效状态；
 - 组合键取消、本地服务端手动分段、云端 task id 身份保留等保护项仍通过。
 
 `git diff --check` 同时通过。`code-modify-safe` 的 JavaScript 语法与转义检查也通过；

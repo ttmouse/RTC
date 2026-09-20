@@ -55,6 +55,7 @@ E-002 当时的检查只验证「粘贴成功路径仍有 `playPaste` 调用」�
 
 `tests/sfx-sequence.test.mjs` 用最小 WebAudio 桩调用真实 `playStart / playStop / playPaste` 出口。
 修复前稳定失败：预期下一句连续听写播放次数从 2 变 3，实际仍为 2。修复后通过，并另外覆盖手动停录的一次性静音。
+2026-09-20 同一测试又加入 WAV 播放增益检查：每次真正播放的开始音、结束音与粘贴复用音都必须经过 `0.6` 增益节点。
 
 `tests/push-to-talk.test.mjs` 同时检查快捷键结果身份确实从 ASR 接到粘贴通道。
 

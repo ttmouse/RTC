@@ -9,6 +9,9 @@ dist/
 .DS_Store
 __pycache__/
 *.pyc
+# 一次性真机实测脚本与其截图：验完即弃，判定逻辑要沉淀进 tests/ 或 scripts/ 再挂 npm scripts。
+# 留在仓库里会变成没人跑、也没人敢删的僵尸文件（见 docs/product-rules/ux-issue-log.md）。
+tmp-*
 
 # ── 本地模型文件（外置，不入库）─────────────────
 # SenseVoice 模型（~228MB，用户自行下载到 models/ 下）
