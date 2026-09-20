@@ -1,0 +1,31 @@
+# 来源能力问题：S-078
+schema: zkge.claim/v1
+id: CLAIM.REC.005
+business_id: S-078
+business_entry: '设置页清除历史记录之后'
+business_question: '清除之后，别的地方（日志、缓存、备份）还会不会留着副本？'
+statement: '清除历史后，日志 / 缓存 / 备份中不得残留记录副本'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '用户执行清除历史'
+  excluded:
+    - '操作系统层面的时间机器备份（不在应用控制范围，需在界面说明）'
+assumptions:
+  - id: ASSUMPTION.REC.005
+    text: '「清除」的用户预期是内容不可再被应用找回'
+oracle:
+  type: runtime
+  expression: '清除后，数据目录及日志中不存在可还原的转写文本'
+counterexample:
+  expression: '清除后仍可从日志或缓存还原出已删除的转写内容'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

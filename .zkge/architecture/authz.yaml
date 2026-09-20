@@ -1,0 +1,66 @@
+# authz.yaml —— 授权建模（阶段② GE 设计 · 授权图）
+# 模板来源：renheng B2B 订单履约验证项目 docs/01-core-graph.html §1.4 +
+#          CHANGELOG-rebac-cases.html（授权场景 A–H 变更影响矩阵，已实战验证）
+#
+# 为什么 zk-ge 需要授权建模：授权类能力问题（谁能做什么/数据可见范围/字段级投影/
+# 代办时效）无法用「状态机 + 守恒约束」表达 —— 授权是图不是表，需要独立的建模产物。
+# 核心纪律：
+#   1. 授权判定唯一入口（应用代码不做 if-else 硬编码授权）
+#   2. 授权变更即图拓扑变更（新增对象自动可见，无需逐条授权）
+#   3. 字段级投影 = 授权判定结果 + BFF 执行（授权系统不感知字段级，但判定是唯一前置）
+#   4. 撤销即删边，即时生效；时效授权用 caveat（到期即失效）
+
+schema: zkge.authz/v1
+project_id: PROJECT.<ASCII_SLUG>
+
+# ── 三层授权模型（对照填写）─────────────────────────────────────────────────
+# RBAC 模板层：角色模板（role → permission 集合）
+# ReBAC 数据层：对象级关系（谁对哪个具体对象有什么关系），由业务事务 + 投影器维护
+# 判定层：唯一授权判定点（如 SpiceDB / OPA / 自研图授权），应用只消费判定结果
+model:
+  rbac_templates: []      # 例: [sales, supervisor, chairman, ops, accounting, warehouse, admin]
+  rebac_relations: []     # 例: [account_owner, contact, requester, warehouse_operator, uploader]
+  decision_point: ""      # 例: SpiceDB（authzed-go）/ OPA / 自研
+  projection_engine: ""   # 例: Outbox 投影器（业务事务写 outbox → 投影器同步授权关系，幂等重放）
+  caveats: []             # 例: [expiry_ok(expires_at, now), within_void_window(now, created_at)]
+
+# ── 权限矩阵（角色 × 资源 × 动作 全组合）────────────────────────────────────
+# 每个格子填: 允许 / 拒绝 / 条件（caveat）/ 不适用
+# 这张表是 L1 集成测试「权限矩阵用例」的规格来源（对应 score-card.yaml L1 层）。
+permission_matrix:
+  # 角色: 资源: { 动作: 允许/拒绝/条件 }
+  # 示例（B2B 订单履约）：
+  # sales: { order: { view: "owner/delegate", approve: "拒绝" },
+  #          shipment: { request: "允许", confirm: "拒绝" } }
+  # warehouse: { order: { view: "本仓只读，剥离价格字段（字段级投影）", confirm: "拒绝" },
+  #               shipment: { confirm: "允许" } }
+  # finance: { invoice: { issue: "允许" }, shipment: { view: "允许" } }
+  <ROLE>: { <RESOURCE>: { <ACTION>: 允许/拒绝/条件 } }
+
+# ── 授权变更影响矩阵（CHALLENGER 引入新授权场景时填写）──────────────────────
+# 这是 CHANGELOG-rebac-cases.html 的核心价值：新 spec 进来 → 逐场景对照现有授权图
+# → 暴露「本体有实体但授权图没有对应对象级授权」的裂缝 → 决定变更性质。
+# 变更性质: 验证性(已覆盖，需保持) / 新增 / 层级偏移 / 粒度不匹配 / 待决策
+change_impact_matrix:
+  # 场景: { spec_required: <spec 要求的 relation/permission>, current: <现有授权图对应项>,
+  #         gap: <差距>, affects_cq: [<CQ ids>], change_kind: <变更性质> }
+  # 示例（B2B 订单履约）：
+  # A 开备货单: { spec_required: "order#create_prestock via customer->account_owner",
+  #               current: "order 无 create_prestock",
+  #               gap: "缺 account_owner 层级边 + create_prestock 权限",
+  #               affects_cq: [CQ-01], change_kind: 新增 }
+  # B 改额度/多次发货: { spec_required: "prestock#owner → change_quota",
+  #               current: "挂在 order.stock（粗粒度）",
+  #               gap: "prestock 非一等授权对象（层级偏移）",
+  #               affects_cq: [CQ-01, CQ-02], change_kind: 层级偏移 }
+  <SCENARIO>: { spec_required: <...>, current: <...>, gap: <...>, affects_cq: [<...>], change_kind: <新增/层级偏移/粒度不匹配/待决策> }
+
+# ── 授权类能力问题对照（保证授权建模服务 CQ）────────────────────────────────
+# 每个授权类能力问题都要能由授权图回答；答不出 → 图不完整。
+authz_cq_checklist:
+  # - CQ-01: "用户对某对象当前拥有哪些操作权限？"
+  # - CQ-02: "用户的数据可见范围是什么？（按角色/层级/租户）"
+  # - CQ-03: "字段级授权投影是否正确剥离敏感字段？"
+  # - CQ-13: "代办授权在有效期内？到期后即时失效？"
+  # - CQ-15: "凭证上传者权限如何界定？跨租户/越权被拒绝？"
+  - <CQ-XX>: "<授权类能力问题>"

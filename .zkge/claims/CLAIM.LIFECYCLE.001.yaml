@@ -1,0 +1,32 @@
+# 来源能力问题：S-189
+schema: zkge.claim/v1
+id: CLAIM.LIFECYCLE.001
+business_id: S-189
+business_entry: '合盖唤醒后看主界面状态区'
+business_question: '用户合上笔记本盖子，过一会儿打开，界面看起来一切正常吗？还是有明确的异常提示？'
+statement: '系统睡眠唤醒后若音频或识别链路不可用，界面不得显示正常状态'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '合盖睡眠后唤醒'
+  excluded:
+    - '麦克风未被系统回收（此时链路仍可用）'
+assumptions:
+  - id: ASSUMPTION.LIFECYCLE.001
+    text: "WKWebView 的 AudioContext 有 'interrupted' 状态，Chromium 没有——浏览器巡检复现不出"
+oracle:
+  type: runtime
+  expression: "唤醒后 audio_context_state == 'interrupted' 或 audio_flow_stalled 时，ui_status 进入异常态"
+counterexample:
+  expression: '唤醒后链路已失效而界面仍显示「就绪」/「识别中」'
+required_verifiers:
+    - 'audio_recovery_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

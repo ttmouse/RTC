@@ -1,0 +1,326 @@
+# ============================================================
+# 追踪关系：声明 → 实现 → 测试 → 运行
+# 项目：RTC 实时语音转文字
+#
+# 【本文件由两次侦察合并生成，非自由撰写】
+#   来源 A：architecture/score-card.yaml 的 cq_test_mapping（38 条 claim → 用例 id）
+#   来源 B：architecture/verification-plan.yaml 的 plan（38 条 claim → 验证手段，点名了测试文件）
+#   用例 id → 真实测试文件的对应由人手工确认（CASE_TEST 表），逐条核对了文件是否存在。
+#
+# 【生成时发现的两处源数据瑕疵，已如实记在对应条目里】
+#   1. score-card 的 code_loc 字段在不同用例里含义不一致：L0-* 放的是实现文件，
+#      L1-*/L2-* 放的是测试文件。本文件一律改用 component 字段作 implementation_ref。
+#   2. tests/time-grouping.test.mjs、meeting-board/tests/{transcript,preliminary,
+#      preliminary-panel,markdown-block-patch}.test.mjs、scripts/check-ux.mjs
+#      这 6 个检查真实存在且当前全绿，但 score-card 的能力问题映射里从未引用它们
+#      —— 属于「测了但没进能力问题账本」，见文末 orphan_checks。
+#
+# status: traced = 实现与测试两跳都落到了真实存在的文件；gap = 至少一跳缺失。
+# evidence_ref 一律为空：38 条 claim 的 status 全是 NOT_STARTED，还没有任何一次运行产出证据。
+# ============================================================
+schema: zkge.traceability/v1
+project_id: PROJECT.RTC
+edges:
+  - claim_id: CLAIM.ASR.001
+    questions: [C-005, S-042]
+    implementation_ref: "src/js/state.js / asr.js"
+    test_ref: "tests/main-status.test.mjs、tests/model-recovery.test.mjs"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.ASR.002
+    questions: [S-042]
+    implementation_ref: "src/js/asr.js、src/js/storage.js / history.js"
+    test_ref: "tests/model-recovery.test.mjs"
+    runtime_ref: "集成路径实测"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.ASR.003
+    questions: [S-045]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "属性测试"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——依赖未自建的属性测试框架"
+  - claim_id: CLAIM.ASR.004
+    questions: [S-048]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——需先确定「可找回」的产品形态"
+  - claim_id: CLAIM.ASR.005
+    questions: [S-040]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——密钥落盘形态未查证"
+  - claim_id: CLAIM.AUDIO.001
+    questions: [C-001]
+    implementation_ref: "src/js/vad.js、src/js/audio.js startAudioFlowWatch"
+    test_ref: "tests/vad.test.mjs"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.AUDIO.002
+    questions: [C-002, S-021]
+    implementation_ref: "src/js/state.js / asr.js"
+    test_ref: "tests/main-status.test.mjs"
+    runtime_ref: "集成路径实测"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.AUDIO.003
+    questions: [S-009]
+    implementation_ref: "src/js/vad.js"
+    test_ref: "tests/vad.test.mjs"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.AUDIO.004
+    questions: [S-024, S-068]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——边录边清除的时序需 L3"
+  - claim_id: CLAIM.BOARD.001
+    questions: [S-209, C-020]
+    implementation_ref: "src/lib/*（write-document 通道）"
+    test_ref: "meeting-board/tests/ai-content-write.test.mjs"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.BOARD.002
+    questions: [S-166, S-215, C-019]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "集成路径实测"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——冲突提示当前无实现"
+  - claim_id: CLAIM.BOARD.003
+    questions: [S-162]
+    implementation_ref: "externalRefresh"
+    test_ref: "meeting-board/tests/external-refresh.test.mjs"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.BOARD.004
+    questions: [S-170]
+    implementation_ref: "src/lib/sessionSearch.js / transcript"
+    test_ref: "meeting-board/tests/session-search.test.mjs"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.BOARD.005
+    questions: [S-214]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——连续两次外部写入未覆盖"
+  - claim_id: CLAIM.BOARD.006
+    questions: [C-024]
+    implementation_ref: "externalRefresh"
+    test_ref: "meeting-board/tests/external-refresh.test.mjs"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.CMD.001
+    questions: [S-096, S-098]
+    implementation_ref: "src/js/pastebadge.js / clipboard.js"
+    test_ref: "tests/app-rule-lists.test.mjs"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.CMD.002
+    questions: [C-017]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——陈旧快照复活条目需专项用例"
+  - claim_id: CLAIM.CMD.003
+    questions: [S-095]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——恢复默认的确认与写盘时序"
+  - claim_id: CLAIM.CMD.004
+    questions: [C-036, S-127]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——取消不写入需专项用例"
+  - claim_id: CLAIM.CONFIG.001
+    questions: [S-140, C-014, C-015]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——并发写配置需 L3"
+  - claim_id: CLAIM.CONFIG.002
+    questions: [S-143]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——配置损坏的启动路径"
+  - claim_id: CLAIM.CONFIG.003
+    questions: [S-128, S-145]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——恢复默认的留底"
+  - claim_id: CLAIM.CONFIG.004
+    questions: [S-147]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——未知键透传"
+  - claim_id: CLAIM.CONFIG.005
+    questions: [C-037]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——需 L3-04 多实例并发"
+  - claim_id: CLAIM.EXT.001
+    questions: [S-210, S-211]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——跨源读取需真实浏览器 + 本机服务"
+  - claim_id: CLAIM.EXT.002
+    questions: [S-218]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——同机其它程序读取面未查证"
+  - claim_id: CLAIM.LIFECYCLE.001
+    questions: [S-189]
+    implementation_ref: "src/js/audio.js / lifecycle.js"
+    test_ref: "tests/audio-recovery.test.mjs"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.LIFECYCLE.002
+    questions: [S-190]
+    implementation_ref: "src/js/audio.js / lifecycle.js"
+    test_ref: "tests/audio-recovery.test.mjs"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.PASTE.001
+    questions: [S-105, S-125]
+    implementation_ref: "src/js/pastebadge.js / clipboard.js"
+    test_ref: "tests/app-rule-lists.test.mjs"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.PKG.001
+    questions: [S-230, S-245, C-040]
+    implementation_ref: "scripts/check-static.mjs"
+    test_ref: "scripts/check-static.mjs"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.REC.001
+    questions: [C-003]
+    implementation_ref: "src/js/storage.js / history.js"
+    test_ref: "（无落点）"
+    runtime_ref: "集成路径实测"
+    evidence_ref: ""
+    status: gap
+  - claim_id: CLAIM.REC.002
+    questions: [S-064]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "不变量/属性检查"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——半截行需故障注入"
+  - claim_id: CLAIM.REC.003
+    questions: [S-072, S-184, C-025]
+    implementation_ref: "src/js/history.js / state.js"
+    test_ref: "（无落点）"
+    runtime_ref: "集成路径实测"
+    evidence_ref: ""
+    status: gap
+  - claim_id: CLAIM.REC.004
+    questions: [C-034]
+    implementation_ref: "src/lib/sessionSearch.js / transcript、src/js/history.js / state.js"
+    test_ref: "meeting-board/tests/session-search.test.mjs"
+    runtime_ref: "集成路径实测"
+    evidence_ref: ""
+    status: traced
+  - claim_id: CLAIM.REC.005
+    questions: [S-078]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——残留副本需逐个载体排查"
+  - claim_id: CLAIM.UPDATE.001
+    questions: [S-225, C-033]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——更新中断录音需真实更新包"
+  - claim_id: CLAIM.UPDATE.002
+    questions: [S-228]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——更新不动用户数据需真实更新包"
+  - claim_id: CLAIM.UPDATE.003
+    questions: [C-043]
+    implementation_ref: "（未定位到实现）"
+    test_ref: "（无落点）"
+    runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
+    evidence_ref: ""
+    status: gap
+    gap_reason: "无测试——更新后授权失效需真实系统授权变更"
+
+# ── 真实存在、当前全绿、但尚未挂进任何能力问题的检查 ──────────────────────
+# 这些不是「没测」，是「测了但账本上没记」——补挂即可，不需要新写代码。
+orphan_checks:
+  - file: tests/time-grouping.test.mjs
+    covers: "聊天记录的时间分组规则（微信式居中时间条）"
+  - file: meeting-board/tests/transcript.test.mjs
+    covers: "白板逐字稿原文：AI 之前可读、随转写更新、不影响 AI 链路与用户正文"
+  - file: meeting-board/tests/preliminary.test.mjs
+    covers: "白板初步整理：旁路保存、并发去重、增量触发、失败回退与用户正文保护"
+  - file: meeting-board/tests/preliminary-panel.test.mjs
+    covers: "初步整理面板的模板与状态回写"
+  - file: meeting-board/tests/markdown-block-patch.test.mjs
+    covers: "编辑器块级补丁（上游 Milkdown 补丁）"
+  - file: scripts/check-ux.mjs
+    covers: "无头界面检查（需先 vite build，否则验的是旧构建）"

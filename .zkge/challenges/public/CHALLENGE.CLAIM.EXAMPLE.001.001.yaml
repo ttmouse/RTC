@@ -1,0 +1,18 @@
+# ============================================================
+# zk-ge-verification 技能模板：challenge.yaml
+# 对应 A4 文件布局中 .zkge/challenges/public/<challenge_id>.yaml
+# 与隐藏挑战（hidden.digest.json 仅存摘要，BUILDER 不可读）
+# 每个挑战 = 对某个 claim 的进攻：正常路径（公开）+ 反例/边界/组合/故障（隐藏）
+# ============================================================
+schema: zkge.challenge/v1
+challenge_id: CHALLENGE.<CLAIM_ID>.<NNN>
+claim_id: CLAIM.<DOMAIN>.<NNN>      # 挑战哪个 claim
+visibility: public | hidden          # 公开（BUILDER 可见）/ 隐藏（仅存 digest）
+author: ""                          # CHALLENGER 角色（与 BUILDER 隔离）
+type: happy_path | counterexample | boundary | combination | fault | property
+description: ""                     # 挑战要进攻什么（可证伪的进攻点）
+input:
+  sample_space: ""                  # 采样空间（组合测试时）
+  seed: ""                          # 随机种子（可复现）
+expected_oracle: ""                 # 期望的 oracle 断言（与 claim.oracle 对齐）
+# 隐藏挑战不写具体 input 细节（只存 digest），这里仅留设计意图

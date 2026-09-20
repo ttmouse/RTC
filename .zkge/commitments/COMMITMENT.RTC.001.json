@@ -1,0 +1,36 @@
+{
+  "schema": "zkge.commitment/v1",
+  "commitment_id": "COMMITMENT.RTC.001",
+  "project_id": "PROJECT.RTC",
+  "state": "S2_COMMITTED",
+  "committed_at": "2026-09-19T06:19:04Z",
+  "frozen_scope": {
+    "description": "全项目初始化承诺冻结：能力问题清单 + 38 条 R3 claims + 双知识图谱 + 验证计划",
+    "risk_policy": "按风险分层：仅 R3 冻结为 claim；R2/R1/R0 留在清单，按迭代再冻结",
+    "counts": {
+      "claims_total": 38,
+      "R3_frozen": 38,
+      "questions_total": 289
+    }
+  },
+  "digests": {
+    "specification_digest": "sha256:f25a20978a1703b28de880623490debc69704b7d161d89c7e1423c956e22a94a",
+    "claims_digest": "sha256:b9222cb2d7d155ae2df8dc5474ccc1dd421540a9df37fb7561cf8fd0aa0cf1bb",
+    "architecture_digest": "sha256:430c98b49722f02645294ef0087b120e957c0d13a23dc9935408099a511899f9",
+    "capability_questions_digest": "sha256:eff66bb4cece3b7602b5889adddaffed8fda3f4f895f8497b6004f7bbf95e860",
+    "source_digest": "git-tree:d247d8ffb7078fc76b0f989f4f971bd8a9bc116d",
+    "source_commit": "385d397b65d183c120bb4c1d570205d30850ad1d",
+    "verifier_digest": "sha256:9196a98e12aa17430bebe863c16c8dd8674d5e7635ac7e0e116ffe098fc071a6",
+    "challenge_digest": null,
+    "artifact_digest": null,
+    "policy_digest": "sha256:fee98affbfb3b08823f35e273b1de44bb86fc188618711880e216f4905df4fd1"
+  },
+  "not_yet_bound": {
+    "artifact_digest": "尚无制品——阶段③/④ 未开始，本承诺在制品建成后必须重算",
+    "challenge_digest": "尚无挑战——CHALLENGER 尚未对冻结 claim 产出挑战",
+    "sbom_digest": "未生成",
+    "environment_digest": "未记录"
+  },
+  "invalidation_rule": "上述任一 digest 变化 → 本承诺失效，从最早变化点重跑",
+  "worktree_state_note": "冻结时仓库工作区有未提交改动（见 git status），source_digest 绑定的是 HEAD tree 而非工作区"
+}

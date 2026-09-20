@@ -1,0 +1,32 @@
+# 来源能力问题：S-040
+schema: zkge.claim/v1
+id: CLAIM.ASR.005
+business_id: S-040
+business_entry: '设置页密钥输入框'
+business_question: '密钥存在这台电脑的什么地方？别人拿到这台电脑能不能直接看到？'
+statement: '云端识别的密钥在磁盘上不得以同机其它程序可直接读取的明文形式暴露'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '用户配置了云端识别引擎'
+  excluded:
+    - '用户自己在界面上查看密钥（需显式点击）'
+assumptions:
+  - id: ASSUMPTION.ASR.005
+    text: '密钥是用户自付成本的凭据，泄露即实际损失'
+oracle:
+  type: runtime
+  expression: 'config.json 中不存在可直接使用的明文云端密钥'
+counterexample:
+  expression: '密钥以明文落在配置文件或日志中，同机任意进程可读'
+required_verifiers:
+    - 'runtime_manual'
+    - 'static_check'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

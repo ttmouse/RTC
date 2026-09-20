@@ -1,0 +1,31 @@
+# 来源能力问题：S-162
+schema: zkge.claim/v1
+id: CLAIM.BOARD.003
+business_id: S-162
+business_entry: '白板只读模式'
+business_question: '白板处于只读模式时用户改不了，但外部 AI 助手还在写，用户会不会莫名其妙看着内容变掉？'
+statement: '只读模式下外部写入导致内容变化时用户必须知情'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '白板只读模式（默认）'
+  excluded:
+    - '用户刚主动触发的刷新'
+assumptions:
+  - id: ASSUMPTION.BOARD.003
+    text: '只读不意味着可以静默变化'
+oracle:
+  type: runtime
+  expression: '只读模式下检测到外部变更时，界面存在可见的变化提示'
+counterexample:
+  expression: '内容在用户眼前变化而界面不说明来源'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

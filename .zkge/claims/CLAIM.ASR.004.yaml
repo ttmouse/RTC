@@ -1,0 +1,31 @@
+# 来源能力问题：S-048
+schema: zkge.claim/v1
+id: CLAIM.ASR.004
+business_id: S-048
+business_entry: '主界面录音后看记录列表'
+business_question: '被应用判定成噪声而丢掉的那些话，用户有没有任何办法找回来？'
+statement: '被判定为噪声而丢弃的内容必须可被用户找回，或至少可见'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '录音过程存在噪声判定'
+  excluded:
+    - '用户主动开启的严格静音模式（如存在）'
+assumptions:
+  - id: ASSUMPTION.ASR.004
+    text: '静音超时/噪声丢弃是产品行为，但丢弃必须是可审计的'
+oracle:
+  type: runtime
+  expression: 'discarded_count > 0 时存在用户可达的查看入口'
+counterexample:
+  expression: '内容被丢弃且用户无法查看、无法找回'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

@@ -1,0 +1,33 @@
+# 来源能力问题：S-210, S-211
+schema: zkge.claim/v1
+id: CLAIM.EXT.001
+business_id: S-210
+business_entry: '外部 AI 助手接入 / 浏览器打开的网页'
+business_question: '是不是这台电脑上任何程序都能读写这些东西？别的设备或者一个网页能不能？'
+statement: '本机 API 不得允许浏览器页面读取用户记录或密钥'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '应用运行中'
+    - '用户浏览器打开任意网页'
+  excluded:
+    - '用户显式授权的本地工具调用'
+assumptions:
+  - id: ASSUMPTION.EXT.001
+    text: '本机端口不是隐私边界，任何网页都能访问 localhost'
+oracle:
+  type: runtime
+  expression: '来自浏览器上下文的跨源请求无法读取记录与配置内容'
+counterexample:
+  expression: '任意网页可通过本机端口读取用户的转写记录或密钥'
+required_verifiers:
+    - 'runtime_manual'
+    - 'static_check'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

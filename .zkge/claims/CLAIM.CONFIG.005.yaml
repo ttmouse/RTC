@@ -1,0 +1,32 @@
+# 来源能力问题：C-037
+schema: zkge.claim/v1
+id: CLAIM.CONFIG.005
+business_id: C-037
+business_entry: '任何界面（双开时）'
+business_question: '同一份用户数据被两个应用实例同时使用（开发模式跑着一个、装好的应用也开着）。两边录音都往同一份记录里写、设置互相覆盖，记录混在一起。'
+statement: '同机多个应用实例不得并发写同一份用户数据'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '开发模式实例与已安装应用同时运行 / 桌面版与网页版同时运行'
+  excluded:
+    - '不同用户账号（本项目无多用户概念）'
+assumptions:
+  - id: ASSUMPTION.CONFIG.005
+    text: 'README 的「开发前请退出已安装的 APP」是写给开发者的，不是给用户的交代'
+oracle:
+  type: runtime
+  expression: '同机存在多个实例时，记录与配置的写入被串行化，或第二个实例被阻止/降级为只读'
+counterexample:
+  expression: '双开时两边的录音写入同一份记录产生混串，或设置互相覆盖'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

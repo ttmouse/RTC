@@ -1,0 +1,31 @@
+# 来源能力问题：C-043
+schema: zkge.claim/v1
+id: CLAIM.UPDATE.003
+business_id: C-043
+business_entry: '底栏自动粘贴开关 / 更新后'
+business_question: '系统对辅助功能的授权是跟着应用身份走的：应用更新之后这项授权可能失效，用户开着自动粘贴却不出字，而且不会收到任何新提示。'
+statement: '应用更新后系统授权（辅助功能 / 麦克风）失效时，不得表现为开关开着但功能静默失效'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '应用更新后'
+  excluded:
+    - '用户重新授权后（应恢复正常）'
+assumptions:
+  - id: ASSUMPTION.UPDATE.003
+    text: 'macOS 授权跟随应用身份，更新后失效是系统行为，但沉默不是'
+oracle:
+  type: runtime
+  expression: '授权失效时，界面须显式报出并给出通往系统设置的指引'
+counterexample:
+  expression: '更新后自动粘贴开关显示「开」但字出不去，且无任何提示'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

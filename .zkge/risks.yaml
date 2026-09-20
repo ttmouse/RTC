@@ -1,0 +1,163 @@
+# ============================================================
+# zk-ge-verification 产物：risks.yaml（RTC 实例 / A2 枚举）
+# 风险项来自 docs/product-rules/ 的「破坏了用户会看到什么」＋ ux-issue-log 的真实事故
+# ============================================================
+schema: zkge.risks/v1
+project_id: PROJECT.RTC
+
+# R0-R3 分级参考（RTC 语境）：
+#   R0 = 纯外观/文案/排版，坏了不影响功能
+#   R1 = 局部界面逻辑，坏了用户能自己绕过去
+#   R2 = 数据持久化/配置写入/并发/外部集成，坏了会静默出错
+#   R3 = 不可逆损失：转写记录丢失、用户已有配置被覆盖、损坏后无法恢复
+
+risks:
+  - id: RISK.AUDIO.001
+    description: "笔记本合盖再打开后，录音链路静默失效——界面一切正常，一个字都没存下来"
+    category: data_loss
+    risk_level: R3
+    trigger: "系统睡眠打断音频会话/麦克风句柄/识别连接，而它们都不报错（看起来还开着）"
+    impact: "用户录一整场，事后发现什么都没存；且长得跟好用的时候一模一样，用户没有理由怀疑"
+    mitigation: "CLAIM.AUDIO.* + tests/audio-recovery.test.mjs + npm run check:audio；真机合盖复验仍待做"
+    status: open
+
+  - id: RISK.STATE.001
+    description: "界面显示「就绪」，实际录不进去（服务不可达却报正常）"
+    category: correctness
+    risk_level: R3
+    trigger: "本机模型服务（8933）没起来，但代理服务（8931）在跑；旧版状态机只看后者"
+    impact: "用户看到「就绪」放心开录，开完发现一个字都没有——违反产品原则第 3 条"
+    mitigation: "CLAIM.STATE.* + tests/main-status.test.mjs；UX-11 已修"
+    status: mitigated
+
+  - id: RISK.DATA.001
+    description: "转写记录写入失败或被覆盖，用户的历史无声消失"
+    category: data_loss
+    risk_level: R3
+    trigger: "磁盘满/权限变化/当天文件被并发写/进程被杀在写入中途"
+    impact: "不可恢复的记录丢失"
+    mitigation: "待补 claim（本次清单应覆盖）"
+    status: open
+
+  - id: RISK.CONFIG.002
+    description: "「清除历史」「清除所有数据」误触，不可恢复"
+    category: data_loss
+    risk_level: R3
+    trigger: "用户误点，或二次确认形同虚设"
+    impact: "全部转写记录与配置永久丢失"
+    mitigation: "界面已要求二次确认并写明「不可恢复」（规范第 7 节）；待补 claim 验证确认真的拦得住"
+    status: open
+
+  - id: RISK.CONFIG.001
+    description: "多来源同时写同一份配置，用户的改动被悄悄覆盖"
+    category: correctness
+    risk_level: R2
+    trigger: "录音计时、设置页、语音指令页、外部 CLI、外部 AI Agent 同时改配置"
+    impact: "「我明明加过这个词，怎么没了」——违反产品原则第 6 条"
+    mitigation: "server.js 的配置合并（记录过被否决的「读全量→改→写全量」写法）；待补 claim"
+    status: open
+
+  - id: RISK.CMD.001
+    description: "语音指令表被整表覆盖，外部改动或界面改动其中一方消失"
+    category: correctness
+    risk_level: R2
+    trigger: "界面开着时用户或外部工具改了 commands.json；整表保存会抹掉对方"
+    impact: "用户的指令配置丢失；或界面上的改动被回滚"
+    mitigation: "保存只提交 diff（不整表覆盖）；删除必须显式列出——待补 claim 验证 diff 语义真的成立"
+    status: open
+
+  - id: RISK.PASTE.001
+    description: "应用名单匹配失败——用户「明明加了微信」，却什么也没发生"
+    category: correctness
+    risk_level: R2
+    trigger: "用中文显示名（微信）而非稳定身份（WeChat）做匹配；前台查询返回的是本地化显示名"
+    impact: "自动粘贴/发送不生效，且名单外不提示——用户只能猜"
+    mitigation: "appInList 按 .app 包名判定（真实事故已修）；待补 claim"
+    status: mitigated
+
+  - id: RISK.PASTE.002
+    description: "自动粘贴/自动回车把文字送错了地方"
+    category: correctness
+    risk_level: R2
+    trigger: "前台应用识别错误；或名单配置与用户预期不符"
+    impact: "文字被发到不该发的窗口（如把私密内容粘到聊天框并回车发出）"
+    mitigation: "两份名单（粘贴/发送分开）＋ 每行标出去向；待补 claim"
+    status: open
+
+  - id: RISK.ASR.001
+    description: "本地模型服务不可用，且界面不给原因也不给出路"
+    category: availability
+    risk_level: R2
+    trigger: "缺 Python 依赖 / 端口被占用 / 服务崩了；或开发模式复用了终端里的服务"
+    impact: "用户被丢在死路上，唯一能做的是重开应用（而重开多少次都一样）"
+    mitigation: "UX-12 已修：状态 + 原因（日志译人话）+「重启模型服务」按钮；待补 claim"
+    status: mitigated
+
+  - id: RISK.BOARD.001
+    description: "白板正文被外部写入覆盖，或用户正在编辑的内容被冲掉"
+    category: data_loss
+    risk_level: R2
+    trigger: "外部 AI 执行 write-document（整篇替换）；或白板窗口 2 秒自动重读与用户编辑撞上"
+    impact: "用户正在写的内容消失"
+    mitigation: "有未保存改动时不覆盖；write-document 需 --append 才保留原文——待补 claim"
+    status: open
+
+  - id: RISK.PKG.001
+    description: "打包进 App 的后端是旧版本"
+    category: correctness
+    risk_level: R2
+    trigger: "改了 server.js 或 asr_local/server.py 后没重新跑 build:sidecar"
+    impact: "仓库里已经修好的接口在 App 里返回 404；「新字段没生效」且看不出原因"
+    mitigation: "README 已写明必须重新打包；待补 claim"
+    status: open
+
+  - id: RISK.EXT.002
+    description: "配置里的 API Key 外泄"
+    category: security
+    risk_level: R2
+    trigger: "用户把 config.json 发出去；或日志/错误信息里带出 Key"
+    impact: "用户自付的 API 额度被盗用"
+    mitigation: "界面在数据目录处提示「配置文件里有 API Key 勿外发」；待补 claim 验证日志确实不带 Key"
+    status: open
+
+  - id: RISK.UI.001
+    description: "HTML 注释未闭合，整段元素从页面消失，而页面不报错、测试全绿"
+    category: correctness
+    risk_level: R1
+    trigger: "在 src/index.html 里把注释写成 CSS 的 */ 而不是 -->"
+    impact: "解析器一路吞到下一个 -->，中间元素 DOM 里直接不存在（真实事故：电平条/刻度/峰值线一起消失）"
+    mitigation: "npm test 已加 HTML 注释闭合检查；见 ux-issue-log 附录"
+    status: mitigated
+
+  - id: RISK.UI.002
+    description: "CSS 游离声明块吞掉紧随其后的整条规则"
+    category: correctness
+    risk_level: R1
+    trigger: "style.css 里留下没有选择器的声明块"
+    impact: "下一条规则被浏览器静默丢弃（真实事故：录制按钮退化成系统默认灰方块）"
+    mitigation: "待补 claim（当前无守门检查）"
+    status: open
+
+  - id: RISK.UI.003
+    description: "提示自己静默失败——「没有提示」和「提示写错」长得一模一样"
+    category: correctness
+    risk_level: R1
+    trigger: "渲染提示的代码抛错（如 insertBefore 参照节点不是直接子节点）"
+    impact: "用户该看到的原因和出路都没有，且看不出坏了（UX-13 真实事故）"
+    mitigation: "npm run check:ux 能机械抓到一部分；语义类仍靠人工记账"
+    status: open
+
+  - id: RISK.EXT.001
+    description: "外部 CLI / API 改了配置或指令后，正在运行的 App 仍在用启动时的内存快照"
+    category: correctness
+    risk_level: R1
+    trigger: "外部写入文件后未重启 App、未重开对应面板"
+    impact: "用户以为改了，实际没生效——「改了没用」"
+    mitigation: "文档已写明需重开面板或重启；待补 claim"
+    status: open
+
+summary:
+  r0: 0
+  r1: 4
+  r2: 8
+  r3: 4

@@ -1,0 +1,33 @@
+# 来源能力问题：S-166, S-215, C-019
+schema: zkge.claim/v1
+id: CLAIM.BOARD.002
+business_id: S-166
+business_entry: '白板编辑模式 + 外部写入'
+business_question: '外部 AI 助手正在写文档的时候用户也在编辑，会不会互相盖掉？'
+statement: '用户编辑与外部写入冲突时，用户被覆盖前必须知情'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '白板编辑模式开启'
+    - '外部在两次自动保存之间写入'
+  excluded:
+    - '用户主动放弃改动'
+assumptions:
+  - id: ASSUMPTION.BOARD.002
+    text: '冲突提示只出现在白板窗口是不够的——用户可能正在别处操作'
+oracle:
+  type: integration
+  expression: '检测到磁盘内容与用户基线不一致时，不静默覆盖，且提示在用户可见处'
+counterexample:
+  expression: '用户的下一次自动保存整篇盖掉外部刚写的内容，用户与外部方均不知情'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

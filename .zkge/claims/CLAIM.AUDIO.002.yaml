@@ -1,0 +1,32 @@
+# 来源能力问题：C-002, S-021
+schema: zkge.claim/v1
+id: CLAIM.AUDIO.002
+business_id: C-002
+business_entry: '录音中途识别服务掉线：界面继续写「录音中」，此后每一句都在悄悄丢'
+business_question: 'S-021'
+statement: '录音过程中识别链路中断时，界面必须停止显示正常的录音状态并报出「正在丢话」，不得静默丢弃后续内容'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '录音进行中'
+  excluded:
+    - '应用启动阶段链路尚未建立'
+assumptions:
+  - id: ASSUMPTION.AUDIO.002
+    text: '已有自愈（迟到消息）不等于中断期间不丢内容'
+oracle:
+  type: integration
+  expression: 'recognition_link_down 时，ui_status 必须进入异常态且提示包含原因与出路'
+counterexample:
+  expression: '链路中断超过提示窗口后，界面仍处于正常录音态且无任何丢失提示'
+required_verifiers:
+    - 'main_status_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

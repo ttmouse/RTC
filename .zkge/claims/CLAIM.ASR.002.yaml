@@ -1,0 +1,33 @@
+# 来源能力问题：S-042
+schema: zkge.claim/v1
+id: CLAIM.ASR.002
+business_id: S-042
+business_entry: '主界面录音中本机识别服务退出'
+business_question: '本机识别中途崩了，用户正在说的那几句是丢了还是保住了？'
+statement: '识别服务在录音中途退出时，已说出的内容不得丢失，且用户必须被告知发生了什么'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '录音进行中'
+    - '本机识别方式'
+  excluded:
+    - '服务在录音开始前就未运行'
+assumptions:
+  - id: ASSUMPTION.ASR.002
+    text: '已接收并显示的内容已经属于用户，不得因服务退出而回滚'
+oracle:
+  type: integration
+  expression: 'service_exit 时，已确认的识别结果数量不减少，且 ui_status 进入异常态并给出可执行动作'
+counterexample:
+  expression: '服务退出后已显示的内容消失，或界面无任何提示'
+required_verifiers:
+    - 'model_recovery_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

@@ -1,0 +1,31 @@
+# 来源能力问题：S-228
+schema: zkge.claim/v1
+id: CLAIM.UPDATE.002
+business_id: S-228
+business_entry: '更新后打开应用各页面'
+business_question: '更新会不会动到用户的记录、设置、指令表或者白板内容？'
+statement: '更新不得改动用户的记录、设置、指令与白板内容'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '应用版本更新'
+  excluded:
+    - '用户显式清除数据'
+assumptions:
+  - id: ASSUMPTION.UPDATE.002
+    text: '用户数据与程序版本必须解耦'
+oracle:
+  type: runtime
+  expression: '更新前后，数据目录中的记录 / 配置 / 指令 / 白板文件内容一致'
+counterexample:
+  expression: '更新后用户数据被重置、迁移错误或丢失'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

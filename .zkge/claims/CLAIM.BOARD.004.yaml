@@ -1,0 +1,32 @@
+# 来源能力问题：S-170
+schema: zkge.claim/v1
+id: CLAIM.BOARD.004
+business_id: S-170
+business_entry: '白板会议列表'
+business_question: '用户怎么删掉一场会？删了之后这场会的说话记录会不会一起没了？'
+statement: '删除会议不得级联删除或留下悬空的说话记录'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '白板会议列表中删除某场'
+  excluded:
+    - '清除全部历史（由 CLAIM.REC.003/004 覆盖）'
+assumptions:
+  - id: ASSUMPTION.BOARD.004
+    text: '删除的级联范围必须在界面上讲清楚，不能靠用户推断'
+oracle:
+  type: invariant
+  expression: '删除会议后，不存在指向已删除场次的悬空引用，且逐字稿的去留与界面说明一致'
+counterexample:
+  expression: '删除一场会后，其逐字稿被静默删除，或留下无法访问的孤立数据'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

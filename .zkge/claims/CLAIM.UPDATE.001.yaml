@@ -1,0 +1,32 @@
+# 来源能力问题：S-225, C-033
+schema: zkge.claim/v1
+id: CLAIM.UPDATE.001
+business_id: S-225
+business_entry: '录音中 + 更新提示出现并安装'
+business_question: '用户正在录音时弹出更新提示，如果这时装了，正在录的内容会不会丢？'
+statement: '录音过程中安装更新不得导致正在录的内容丢失'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '录音进行中'
+    - '用户点击更新横幅'
+  excluded:
+    - '更新在空闲状态触发'
+assumptions:
+  - id: ASSUMPTION.UPDATE.001
+    text: '「更新提示不能弹窗打断录音」与「安装本身会重启」是两件事'
+oracle:
+  type: runtime
+  expression: '录音中触发安装时，要么阻止安装，要么先落盘并明确告知中断'
+counterexample:
+  expression: '安装导致自动重启，正在录的会议内容丢失且事先无人告知'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

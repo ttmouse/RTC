@@ -1,0 +1,43 @@
+{
+  "schema": "zkge.handoff/v1",
+  "project_id": "PROJECT.RTC",
+  "state": "S2_COMMITTED",
+  "decision": "NOT_APPLICABLE",
+  "decision_note": "本文件是初始化（S2_COMMITTED）时的占位快照，不是交付判定。项目尚未进入 S3_BUILT——没有制品、没有挑战、没有证据，因此不得出现 PASS/CONDITIONAL/FAIL 判定。",
+  "subject": {
+    "source_digest": "git-tree:d247d8ffb7078fc76b0f989f4f971bd8a9bc116d",
+    "source_commit": "385d397b65d183c120bb4c1d570205d30850ad1d",
+    "artifact_digest": null,
+    "sbom_digest": null
+  },
+  "commitment_digest_ref": ".zkge/commitments/COMMITMENT.RTC.001.json",
+  "required_claims": {
+    "count": 38,
+    "pass": 0,
+    "excepted": 0,
+    "unknown": 38,
+    "fail": 0,
+    "invalid": 0
+  },
+  "evidence_index_digest": null,
+  "open_counterexamples": [],
+  "residual_risks": [
+    "38 条 R3 claim 全部 UNKNOWN——尚无任何验证证据",
+    "24 条 R3 claim 连可映射的测试都没有（见 architecture/score-card.yaml 的 cq_coverage_gap_summary）",
+    "属性测试框架未自建",
+    "RTC 尚未建代码图（code-review-graph 未跑）"
+  ],
+  "exceptions": [],
+  "runtime_limitations": [
+    "浏览器侧检查（check:audio / check:ux）无法复现 WKWebView 的 AudioContext 'interrupted'",
+    "check:ux 验的是 dist 构建产物，必须先 vite build"
+  ],
+  "rollback_evidence_id": null,
+  "replay": {
+    "command": "当前不可重放：尚无 zkge-replay 目标",
+    "environment_digest": null,
+    "expected_result_digest": null
+  },
+  "approved_by": [],
+  "generated_at": "2026-09-19T06:20:03Z"
+}

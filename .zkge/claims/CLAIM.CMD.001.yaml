@@ -1,0 +1,33 @@
+# 来源能力问题：S-096, S-098
+schema: zkge.claim/v1
+id: CLAIM.CMD.001
+business_id: S-096
+business_entry: '指令管理页保存 + 外部改文件'
+business_question: '用户一边在管理页改，外部 AI 助手一边在文件里改，会不会有一方的改动被整个抹掉？'
+statement: '指令页保存不得抹掉外部对同一文件的并发改动'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '指令管理页打开中'
+    - '外部并发修改同一文件'
+  excluded:
+    - '外部改动发生在用户点击保存之后'
+assumptions:
+  - id: ASSUMPTION.CMD.001
+    text: '「保存只提交 diff」这条约束必须真的成立，而不只是写在文档里'
+oracle:
+  type: invariant
+  expression: '保存完成后，文件内容 == 磁盘既有内容 ∪ 本次 diff（不含删除则无消失）'
+counterexample:
+  expression: '保存后外部新增或修改的条目消失'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

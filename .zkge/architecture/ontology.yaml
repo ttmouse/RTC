@@ -1,0 +1,119 @@
+# ontology.yaml —— 项目本体（阶段② GE 设计 · 世界知识图谱）
+# 项目：RTC 实时语音转文字 ｜ 人工重写，非生成器初稿
+#
+# ── 方法论纪律（填写时逐条对照）─────────────────────────────────────────────
+#   1. 先写能力问题，再设计 schema —— 每个实体/关系/事件必须至少服务一个能力问题，
+#      否则删除。（本文件的每条都标注了它服务哪些 claim / 能力问题。）
+#   2. 事件是头等节点：绝不把事件压平成成对边（审计/回放/幂等都依赖事件链）。
+#   3. events 必须 append-only。
+#   4. 事实单一来源：同一结论只存在于一个字段，其余全部派生。
+#   5. 授权是图不是表：权限判定只走系统权限，应用代码不做硬编码授权。
+#   6. 每个 state 迁移必须与事件链同事务。
+
+schema: zkge.ontology/v1
+project_id: PROJECT.RTC
+
+# ── entities（实体）─────────────────────────────────────────────────────────
+entities:
+  User:             { desc: 使用 RTC 的人（单人产品，无账号体系；同机可能有多个系统账号）, ex: [douba] }
+  AudioDevice:      { desc: 系统当前音频输入设备（可被系统静音/切换/拔插，应用观察不到设备层的静音）, ex: [builtin-mic, airpods] }
+  AudioStream:      { desc: 麦克风到识别服务的音频流（应用只能观察到声道是否有有效信号）, ex: [stream-001] }
+  RecognitionEngine: { desc: 识别引擎（本机 SenseVoice / 云端百炼；两者可用性判据不同）, ex: [local, bailian] }
+  ModelFile:        { desc: 本机识别所需的模型文件（缺失时服务仍在跑）, ex: [sensevoice-onnx] }
+  ServiceEndpoint:  { desc: 本机服务端口（8931 代理 / 8932 识别 WS / 8933 模型管理 HTTP）, ex: [svc-8931, svc-8932, svc-8933] }
+  TranscriptSegment: { desc: 一条转写记录（说话→识别→落盘的最小单位，全部下游能力的事实来源）, ex: [seg-0001] }
+  DayFile:          { desc: 按本机日期分文件的记录载体, ex: ["2026-09-19.jsonl"] }
+  CommandEntry:     { desc: 一条语音指令（aliases 打开应用 / actions 按键 / snippets 固定文本）, ex: [cmd-open-wechat] }
+  AppTarget:        { desc: 目标应用（稳定身份 = .app 包名，不是中文显示名）, ex: [WeChat, Lark] }
+  PasteList:        { desc: 自动粘贴的目标应用名单（空名单 = 全局老行为）, ex: [paste-list] }
+  SendList:         { desc: 自动发送的目标应用名单（与粘贴名单分开）, ex: [send-list] }
+  MeetingSession:   { desc: 白板中的「一场会」（由记录文件存在与间隔反推，不是独立保存的数据）, ex: [session-2026-09-19-1] }
+  MeetingDefinition: { desc: 会前填写的会议背景/期望产出/角色/边界, ex: [def-0001] }
+  BoardDocument:    { desc: 白板正文（用户与外部 AI 都写；存在整篇替换与编辑保存两种写入方式）, ex: [doc-0001] }
+  BoardAnalysis:    { desc: 白板的分析结果（与正文分开存放，只写分析时界面不显示变化）, ex: [ana-0001] }
+  Config:           { desc: 用户配置（界面、CLI、外部 AI 三方都会写同一份文件）, ex: [config.json] }
+  ApiKey:           { desc: 云端识别或用户自配 LLM 的密钥（泄露即用户实际损失）, ex: [key-bailian] }
+  ExternalAgent:    { desc: 外部 AI 助手（经 CLI rtc 与 REST 接入；是产品鼓励的用法，不是攻击者）, ex: [claude-code] }
+  AppInstance:      { desc: 应用实例（开发模式/已安装应用/浏览器版可能同时运行）, ex: [dev-instance, app-instance] }
+  UpdatePackage:    { desc: 应用更新包（安装后会重启应用）, ex: [v0.2.0] }
+  Event:            { desc: 事件（append-only 事件链，审计与回放的根基）, ex: [ev-0001] }
+
+# ── relations（关系）────────────────────────────────────────────────────────
+# 【为什么每条关系的名字必须唯一】YAML 映射段里出现同名键，解析器只保留最后一个，
+# 前面的条目会被静默丢弃——25 条关系写下来只剩 19 条，肉眼完全看不出来。
+# 所以关系名采用「主体_动作_客体」式全名（与 intent.yaml 的 relations 一一对应），
+# 而不是 CONTAINS / WRITES 这种按 domain/range 复用短名的写法。
+relations:
+  FILE_CONTAINS_SEGMENT:    { domain: DayFile,           range: TranscriptSegment, desc: 记录文件包含多条记录（JSONL 追加） }
+  SEGMENT_PRODUCED_BY:      { domain: TranscriptSegment, range: RecognitionEngine, desc: 一条记录由某个引擎产出（engine 字段） }
+  SEGMENT_DELIVERED_TO:     { domain: TranscriptSegment, range: AppTarget,         desc: 一条记录被投递到某应用（targetApp 字段 + 去向徽标） }
+  SESSION_DERIVED_FROM:     { domain: MeetingSession,    range: TranscriptSegment, desc: 场次由记录文件反推（C-034：删记录即断掉正文入口） }
+  SESSION_HAS_DOCUMENT:     { domain: MeetingSession,    range: BoardDocument,     desc: 场次对应一份正文 }
+  SESSION_HAS_ANALYSIS:     { domain: MeetingSession,    range: BoardAnalysis,     desc: 场次对应一份分析 }
+  SESSION_DEFINED_BY:       { domain: MeetingSession,    range: MeetingDefinition, desc: 场次由会议定义描述 }
+  DOCUMENT_WRITTEN_BY_USER: { domain: BoardDocument,     range: User,              desc: 用户在编辑模式写入 }
+  DOCUMENT_WRITTEN_BY_AGENT: { domain: BoardDocument,    range: ExternalAgent,     desc: 外部 AI 经 rtc board 写入 }
+  AGENT_READS_SEGMENT:      { domain: ExternalAgent,     range: TranscriptSegment, desc: 外部 AI 读取转写（产品鼓励的用法） }
+  AGENT_READS_DOCUMENT:     { domain: ExternalAgent,     range: BoardDocument,     desc: 外部 AI 读取白板正文 }
+  COMMAND_TARGETS_APP:      { domain: CommandEntry,      range: AppTarget,         desc: aliases 的 value 必须是 .app 包名 }
+  PASTE_LIST_CONTAINS_APP:  { domain: PasteList,         range: AppTarget,         desc: 粘贴名单包含若干应用 }
+  SEND_LIST_CONTAINS_APP:   { domain: SendList,          range: AppTarget,         desc: 发送名单包含若干应用 }
+  PASTE_LIST_GATES_SEGMENT: { domain: PasteList,         range: TranscriptSegment, desc: 名单决定该条是否被投递（影响 DELIVERED_TO） }
+  ENGINE_SERVED_BY:         { domain: RecognitionEngine, range: ServiceEndpoint,   desc: 引擎由服务端口提供（本机 8932/8933 或云端 HTTPS） }
+  ENDPOINT_LOADS_MODEL:     { domain: ServiceEndpoint,   range: ModelFile,         desc: 本机服务加载模型文件（缺失时服务仍在） }
+  DEVICE_CAPTURES_STREAM:   { domain: AudioDevice,       range: AudioStream,       desc: 设备产生音频流 }
+  ENGINE_CONSUMES_STREAM:   { domain: RecognitionEngine, range: AudioStream,       desc: 引擎消费音频流 }
+  CONFIG_STORES_KEY:        { domain: Config,            range: ApiKey,            desc: 配置存放密钥（泄露面） }
+  USER_WRITES_CONFIG:       { domain: User,              range: Config,            desc: 用户在设置页保存 }
+  AGENT_WRITES_CONFIG:      { domain: ExternalAgent,     range: Config,            desc: 外部 AI 经 rtc config set 写入（整份读改写，与界面不同队） }
+  INSTANCE_WRITES_FILE:     { domain: AppInstance,       range: DayFile,           desc: 实例写记录（双开时两个实例同写，C-037） }
+  PACKAGE_RELEASES_INSTANCE: { domain: UpdatePackage,    range: AppInstance,       desc: 更新包安装后重启实例（S-225 / C-033） }
+  FILE_PRODUCES_EVENT:      { domain: DayFile,           range: Event,             desc: 记录文件的每次变更产生事件（append-only） }
+
+# ── events（事件）────────────────────────────────────────────────────────────
+# 事件是头等节点：每个状态迁移/业务动作都有对应事件；事件不可删改。
+events:
+  RecordingStarted:    { trigger: 点击麦克风 / 空格 / 全局热键, args: [ts, engine, permission_state] }
+  RecordingStopped:    { trigger: 点击停止 / 空格, args: [ts, reason] }
+  SegmentRecognized:   { trigger: 识别服务返回结果, args: [segment_id, text, engine, ts] }
+  SegmentPersisted:    { trigger: 写入记录文件成功, args: [segment_id, day_file, byte_offset] }
+  SegmentPersistFailed: { trigger: 写入失败（磁盘满/目录不可写/权限变化）, args: [segment_id, day_file, error] }
+  SegmentDiscarded:    { trigger: 静音超时或噪声判定丢弃, args: [reason, duration_ms, audible_flag] }
+  EngineSwitched:      { trigger: 用户切换识别方式, args: [from_engine, to_engine, ts, had_pending_audio] }
+  ServiceUnavailable:  { trigger: 端口不可达 / 模型加载失败 / 依赖缺失, args: [endpoint, probe_result, model_loaded] }
+  ServiceRecovered:    { trigger: 重启服务成功 / 自愈成功, args: [endpoint, ts] }
+  AudioFlowStalled:    { trigger: 音频看护判定无有效信号, args: [duration_ms, rms_sample, callback_alive] }
+  SystemSlept:         { trigger: 系统睡眠, args: [ts] }
+  SystemWoke:          { trigger: 系统唤醒, args: [ts, audio_context_state] }
+  WakeRecoveryResult:  { trigger: 唤醒后的恢复判定, args: [success, ui_status, action_offered] }
+  ConfigWritten:       { trigger: 界面保存 / CLI / 外部 AI 写入, args: [source, changed_keys, digest_before, digest_after] }
+  CommandSaved:        { trigger: 指令管理页保存, args: [added, modified, deleted, external_since_open] }
+  DefaultsRestored:    { trigger: 点击「恢复默认」, args: [scope, confirmed, backup_ref] }
+  BoardWritten:        { trigger: 用户保存 / 外部 AI 写入, args: [actor, mode, content_digest_before, content_digest_after] }
+  BoardConflictDetected: { trigger: 保存前检测到磁盘被外部改动, args: [baseline_digest, disk_digest, actor] }
+  HistoryCleared:      { trigger: 设置页清除历史（二次确认后）, args: [scope, sessions_affected, board_docs_orphaned] }
+  PermissionRevoked:   { trigger: 系统授权被回收或更新后失效, args: [permission, detected_at, detected_by] }
+  UpdateInstalled:     { trigger: 更新包安装, args: [from_version, to_version, recording_active] }
+  FlowFailed:          { trigger: 异常/超时/补偿, args: [stage, error, compensation] }
+
+# ── constraints（守恒约束 / 不变量）──────────────────────────────────────────
+# 每个约束对应 claims/ 中的一个技术层 oracle。
+constraints:
+  - 状态诚实: "ui_status == '就绪' ⟺ 音频链路可用 ∧ 识别可用（端口可达 ∧ 模型已加载）；端口可达不得单独作为充分条件"
+  - 录音三要素: "RECORDING 状态 ⟹ 音频流有效 ∧ 识别链路存活 ∧ 落盘可用；任一不成立必须离开 RECORDING"
+  - 显示即可得: "一条记录显示在列表中 ⟹ 该条已成功落盘（SegmentPersisted 事件存在）"
+  - 记录行原子: "DayFile 每一行都可被 JSON 解析；不存在半截行"
+  - 清除守恒: "HistoryCleared 之后，所有界面读到的记录集合为空 ∧ 无指向已删记录的死入口"
+  - 清除不可回: "HistoryCleared 之后，不存在可从中还原被删转写内容的日志、缓存或备份副本（操作系统备份除外，须在界面说明）"
+  - 配置写入不互相覆盖: "并发写入 Config 后，各方互不冲突的字段均保留；source 不同的写入不得回滚对方"
+  - 未知键透传: "写入 Config 后，当前版本不认识的配置键全部保留"
+  - 外部写入不静默覆盖用户内容: "BoardWritten(actor=external, mode=replace) ⟹ 用户手写段落仍存在 ∨ 该次写入被拒绝"
+  - 冲突必须人类裁决: "BoardConflictDetected ⟹ 下一次写入前存在用户裁决记录；任一方不得单方决定"
+  - 内容单一来源: "稳定状态下，界面展示的白板正文 == 磁盘上的文档文件内容"
+  - 场次可追溯: "MeetingSession 存在 ⟹ 其 DERIVED_FROM 的 TranscriptSegment 仍可达 ∨ 界面已明确告知该场次内容已不在"
+  - 唤醒不静默: "SystemWoke ⟹ 音频与识别链路可用 ∨ ui_status 进入异常态并给出可执行动作"
+  - 授权不静默失效: "PermissionRevoked ⟹ 依赖该权限的开关不显示为「开」，或界面显式告知"
+  - 事件不可变: "Event 只追加（append-only），无 UPDATE/DELETE"
+  - 密钥不明文暴露: "Config 中不存在同机任意进程可直接使用的明文 ApiKey"
+  - 本机端口非隐私边界: "来自浏览器上下文的跨源请求无法读取 TranscriptSegment 或 ApiKey"
+  - 录音不因更新中断: "UpdateInstalled(recording_active=true) ⟹ 该次安装被阻止 ∨ 内容已落盘并告知用户"

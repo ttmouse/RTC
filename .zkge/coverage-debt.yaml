@@ -1,0 +1,130 @@
+# ============================================================
+# 覆盖缺口登记（A4 布局要求）
+# 项目：RTC 实时语音转文字 ｜ 由 architecture/traceability.yaml 的 23 条 gap 自动汇总
+#
+# 本文件回答「还差什么才能说验证过」。三类缺口分开记：
+#   claim_gaps     —— 某条能力问题缺实现定位或缺测试落点
+#   verifier_gaps  —— 尺子本身没校准，其结论不得进门禁
+#   known_blind_spots —— 尺子能跑但天生看不见的区域（不修，只登记）
+# ============================================================
+schema: zkge.coverage-debt/v1
+project_id: PROJECT.RTC
+
+claim_gaps:
+  - claim_id: CLAIM.ASR.003
+    questions: [S-045]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——依赖未自建的属性测试框架"
+  - claim_id: CLAIM.ASR.004
+    questions: [S-048]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——需先确定「可找回」的产品形态"
+  - claim_id: CLAIM.ASR.005
+    questions: [S-040]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——密钥落盘形态未查证"
+  - claim_id: CLAIM.AUDIO.004
+    questions: [S-024, S-068]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——边录边清除的时序需 L3"
+  - claim_id: CLAIM.BOARD.002
+    questions: [S-166, S-215, C-019]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——冲突提示当前无实现"
+  - claim_id: CLAIM.BOARD.005
+    questions: [S-214]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——连续两次外部写入未覆盖"
+  - claim_id: CLAIM.CMD.002
+    questions: [C-017]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——陈旧快照复活条目需专项用例"
+  - claim_id: CLAIM.CMD.003
+    questions: [S-095]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——恢复默认的确认与写盘时序"
+  - claim_id: CLAIM.CMD.004
+    questions: [C-036, S-127]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——取消不写入需专项用例"
+  - claim_id: CLAIM.CONFIG.001
+    questions: [S-140, C-014, C-015]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——并发写配置需 L3"
+  - claim_id: CLAIM.CONFIG.002
+    questions: [S-143]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——配置损坏的启动路径"
+  - claim_id: CLAIM.CONFIG.003
+    questions: [S-128, S-145]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——恢复默认的留底"
+  - claim_id: CLAIM.CONFIG.004
+    questions: [S-147]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——未知键透传"
+  - claim_id: CLAIM.CONFIG.005
+    questions: [C-037]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——需 L3-04 多实例并发"
+  - claim_id: CLAIM.EXT.001
+    questions: [S-210, S-211]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——跨源读取需真实浏览器 + 本机服务"
+  - claim_id: CLAIM.EXT.002
+    questions: [S-218]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——同机其它程序读取面未查证"
+  - claim_id: CLAIM.REC.001
+    questions: [C-003]
+    missing: "测试落点"
+    reason: "未说明"
+  - claim_id: CLAIM.REC.002
+    questions: [S-064]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——半截行需故障注入"
+  - claim_id: CLAIM.REC.003
+    questions: [S-072, S-184, C-025]
+    missing: "测试落点"
+    reason: "未说明"
+  - claim_id: CLAIM.REC.005
+    questions: [S-078]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——残留副本需逐个载体排查"
+  - claim_id: CLAIM.UPDATE.001
+    questions: [S-225, C-033]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——更新中断录音需真实更新包"
+  - claim_id: CLAIM.UPDATE.002
+    questions: [S-228]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——更新不动用户数据需真实更新包"
+  - claim_id: CLAIM.UPDATE.003
+    questions: [C-043]
+    missing: "实现位置＋测试落点"
+    reason: "无测试——更新后授权失效需真实系统授权变更"
+
+verifier_gaps:
+  - verifier: check_audio
+    state: "未校准（依赖 Playwright，该依赖不在仓库依赖中）"
+    effect: "依赖它的 claim 不得判定 PASS；补跑通自检前该手段不计入证据"
+  - verifier: check_ux
+    state: "未校准（依赖 Playwright；且验的是 dist/meeting-board，必须先 vite build）"
+    effect: "拿旧构建会得出假结论（本会话已验证过一次）"
+  - verifier: code_review_graph
+    state: "未校准（RTC 尚未建图）"
+    effect: "38/38 条 claim 的「测试覆盖反查 / 爆炸半径 / 死代码」全部悬空——这是当前最大的单点缺口"
+
+known_blind_spots:
+  - verifier: static_check
+    blind: "只证明代码可被加载与解析，不证明行为正确"
+  - verifier: check_js_undefined
+    blind: "只 grep TS2304/TS2552，别名与动态引用抓不到"
+  - verifier: node_unit_tests
+    blind: "模块级/纯函数级，不覆盖真实音频链路与真实文件写入；meeting-board 测试不随 npm test 一起跑"
+  - verifier: runtime_manual
+    blind: "无法穷举，只验证代表性场景，且结论不可重放"
+  - verifier: code_review_graph
+    blind: "对反射/动态代码存在静态抽取盲区；tests_for 边缺失会返回 0 条，不得当成「真的没测试」"
+  - verifier: property_test
+    blind: "技能未提供、项目未自建；依赖它的 claim 在补齐前不得判定 PASS"

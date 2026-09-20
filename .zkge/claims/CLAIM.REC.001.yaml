@@ -1,0 +1,33 @@
+# 来源能力问题：C-003
+schema: zkge.claim/v1
+id: CLAIM.REC.001
+business_id: C-003
+business_entry: '主界面列表 + 录音中'
+business_question: '那句话明明显示在屏幕上了，却没写进记录文件（磁盘满、数据目录被移走、目录不可写）。用户当场看得见，重开应用这句话就没了。'
+statement: '记录写入失败（磁盘满 / 目录不可写 / 权限变化）时，不得向用户显示成功'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '录音进行中'
+    - '磁盘或目录异常'
+  excluded:
+    - '进程被杀导致的极端截断（由 CLAIM.REC.002 覆盖）'
+assumptions:
+  - id: ASSUMPTION.REC.001
+    text: '「显示了」与「存下了」必须由同一个事实决定'
+oracle:
+  type: integration
+  expression: 'write_failed 时 ui 不得显示该条为已保存'
+counterexample:
+  expression: '内容显示在列表中但未落盘，且界面无任何失败提示'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

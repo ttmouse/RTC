@@ -1,0 +1,32 @@
+# 来源能力问题：C-036, S-127
+schema: zkge.claim/v1
+id: CLAIM.CMD.004
+business_id: C-036
+business_entry: '设置页底部'
+business_question: '用户点了「恢复默认」再点「取消」——改动依然生效，因为「取消」只是把这一页关掉。用户以为「取消」能兜住，实际兜不住。'
+statement: '页面上的「取消」必须在所有情况下都不产生写入'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '设置页 / 指令管理页（含已点过恢复默认的情形）'
+  excluded:
+    - '保存失败时需要回滚的情形（属失败路径）'
+assumptions:
+  - id: ASSUMPTION.CMD.004
+    text: '同栏三颗按钮（保存 / 取消 / 恢复默认）的心智必须一致'
+oracle:
+  type: invariant
+  expression: 'cancel 之后文件内容 == cancel 之前'
+counterexample:
+  expression: '点击「取消」后仍存在被写入的改动'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

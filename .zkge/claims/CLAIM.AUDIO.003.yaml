@@ -1,0 +1,33 @@
+# 来源能力问题：S-009
+schema: zkge.claim/v1
+id: CLAIM.AUDIO.003
+business_id: S-009
+business_entry: '主界面长时间连续说话'
+business_question: '用户一口气不停说了半分钟以上，会不会被切成几段？切开的地方会不会把字吃掉？'
+statement: '连续说话超过强制分段阈值时，强制分段不得吞掉任何已识别字符'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '连续语音输入'
+    - '时长超过强制分段阈值'
+  excluded:
+    - '静音超时导致的正常断句'
+assumptions:
+  - id: ASSUMPTION.AUDIO.003
+    text: '强制分段是为了控制延迟，不是丢弃内容的时机'
+oracle:
+  type: invariant
+  expression: 'concat(所有分段字符) == 识别流输入字符（除显式判定的噪声）'
+counterexample:
+  expression: '存在分界处字符丢失，或多出不属于输入的字符'
+required_verifiers:
+    - 'vad_test'
+    - 'property_test'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

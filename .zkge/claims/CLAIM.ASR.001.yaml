@@ -1,0 +1,32 @@
+# 来源能力问题：C-005, S-042
+schema: zkge.claim/v1
+id: CLAIM.ASR.001
+business_id: C-005
+business_entry: '主界面状态区 + 设置页识别方式'
+business_question: '本机识别「服务在跑」不等于「能识别」：模型文件缺失或加载失败时，服务仍在、探测照过，主界面照样说「就绪」。'
+statement: '本机识别服务进程存在不等于识别可用：模型文件缺失或加载失败时，状态区不得显示「就绪」'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '本机识别方式下'
+  excluded:
+    - '用户选择云端识别引擎'
+assumptions:
+  - id: ASSUMPTION.ASR.001
+    text: '可达性探测（端口通）与可用性是两个不同的判据'
+oracle:
+  type: runtime
+  expression: "model_loaded == false 时，ui_status != '就绪'"
+counterexample:
+  expression: '模型不可用（缺失/加载失败）而状态区显示「就绪」'
+required_verifiers:
+    - 'model_recovery_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

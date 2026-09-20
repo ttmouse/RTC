@@ -34,10 +34,10 @@ export function setTodayCount(count) {
  * 两者都可能是 Promise，因为前台查询与识别定型并行进行；查询失败只影响旁路字段，
  * 不影响正文入库。
  */
-export async function saveEntry(text, activeApp, pasteStatus) {
+export async function saveEntry(text, activeApp, pasteStatus, engineOverride = null) {
   const ts = new Date().toISOString();
   // engine 在 await 之前取好：等待期间用户可能切换引擎，记录该记当时那个。
-  const engine = state.asrEngine || null;
+  const engine = engineOverride || state.asrEngine || null;
   let foreground = null;
   let status = 'not-pasted';
   try {

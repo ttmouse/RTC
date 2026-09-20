@@ -1,0 +1,55 @@
+# master-data-audit.yaml —— 业务依赖数据审计（存量项目初始化 · 代码源镜像）
+# 模板来源：renheng B2B 订单履约验证项目 docs/08-external-integration.html §1.3-1.4（已实战验证）
+#
+# 用途：存量项目初始化（双源生成）时，把「代码里实际依赖的业务数据」摸清楚。
+# 这是技能「存量 vs 从零：双源生成」中「代码源（镜像）」的落地工具 ——
+# 需求源（正本）回答「系统应该能回答什么」，本审计回答「系统实际依赖什么数据、从哪来」。
+#
+# 关键区分（必须区分，否则配置管理混乱）：
+#   - 配置性数据：策略参数（阈值/规则，如超时天数、催办间隔、修改分类）→ 可动态加载，归配置源
+#   - 业务依赖数据：业务事实/主数据（客户档案、SKU 目录、审批人分配）→ 需要权威维护源
+
+schema: zkge.master-data-audit/v1
+project_id: PROJECT.<ASCII_SLUG>
+
+# ── 业务依赖数据审计表（每项主数据一行）─────────────────────────────────────
+# 列: item | business_use | consumer | current_state | storage | authority | gap | evolution
+# current_state: ✅ 已落库 / ⚠️ 部分配置化 / 🔴 纯硬编码
+# authority: 权威维护源（谁维护、维护流程）——没有维护源 = 缺口
+items:
+  # - item: "客户档案（名称 / 等级 / 归属）"
+  #   business_use: "等级决定审批链（C/D 触发董事长）"
+  #   consumer: "审批策略"
+  #   current_state: "✅ 已落库（seed 种子供给）"
+  #   storage: "customers 表"
+  #   authority: "无权威维护源（缺口：谁维护客户等级？）"
+  #   gap: "无维护流程"
+  #   evolution: "② 建维护接口（CRUD + 审计）"
+  # - item: "审批人分配 / 审批链路由"
+  #   business_use: "每个审批闸门的 assignee 决定卡片推给谁"
+  #   consumer: "审批流程"
+  #   current_state: "🔴 纯硬编码（N 处）"
+  #   storage: "代码内"
+  #   authority: "无（硬编码）"
+  #   gap: "改审批人必须改代码"
+  #   evolution: "② 抽为配置数据 / 主数据落库"
+  # - item: "<数据项>"
+  #   business_use: "<业务用途 / 消费方>"
+  #   consumer: "<谁消费>"
+  #   current_state: "<✅ 已落库 / ⚠️ 部分配置化 / 🔴 纯硬编码>"
+  #   storage: "<代码 / 存储位置>"
+  #   authority: "<权威维护源>"
+  #   gap: "<缺口 → 演进路径>"
+  #   evolution: "<演进方向>"
+
+# ── 演进路径（三段）──────────────────────────────────────────────────────────
+evolution_path:
+  baseline: "seed + 硬编码，行为不变"
+  step2: "主数据落库接口（CRUD + 审计），审批人分配等抽离为可配置"
+  step3: "权威维护流程 + 数据校验（谁改、何时改、审计）"
+
+# ── 配置性数据 vs 业务依赖数据 判定（防混淆清单）────────────────────────────
+classifier:
+  config_data: "策略参数（阈值/规则/分类），改值不改结构 → 归 BusinessConfigProvider（可动态加载）"
+  master_data: "业务事实/主数据（客户/产品/审批人/关系），有权威归属 → 本审计表"
+  question: "删掉这个数据系统还能跑吗？能 → 配置数据；不能 → 业务依赖数据"

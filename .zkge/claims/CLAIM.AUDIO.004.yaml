@@ -1,0 +1,32 @@
+# 来源能力问题：S-024, S-068
+schema: zkge.claim/v1
+id: CLAIM.AUDIO.004
+business_id: S-024
+business_entry: '设置页清除历史 + 主界面录音中'
+business_question: '用户一边说话一边点了「清除历史记录」，正在说的这句会不会被清掉，或者清完之后又自己冒回来？'
+statement: '边录音边执行「清除历史」后，不得出现已清除内容重新写回记录文件'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '录音进行中执行清除历史'
+  excluded:
+    - '清除后用户继续正常录音'
+assumptions:
+  - id: ASSUMPTION.AUDIO.004
+    text: '清除与录音并发时，写入路径必须尊重清除水位线'
+oracle:
+  type: invariant
+  expression: '清除后写入的记录 ts > clear_at，且不存在 ts <= clear_at 的新记录'
+counterexample:
+  expression: '清除后列表中重新出现清除时间点之前的记录'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

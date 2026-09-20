@@ -895,6 +895,76 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // POST /api/typesafe/command — 一次性指令模式的窄判断代理。
+  // TypeSafe Key 只从本机环境或本地配置读取，不从浏览器请求体接收；普通转写不会走这里。
+  if (req.method === 'POST' && req.url === '/api/typesafe/command') {
+    readJsonBody(req, async (err, parsed) => {
+      if (err || !parsed || typeof parsed !== 'object') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid json' }));
+        return;
+      }
+      const text = typeof parsed.text === 'string' ? parsed.text.trim() : '';
+      const options = parsed.options && typeof parsed.options === 'object' && !Array.isArray(parsed.options)
+        ? parsed.options : null;
+      if (!text || !options || !Object.keys(options).length || Object.keys(options).length > 80) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'text / options are required' }));
+        return;
+      }
+      let apiKey = process.env.TYPESAFE_API_KEY || '';
+      if (!apiKey) {
+        try {
+          const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+          const ts = cfg.settings && cfg.settings.typesafe;
+          const ai = cfg.settings && cfg.settings.ai;
+          apiKey = (ts && ts.apiKey) || (ai && ai.provider === 'typesafe' && ai.apiKey) || '';
+        } catch { /* 未配置时返回明确错误 */ }
+      }
+      if (!apiKey) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: '未配置 TypeSafe API Key（TYPESAFE_API_KEY）' }));
+        return;
+      }
+      try {
+        const upstream = await fetch('https://api.typesafe.ai/v1/systemone', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'jev-latest',
+            state: text,
+            questions: {
+              command: {
+                type: 'choice',
+                instructions: '判断这句话是否在请求执行一个已有的 RTC 语音指令；如果是，从候选中选择最匹配的一项；如果只是普通讲话，选择 none。只能选择候选项，不能创造新动作。',
+                criteria: options,
+              },
+            },
+          }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const body = await upstream.json().catch(() => ({}));
+        if (!upstream.ok) {
+          res.writeHead(upstream.status === 429 ? 429 : 502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: body.error?.message || `TypeSafe HTTP ${upstream.status}` }));
+          return;
+        }
+        const answer = body.answers && body.answers.command;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: true,
+          choice: answer && answer.choice,
+          confidence: answer && answer.confidence,
+          probabilities: answer && answer.probabilities,
+        }));
+      } catch (e) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'TypeSafe 服务暂时不可用' }));
+      }
+    });
+    return;
+  }
+
   // POST /api/llm/chat — OpenAI 兼容 Chat Completions 代理
   // 浏览器 → 本服务 → 自定义服务商（baseUrl/apiKey/model 由前端传入，Key 只在本机流转）
   if (req.method === 'POST' && req.url === '/api/llm/chat') {
@@ -2096,10 +2166,17 @@ wss.on('connection', (ws, request) => {
               ws.send(TIMING_LOGS ? JSON.stringify(parsed) : text);
             }
           } else {
-            // 百炼：所有有文本的结果都转发（中间帧用于前端临时行显示，完整句带 end_time 用于定型）
+            // 百炼中间帧只用于前端实时显示，最终是否落盘由前端的 sentence_end 决定。
+            // 不能在这里按标点或 end_time 过滤，否则会把 RTC 的实时打字效果一起删掉。
             if (textContent) {
-              console.log(`[server] bailian result: ${textContent.slice(0, 40)}...`);
-              ws.send(TIMING_LOGS ? JSON.stringify(parsed) : text);
+              const isFinal = sentence && (sentence.sentence_end === true || sentence.end_time > 0);
+              console.log(`[server] bailian ${isFinal ? 'final' : 'interim'}: ${textContent.slice(0, 40)}...`);
+              if (isFinal) {
+                ws.send(TIMING_LOGS ? JSON.stringify(parsed) : text);
+              } else {
+                // 中间帧使用独立消息类型，避免旧前端把它误当成正式 result-generated 落盘。
+                ws.send(JSON.stringify({ type: 'bailian-interim', sentence }));
+              }
             } else {
               console.log(`[server] skip interim (no text)`);
             }

@@ -1,0 +1,32 @@
+# 来源能力问题：S-230, S-245, C-040
+schema: zkge.claim/v1
+id: CLAIM.PKG.001
+business_id: S-230
+business_entry: '应用更新后使用本机识别'
+business_question: '应用更新时，它依赖的本机识别组件会不会一起更新？不一起更新会不会出现功能坏掉？'
+statement: '打包进 App 的后端必须与仓库当前版本一致；不一致必须可被察觉'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '开发或打包流程'
+  excluded:
+    - '用户使用的是旧版本安装包（版本号应可见）'
+assumptions:
+  - id: ASSUMPTION.PKG.001
+    text: '「新字段没生效」的根因常常不是逻辑错，而是打了旧后端'
+oracle:
+  type: runtime
+  expression: 'App 内后端行为 == 仓库当前后端行为；不一致时存在可察觉的信号'
+counterexample:
+  expression: '仓库已修的接口在 App 里返回 404 或行为陈旧，且无从判断'
+required_verifiers:
+    - 'static_check'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

@@ -1,0 +1,31 @@
+# 来源能力问题：C-024
+schema: zkge.claim/v1
+id: CLAIM.BOARD.006
+business_id: C-024
+business_entry: '数据目录里的白板文档 / 会议白板'
+business_question: '白板正文同时存在两个「存放地」：程序用来展示的那份，和给人看的文档文件。用户改了后者（这是最自然的做法），白板毫无反应，改动像掉进黑洞。'
+statement: '白板正文必须只有一个真实来源；用户改文档文件必须反映到界面'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '用户直接编辑数据目录中的白板文档'
+  excluded:
+    - '界面正处于编辑态且尚未保存（由 CLAIM.BOARD.002 覆盖）'
+assumptions:
+  - id: ASSUMPTION.BOARD.006
+    text: '产品原则第 3 条「每个状态只能有一个真实来源」适用于内容，不只是状态显示'
+oracle:
+  type: invariant
+  expression: '对同一场会议，界面展示内容与文档文件内容在稳定状态下一致'
+counterexample:
+  expression: '用户编辑文档文件后界面无反应，改动无法被用户看到'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

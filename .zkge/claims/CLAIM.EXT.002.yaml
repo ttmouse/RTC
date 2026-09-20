@@ -1,0 +1,31 @@
+# 来源能力问题：S-218
+schema: zkge.claim/v1
+id: CLAIM.EXT.002
+business_id: S-218
+business_entry: '应用运行中 + 本机其它程序'
+business_question: '允许外部接入之后，这台电脑上别的软件有没有机会顺手读走用户的说话记录和账号密钥？'
+statement: '同机其它程序不得通过本机服务读取用户记录或密钥'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '服务运行中'
+  excluded:
+    - '用户显式授权的 CLI（rtc）与外部 AI 助手——这是产品鼓励的用法'
+assumptions:
+  - id: ASSUMPTION.EXT.002
+    text: '「文件即接口」是设计优点，但它的代价必须被评估而不是默认忽略'
+oracle:
+  type: runtime
+  expression: '未授权的本机进程无法通过服务接口取得记录或密钥'
+counterexample:
+  expression: '任意本机进程可直接读取记录或密钥'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

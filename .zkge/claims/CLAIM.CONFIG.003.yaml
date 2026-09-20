@@ -1,0 +1,32 @@
+# 来源能力问题：S-128, S-145
+schema: zkge.claim/v1
+id: CLAIM.CONFIG.003
+business_id: S-128
+business_entry: '设置页「恢复默认」按钮'
+business_question: '用户点「恢复默认」，到底哪些东西会变回去？界面有没有把范围讲清楚？'
+statement: '「恢复默认」不得破坏原有配置的留底'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '设置页 / 指令管理页'
+  excluded:
+    - '用户确认清除全部数据'
+assumptions:
+  - id: ASSUMPTION.CONFIG.003
+    text: '不可逆操作必须留下退路，或至少把不可逆讲清楚'
+oracle:
+  type: runtime
+  expression: '恢复默认后存在可恢复的原配置副本；界面明确说明改动范围'
+counterexample:
+  expression: '恢复默认后原配置不可恢复，且用户事先不知范围'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

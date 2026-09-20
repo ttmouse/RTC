@@ -1,0 +1,32 @@
+# 来源能力问题：S-095
+schema: zkge.claim/v1
+id: CLAIM.CMD.003
+business_id: S-095
+business_entry: '指令管理页「恢复默认」'
+business_question: '用户点「恢复默认」，自己辛苦配的指令是不是立刻全没了？有没有二次确认？'
+statement: '「恢复默认」必须二次确认，且非经确认不得立即写盘'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '指令管理页 / 设置页'
+  excluded:
+    - '用户点击确认后的写入（属预期行为）'
+assumptions:
+  - id: ASSUMPTION.CMD.003
+    text: '「恢复默认」与「清除历史」同属破坏性操作，不应被区别对待'
+oracle:
+  type: runtime
+  expression: '未确认时 restore_defaults 不产生任何写操作'
+counterexample:
+  expression: '点击「恢复默认」后未经确认即写入，用户配置丢失'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

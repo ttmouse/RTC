@@ -1,0 +1,34 @@
+# 来源能力问题：C-001
+schema: zkge.claim/v1
+id: CLAIM.AUDIO.001
+business_id: C-001
+business_entry: '主界面状态区 + 录音按钮'
+business_question: '麦克风被系统或硬件关掉（键盘静音键、菜单栏静音、输入音量拉到 0）时，应用以为还在录，实际录进来的是空气。录完整场一个字没有，状态区全程写「识别中」。'
+statement: '麦克风被系统或硬件静音（静音键 / 输入音量归零 / 设备被切走）时，应用必须察觉输入无有效声音并在状态区如实报出，不得显示「识别中」'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '麦克风授权正常'
+    - '回调仍在运行'
+  excluded:
+    - '用户在系统层把输入设备静音'
+    - '设备被系统切换但旧句柄未断'
+assumptions:
+  - id: ASSUMPTION.AUDIO.001
+    text: '回调存活不等于音频有效；判据必须落在信号本身而不是连接状态'
+oracle:
+  type: runtime
+  expression: "input_rms < silence_threshold for T > 0 且 audio_callback_alive 时，ui_status != '识别中'"
+counterexample:
+  expression: '输入持续静音 T 秒，界面仍处于「识别中」且无任何异常提示'
+required_verifiers:
+    - 'audio_flow_watch'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

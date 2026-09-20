@@ -1,0 +1,31 @@
+# 来源能力问题：S-214
+schema: zkge.claim/v1
+id: CLAIM.BOARD.005
+business_id: S-214
+business_entry: '白板 + 外部 AI 助手连续写入'
+business_question: '外部 AI 助手连着写两次，第一次写的内容是不是就被第二次盖掉了？用户知道会这样吗？'
+statement: '连续两次外部写入不得静默覆盖第一次'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '外部连续两次写入'
+  excluded:
+    - '写入方显式声明为替换操作并已知悉'
+assumptions:
+  - id: ASSUMPTION.BOARD.005
+    text: '外部 AI 是产品鼓励的用法，因此它的误操作必须被兜住'
+oracle:
+  type: invariant
+  expression: '第二次写入后，第一次写入的内容仍可追溯（留底或显式被替换且有记录）'
+counterexample:
+  expression: '连续写入导致第一次内容不可恢复地消失且无任何记录'
+required_verifiers:
+    - 'unit_test'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

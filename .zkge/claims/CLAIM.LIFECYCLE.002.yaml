@@ -1,0 +1,32 @@
+# 来源能力问题：S-190
+schema: zkge.claim/v1
+id: CLAIM.LIFECYCLE.002
+business_id: S-190
+business_entry: '唤醒后主界面继续录音'
+business_question: '唤醒之后用户接着说话，这些话能不能真的被记下来？'
+statement: '唤醒后的语音必须能被记录；不能记录时必须给出可执行的恢复动作'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '唤醒后继续说话'
+  excluded:
+    - '用户唤醒后未开录音（属正常空闲态）'
+assumptions:
+  - id: ASSUMPTION.LIFECYCLE.002
+    text: '「自愈」与「救不回来时如实报」是两条并列要求，缺一不可'
+oracle:
+  type: runtime
+  expression: '唤醒后输入有效音频时产生新记录；否则界面给出可执行的恢复入口'
+counterexample:
+  expression: '唤醒后用户说话无任何记录产生，界面仍显示正常'
+required_verifiers:
+    - 'audio_recovery_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

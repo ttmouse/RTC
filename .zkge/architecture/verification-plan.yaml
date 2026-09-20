@@ -1,0 +1,625 @@
+# ============================================================
+# zk-ge-verification 产物：verification-plan.yaml（人工填写，非模板占位）
+# 对应 A4 文件布局中 .zkge/architecture/verification-plan.yaml
+# 每 claim 的验证方法 + 工具链（阶段 ⑤ 测试设计的落点）
+#
+# 填写依据：.zkge/roles.md 第 0 步尺子校准结果 + package.json 实际脚本 + 仓库实际测试文件。
+# 铁律：verifiers 里标【缺】的，其结论不得用于门禁；标 under_blind_spot 的，盲区内结论不得用于门禁。
+# ============================================================
+schema: zkge.verification-plan/v1
+project_id: PROJECT.RTC
+
+# ── 验证器清单（第 0 步校准对象）────────────────────────────────────────────
+verifiers:
+  - id: static_check
+    version: "scripts/check-static.mjs @ 385d397"
+    owner: douba
+    self_test_result: 通过（在已知坏例上能报错）
+    known_blind_spots:
+      - 只证明代码可被加载与解析，不证明行为正确
+      - 抓不到运行时 ReferenceError 之外的逻辑错误
+
+  - id: check_js_undefined
+    version: "scripts/check-undefined.mjs @ 385d397"
+    owner: douba
+    self_test_result: 通过（历史事故「删掉顶层常量 → 整页 hidden」可被检出）
+    known_blind_spots:
+      - 只 grep TS2304/TS2552，别名与动态引用抓不到
+
+  - id: node_unit_tests
+    version: "tests/*.test.mjs + meeting-board/tests/*.test.mjs @ 385d397"
+    owner: douba
+    self_test_result: 通过（npm test）
+    known_blind_spots:
+      - 这些测试是模块级/纯函数级，不覆盖真实音频链路与真实文件写入
+      - meeting-board 测试不随 npm test 一起跑，需单独执行
+
+  - id: check_audio
+    version: "tests/audio-pipeline.browser.mjs"
+    owner: douba
+    self_test_result: 未校准（依赖 Playwright，该依赖不在仓库依赖中——先跑通再启用门禁）
+    known_blind_spots:
+      - 浏览器音频路径与 WKWebView 不同，无法复现 AudioContext.state = 'interrupted'
+
+  - id: check_ux
+    version: "scripts/check-ux.mjs"
+    owner: douba
+    self_test_result: 未校准（依赖 Playwright；且验的是 dist/meeting-board，必须先 vite build）
+    known_blind_spots:
+      - 只做结构/存在性检查，UX 语义内容（UX-2/5/6/7/8）机器判定不了
+      - 拿旧构建会得出假结论
+
+  - id: runtime_manual
+    version: "桌面端人工实测（npm run dev）"
+    owner: douba
+    self_test_result: 不适用（人工）
+    known_blind_spots:
+      - 无法穷举，只能验证代表性场景
+      - 结论不可重放
+
+  - id: code_review_graph
+    version: "code-review-graph CLI @ ~/.local/bin"
+    owner: douba
+    self_test_result: 未校准（RTC 尚未建图）
+    known_blind_spots:
+      - 对反射/动态代码存在静态抽取盲区
+      - tests_for 边缺失会返回 0 条，不得当成「真的没测试」
+
+  - id: property_test
+    version: "【缺】未自建"
+    owner: —
+    self_test_result: 不适用
+    known_blind_spots:
+      - 技能未提供，项目未自建；依赖它的 claim 在补齐前不得判定 PASS
+
+# ── 逐 claim 验证计划（38 条 R3 冻结项）─────────────────────────────────────
+plan:
+  - claim_id: CLAIM.ASR.001
+    source_questions: [C-005, S-042]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/model-recovery.test.mjs（已存在）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.ASR.002
+    source_questions: [S-042]
+    oracle_type: integration
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/model-recovery.test.mjs（已存在）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.ASR.003
+    source_questions: [S-045]
+    oracle_type: property
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 【缺】属性测试框架（技能未提供，项目未自建）——R2 冻结前必须补齐，否则本 claim 不得判定 PASS
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.ASR.004
+    source_questions: [S-048]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.ASR.005
+    source_questions: [S-040]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑤
+        tool: scripts/check-undefined.mjs（tsc --checkJs）+ scripts/check-static.mjs
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.AUDIO.001
+    source_questions: [C-001]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: npm run check:audio（音频看护，需 Playwright）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.AUDIO.002
+    source_questions: [C-002, S-021]
+    oracle_type: integration
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/main-status.test.mjs（已存在）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.AUDIO.003
+    source_questions: [S-009]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/vad.test.mjs（已存在）
+      - stage: ⑤
+        tool: 【缺】属性测试框架（技能未提供，项目未自建）——R2 冻结前必须补齐，否则本 claim 不得判定 PASS
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.AUDIO.004
+    source_questions: [S-024, S-068]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.BOARD.001
+    source_questions: [S-209, C-020]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+        note: 另可复用 meeting-board/tests/ai-content-write.test.mjs（已存在）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.BOARD.002
+    source_questions: [S-166, S-215, C-019]
+    oracle_type: integration
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.BOARD.003
+    source_questions: [S-162]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.BOARD.004
+    source_questions: [S-170]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.BOARD.005
+    source_questions: [S-214]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.BOARD.006
+    source_questions: [C-024]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CMD.001
+    source_questions: [S-096, S-098]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+        note: 另可复用 tests/app-rule-lists.test.mjs（已存在）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CMD.002
+    source_questions: [C-017]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CMD.003
+    source_questions: [S-095]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CMD.004
+    source_questions: [C-036, S-127]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CONFIG.001
+    source_questions: [S-140, C-014, C-015]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CONFIG.002
+    source_questions: [S-143]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CONFIG.003
+    source_questions: [S-128, S-145]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CONFIG.004
+    source_questions: [S-147]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.CONFIG.005
+    source_questions: [C-037]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.EXT.001
+    source_questions: [S-210, S-211]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑤
+        tool: scripts/check-undefined.mjs（tsc --checkJs）+ scripts/check-static.mjs
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.EXT.002
+    source_questions: [S-218]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.LIFECYCLE.001
+    source_questions: [S-189]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/audio-recovery.test.mjs（已存在）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.LIFECYCLE.002
+    source_questions: [S-190]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/audio-recovery.test.mjs（已存在）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.PASTE.001
+    source_questions: [S-105, S-125]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.PKG.001
+    source_questions: [S-230, S-245, C-040]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: scripts/check-undefined.mjs（tsc --checkJs）+ scripts/check-static.mjs
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.REC.001
+    source_questions: [C-003]
+    oracle_type: integration
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.REC.002
+    source_questions: [S-064]
+    oracle_type: invariant
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 【缺】属性测试框架（技能未提供，项目未自建）——R2 冻结前必须补齐，否则本 claim 不得判定 PASS
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.REC.003
+    source_questions: [S-072, S-184, C-025]
+    oracle_type: integration
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+        note: 另可复用 meeting-board/tests/transcript.test.mjs（已存在）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.REC.004
+    source_questions: [C-034]
+    oracle_type: integration
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.REC.005
+    source_questions: [S-078]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED
+  - claim_id: CLAIM.UPDATE.001
+    source_questions: [S-225, C-033]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.UPDATE.002
+    source_questions: [S-228]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A3
+    acceptance: "在真实或等价运行环境（Tauri 桌面端 + 真实 8931/8932/8933 服务）复现验证通过，且故障路径与恢复动作实测有效"
+    status: NOT_STARTED
+  - claim_id: CLAIM.UPDATE.003
+    source_questions: [C-043]
+    oracle_type: runtime
+    verification_methods:
+      - stage: ④
+        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+      - stage: ⑤
+        tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
+      - stage: ⑦
+        tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
+    required_assurance_level: A2
+    acceptance: "行为/反例/属性验证在本 claim 的采样空间内无反例；反例若出现必须先最小化再路由"
+    status: NOT_STARTED

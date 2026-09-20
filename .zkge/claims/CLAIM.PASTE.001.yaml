@@ -1,0 +1,31 @@
+# 来源能力问题：S-105, S-125
+schema: zkge.claim/v1
+id: CLAIM.PASTE.001
+business_id: S-105
+business_entry: '主界面底部自动发送开关'
+business_question: '用户打开自动发送后，粘完是不是直接按了回车把消息发出去了？这条消息还能撤回吗？'
+statement: '自动发送发出的内容不得在没有确认机会的情况下不可撤回'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '自动发送开关开启'
+  excluded:
+    - '用户主动关闭自动发送'
+assumptions:
+  - id: ASSUMPTION.PASTE.001
+    text: '发送是不可逆的对外动作，与粘贴的性质不同'
+oracle:
+  type: runtime
+  expression: 'auto_send 开启时，用户存在可阻止或可核对即将发出的内容的途径'
+counterexample:
+  expression: '说错的话被自动回车发出，用户无任何干预机会且无法撤回'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

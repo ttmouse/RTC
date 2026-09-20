@@ -1,0 +1,24 @@
+# zkge-intent-generate 生成报告 — PROJECT.RTC
+生成时间: 2026-09-19T06:14:11Z
+
+## 候选统计（机械抽取，均需人工审改）
+- 实体 20 个（top30 已写入 ontology/intent）
+- 关系 33 个
+- 事件 17 个
+- 约束 105 条
+- 状态 7 个
+
+## 待人工确认（机器不猜语义，必须人审）
+- [ ] 每个实体的 desc / code_mapping（代码对应物）
+- [ ] 每条关系的 domain / range（实体间真实语义边）
+- [ ] 状态迁移的 from→to + trigger + guard（方向机器不猜）
+- [ ] 编排规则四要素答案
+- [ ] 约束降重与措辞（machine 版带 claim_id 前缀，可去重）
+
+## 镜像比对（--mirror 提供时）
+- 未提供 --mirror：未做实现图交叉比对（建议补跑：  code-review-graph 导出节点清单后重跑）
+
+## 产出文件
+- /Users/douba/Projects/RTC/.zkge/architecture/intent.yaml
+- /Users/douba/Projects/RTC/.zkge/architecture/ontology.yaml
+- /Users/douba/Projects/RTC/.zkge/architecture/task-graph.md

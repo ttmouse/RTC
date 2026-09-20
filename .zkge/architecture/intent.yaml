@@ -1,0 +1,355 @@
+# ============================================================
+# zk-ge-verification 产物：intent.yaml（人工重写，非生成器初稿）
+# 对应 A4 文件布局中 .zkge/architecture/intent.yaml
+# 世界图：系统记住什么（实体 + 关系）｜任务图：系统如何推进（状态 + 迁移）
+#
+# 说明：本文件由机器生成初稿后人工重写。生成器的产出（实体=键盘按键名、
+# 关系=断句碎片）不可用，已整体替换。每条关系标注了它对应哪条 claim。
+# 注：name / from / to / domain / range 的值保留引号，校验器依赖该引号格式。
+# ============================================================
+schema: zkge.intent/v1
+project_id: PROJECT.RTC
+
+world_graph:
+  entities:
+    - name: 'user'
+      description: 使用 RTC 的人。单人产品，无账号体系，同一台电脑可能有多个系统账号
+      code_mapping: "（无持久化实体；macOS 用户账号）"
+    - name: 'audio_device'
+      description: 系统当前的音频输入设备。可被系统或用户在应用之外切换、静音、拔插
+      code_mapping: src/js/audio.js getAudioConstraints()
+    - name: 'audio_stream'
+      description: 从麦克风到识别服务的音频流。应用只能观察到「声道是否有有效信号」，无法观察到设备层是否被静音
+      code_mapping: src/js/audio.js startAudioFlowWatch()
+    - name: 'transcript_segment'
+      description: 一条转写记录。用户说话 → 识别 → 落盘后的最小单位，是全部下游能力的事实来源
+      code_mapping: "events/YYYY-MM-DD.jsonl 的 type=segment 行"
+    - name: 'day_file'
+      description: 按本机日期分文件的记录载体
+      code_mapping: "events/YYYY-MM-DD.jsonl"
+    - name: 'recognition_engine'
+      description: 识别引擎。本机（SenseVoice 离线）或云端（阿里云百炼）。两者可用性判据不同
+      code_mapping: src/js/asr.js
+    - name: 'model_file'
+      description: 本机识别所需的模型文件。缺失或加载失败时服务仍在跑
+      code_mapping: "asr_local/ 模型目录"
+    - name: 'service_endpoint'
+      description: 本机服务端口。8931 代理 / 8932 识别 WS / 8933 模型管理 HTTP。端口可达 ≠ 能力可用
+      code_mapping: server.js、asr_local/server.py
+    - name: 'command_entry'
+      description: 一条语音指令。三种类型：aliases（打开应用）/ actions（按键）/ snippets（固定文本）
+      code_mapping: "commands.json 的 aliases/actions/snippets"
+    - name: 'app_target'
+      description: 目标应用。稳定身份是 .app 包名（WeChat），不是中文显示名（微信）
+      code_mapping: src/js/frontmost.js、src-tauri/src/mac_frontmost.rs
+    - name: 'paste_list'
+      description: 自动粘贴的目标应用名单。空名单 = 全局老行为
+      code_mapping: "config.json 的粘贴名单"
+    - name: 'send_list'
+      description: 自动发送的目标应用名单。与粘贴名单分开
+      code_mapping: "config.json 的发送名单"
+    - name: 'meeting_session'
+      description: 会议白板中的「一场会」。关键：它不是独立保存的数据，而是从 day_file 的存在与间隔反推出来的
+      code_mapping: scripts/meeting-board.mjs
+    - name: 'meeting_definition'
+      description: 会前填写的会议背景、期望产出、角色、边界
+      code_mapping: "meeting-board 会议定义区"
+    - name: 'board_document'
+      description: 白板正文。用户与外部 AI 助手都可写，存在整篇替换与编辑保存两种写入方式
+      code_mapping: "meeting-board 文档文件"
+    - name: 'board_analysis'
+      description: 白板的「分析」结果。与正文分开存放，只写分析时界面不显示任何变化
+      code_mapping: "meeting-board 分析文档"
+    - name: 'config'
+      description: 用户配置。界面、命令行 rtc、外部 AI 助手三方都会写同一份文件
+      code_mapping: config.json
+    - name: 'api_key'
+      description: 云端识别或用户自配 LLM 的密钥。泄露即用户实际经济损失
+      code_mapping: "config.json 中的密钥字段"
+    - name: 'external_agent'
+      description: 外部 AI 助手。经 CLI rtc 与 REST API 接入，是产品鼓励的用法，不是攻击者
+      code_mapping: scripts/rtc.mjs、server.js REST
+    - name: 'app_instance'
+      description: 应用实例。开发模式、已安装应用、浏览器版可能同时运行
+      code_mapping: "（无互斥机制）"
+    - name: 'update_package'
+      description: 应用更新包。安装后会重启应用
+      code_mapping: src-tauri/tauri.conf.json updater
+    - name: 'event'
+      description: 事件。落盘以外的每次业务动作都应产生的事件（当前实现大多不存在，只在 ontology 中声明）
+      code_mapping: "（待实现：事件链）"
+
+  relations:
+    - name: 'FILE_CONTAINS_SEGMENT'
+      domain: 'day_file'
+      range: 'transcript_segment'
+      code_mapping: "JSONL 行的追加"
+    - name: 'SEGMENT_PRODUCED_BY'
+      domain: 'transcript_segment'
+      range: 'recognition_engine'
+      code_mapping: "记录中的 engine 字段"
+    - name: 'SEGMENT_DELIVERED_TO'
+      domain: 'transcript_segment'
+      range: 'app_target'
+      code_mapping: "记录中的 targetApp 字段 + 行末去向徽标"
+    - name: 'SESSION_DERIVED_FROM'
+      domain: 'meeting_session'
+      range: 'transcript_segment'
+      code_mapping: "场次由记录文件存在与间隔反推（C-034 / 待审查 #9）"
+    - name: 'SESSION_HAS_DOCUMENT'
+      domain: 'meeting_session'
+      range: 'board_document'
+      code_mapping: "场次 ↔ 文档文件映射"
+    - name: 'SESSION_HAS_ANALYSIS'
+      domain: 'meeting_session'
+      range: 'board_analysis'
+      code_mapping: "场次 ↔ 分析文档映射"
+    - name: 'SESSION_DEFINED_BY'
+      domain: 'meeting_session'
+      range: 'meeting_definition'
+      code_mapping: "会议定义区保存"
+    - name: 'DOCUMENT_WRITTEN_BY_USER'
+      domain: 'board_document'
+      range: 'user'
+      code_mapping: "白板编辑模式 + 自动保存"
+    - name: 'DOCUMENT_WRITTEN_BY_AGENT'
+      domain: 'board_document'
+      range: 'external_agent'
+      code_mapping: "rtc board write-document"
+    - name: 'AGENT_READS_SEGMENT'
+      domain: 'external_agent'
+      range: 'transcript_segment'
+      code_mapping: "rtc transcript / REST"
+    - name: 'AGENT_READS_DOCUMENT'
+      domain: 'external_agent'
+      range: 'board_document'
+      code_mapping: "rtc board read"
+    - name: 'COMMAND_TARGETS_APP'
+      domain: 'command_entry'
+      range: 'app_target'
+      code_mapping: "aliases 的 value = .app 包名"
+    - name: 'PASTE_LIST_CONTAINS_APP'
+      domain: 'paste_list'
+      range: 'app_target'
+      code_mapping: "config.json 粘贴名单数组"
+    - name: 'SEND_LIST_CONTAINS_APP'
+      domain: 'send_list'
+      range: 'app_target'
+      code_mapping: "config.json 发送名单数组"
+    - name: 'PASTE_LIST_GATES_SEGMENT'
+      domain: 'paste_list'
+      range: 'transcript_segment'
+      code_mapping: "决定该条是否被粘贴（影响 DELIVERED_TO）"
+    - name: 'ENGINE_SERVED_BY'
+      domain: 'recognition_engine'
+      range: 'service_endpoint'
+      code_mapping: "8932/8933（本机）、外部 HTTPS（云端）"
+    - name: 'ENDPOINT_LOADS_MODEL'
+      domain: 'service_endpoint'
+      range: 'model_file'
+      code_mapping: "asr_local 模型加载"
+    - name: 'DEVICE_CAPTURES_STREAM'
+      domain: 'audio_device'
+      range: 'audio_stream'
+      code_mapping: getUserMedia
+    - name: 'ENGINE_CONSUMES_STREAM'
+      domain: 'recognition_engine'
+      range: 'audio_stream'
+      code_mapping: "WS 音频上行"
+    - name: 'CONFIG_STORES_KEY'
+      domain: 'config'
+      range: 'api_key'
+      code_mapping: "config.json 密钥字段"
+    - name: 'USER_WRITES_CONFIG'
+      domain: 'user'
+      range: 'config'
+      code_mapping: "设置页保存"
+    - name: 'AGENT_WRITES_CONFIG'
+      domain: 'external_agent'
+      range: 'config'
+      code_mapping: "rtc config set（整份读改写，与界面不同队）"
+    - name: 'INSTANCE_WRITES_FILE'
+      domain: 'app_instance'
+      range: 'day_file'
+      code_mapping: "两个实例同时写同一份记录（C-037）"
+    - name: 'PACKAGE_RELEASES_INSTANCE'
+      domain: 'update_package'
+      range: 'app_instance'
+      code_mapping: "安装后自动重启（S-225 / C-033）"
+    - name: 'FILE_PRODUCES_EVENT'
+      domain: 'day_file'
+      range: 'event'
+      code_mapping: "记录文件的每次变更产生事件（append-only，待实现）"
+
+# 任务图：系统如何推进（状态 + 迁移）
+task_graph:
+  states:
+    - name: 'IDLE_READY'
+      description: 空闲且服务可用。状态区显示「就绪」，用户可以放心开录
+    - name: 'IDLE_UNAVAILABLE'
+      description: 空闲但服务不可达。必须如实报出原因与出路，不得显示「就绪」
+    - name: 'IDLE_ENGINE_DEGRADED'
+      description: 服务端口可达但识别不可用（模型缺失/加载失败）。必须与 IDLE_READY 区分
+    - name: 'RECORDING'
+      description: 录音中。音频流、识别链路、落盘三者都必须成立
+    - name: 'RECORDING_LOSING'
+      description: 录音中但识别链路已断，内容正在丢失。必须停下正常态并报出
+    - name: 'RECORDING_NO_SIGNAL'
+      description: 录音中但输入无有效声音（设备被静音或切走）。回调仍活，但录的是空气
+    - name: 'STOPPING'
+      description: 停止录音中，等待尾部内容落盘
+    - name: 'PERSIST_FAILED'
+      description: 内容已显示但落盘失败。不得表现为成功
+    - name: 'SLEEPING'
+      description: 系统睡眠中
+    - name: 'WAKING'
+      description: 唤醒后的恢复判定中。必须区分「自愈成功」与「救不回来」
+    - name: 'BOARD_EMPTY'
+      description: 白板无内容
+    - name: 'BOARD_READONLY'
+      description: 白板只读（默认）。外部写入可能在其间发生
+    - name: 'BOARD_EDITING'
+      description: 白板编辑中，存在未保存改动
+    - name: 'BOARD_CONFLICT'
+      description: 白板检测到磁盘被外部改动，用户改动与外部改动冲突待决
+    - name: 'CLEARING'
+      description: 清除历史执行中
+    - name: 'CLEARING_ALL'
+      description: 清除所有数据执行中（回到首次启动态）
+
+  transitions:
+    - from: 'IDLE_READY'
+      to: 'RECORDING'
+      trigger: 点击麦克风按钮 / 空格 / 全局热键
+      guard: 服务可用且麦克风授权有效
+      human_gate: false
+    - from: 'IDLE_UNAVAILABLE'
+      to: 'RECORDING'
+      trigger: 点击麦克风按钮
+      guard: "MUST_NOT 进入 —— 必须先解决可用性，或明确告知用户将要发生什么"
+      human_gate: false
+    - from: 'IDLE_ENGINE_DEGRADED'
+      to: 'RECORDING'
+      trigger: 点击麦克风按钮
+      guard: "MUST_NOT 静默进入 —— 界面必须先如实报出降级状态"
+      human_gate: false
+    - from: 'RECORDING'
+      to: 'RECORDING_LOSING'
+      trigger: 识别链路断开
+      guard: 断开超过提示窗口
+      human_gate: false
+    - from: 'RECORDING_LOSING'
+      to: 'RECORDING'
+      trigger: 链路自愈
+      guard: 重连成功
+      human_gate: false
+    - from: 'RECORDING'
+      to: 'RECORDING_NO_SIGNAL'
+      trigger: 输入电平持续低于静音阈值
+      guard: 回调仍存活（这是判据的盲区所在）
+      human_gate: false
+    - from: 'RECORDING_NO_SIGNAL'
+      to: 'RECORDING'
+      trigger: 输入恢复有效信号
+      guard: 声道电平回升
+      human_gate: false
+    - from: 'RECORDING'
+      to: 'STOPPING'
+      trigger: 点击停止 / 空格
+      guard: —
+      human_gate: false
+    - from: 'STOPPING'
+      to: 'IDLE_READY'
+      trigger: 尾部内容落盘完成
+      guard: 落盘成功
+      human_gate: false
+    - from: 'STOPPING'
+      to: 'PERSIST_FAILED'
+      trigger: 落盘失败
+      guard: 写入返回失败
+      human_gate: false
+    - from: 'PERSIST_FAILED'
+      to: 'IDLE_READY'
+      trigger: 用户处理（释放磁盘/修复目录）
+      guard: 写入恢复成功
+      human_gate: false
+    - from: 'IDLE_READY'
+      to: 'SLEEPING'
+      trigger: 系统睡眠
+      guard: —
+      human_gate: false
+    - from: 'RECORDING'
+      to: 'SLEEPING'
+      trigger: 系统睡眠
+      guard: "MUST 保证唤醒后不静默失效"
+      human_gate: false
+    - from: 'SLEEPING'
+      to: 'WAKING'
+      trigger: 系统唤醒
+      guard: —
+      human_gate: false
+    - from: 'WAKING'
+      to: 'IDLE_READY'
+      trigger: 音频与识别链路自愈成功
+      guard: 音频上下文有效且输入有信号
+      human_gate: false
+    - from: 'WAKING'
+      to: 'IDLE_UNAVAILABLE'
+      trigger: 自愈失败
+      guard: "MUST 给出可执行的恢复动作"
+      human_gate: false
+    - from: 'BOARD_EMPTY'
+      to: 'BOARD_READONLY'
+      trigger: 写入正文或分析
+      guard: —
+      human_gate: false
+    - from: 'BOARD_READONLY'
+      to: 'BOARD_EDITING'
+      trigger: 点击「编辑」
+      guard: —
+      human_gate: false
+    - from: 'BOARD_EDITING'
+      to: 'BOARD_READONLY'
+      trigger: 自动保存成功
+      guard: 磁盘内容与用户基线一致
+      human_gate: false
+    - from: 'BOARD_EDITING'
+      to: 'BOARD_CONFLICT'
+      trigger: 自动保存前检测到磁盘被外部改动
+      guard: 磁盘指纹 != 用户基线指纹
+      human_gate: true
+    - from: 'BOARD_CONFLICT'
+      to: 'BOARD_EDITING'
+      trigger: 用户选择保留哪一版
+      guard: "人类闸门 —— 不得由任一方静默决定"
+      human_gate: true
+    - from: 'BOARD_READONLY'
+      to: 'BOARD_READONLY'
+      trigger: 外部写入
+      guard: "MUST 让用户知情（内容变化必须有可见提示）"
+      human_gate: false
+    - from: 'IDLE_READY'
+      to: 'CLEARING'
+      trigger: 点击「清除历史」
+      guard: 二次确认通过
+      human_gate: true
+    - from: 'CLEARING'
+      to: 'IDLE_READY'
+      trigger: 清除完成
+      guard: "所有界面（列表/统计/白板）同步反映，无死入口"
+      human_gate: false
+    - from: 'IDLE_READY'
+      to: 'CLEARING_ALL'
+      trigger: 点击「清除所有数据」
+      guard: 二次确认通过
+      human_gate: true
+    - from: 'CLEARING_ALL'
+      to: 'IDLE_READY'
+      trigger: 清除完成
+      guard: 回到首次启动态（含配置与密钥）
+      human_gate: false
+    - from: 'PERSIST_FAILED'
+      to: 'RECORDING'
+      trigger: 用户处理过程中重新开录
+      guard: "MUST_NOT 在未处理前静默继续"
+      human_gate: false

@@ -1,0 +1,32 @@
+# 来源能力问题：S-064
+schema: zkge.claim/v1
+id: CLAIM.REC.002
+business_id: S-064
+business_entry: '主界面记录列表'
+business_question: '一条记录只写了一半就被打断（比如应用被强退），用户看到的是缺字的那条还是干脆没有？'
+statement: '记录文件的部分写入不得产生一条损坏或半截的记录'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '进程中断 / 写入被截断'
+  excluded:
+    - '历史遗留的损坏文件（应可被识别并跳过）'
+assumptions:
+  - id: ASSUMPTION.REC.002
+    text: 'JSONL 追加必须保证行原子性'
+oracle:
+  type: invariant
+  expression: '每条 JSONL 行均可被解析；解析失败行为 0'
+counterexample:
+  expression: '存在无法解析或以半截形式持久化的记录行'
+required_verifiers:
+    - 'property_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

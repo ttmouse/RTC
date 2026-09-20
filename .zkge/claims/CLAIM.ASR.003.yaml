@@ -1,0 +1,32 @@
+# 来源能力问题：S-045
+schema: zkge.claim/v1
+id: CLAIM.ASR.003
+business_id: S-045
+business_entry: '主界面长时间快速说话'
+business_question: '用户说得又快又多，识别跟不上的时候，中间那段话会不会被悄悄丢掉而用户完全不知道？'
+statement: '识别吞吐跟不上输入速度时，不得静默丢弃中间内容'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '长时间快速连续说话'
+  excluded:
+    - '显式判定为噪声而丢弃、且该判定可被用户追溯'
+assumptions:
+  - id: ASSUMPTION.ASR.003
+    text: '背压必须可见，不能表现为静默丢字'
+oracle:
+  type: property
+  expression: 'dropped_segments == 0 或 dropped_segments 已被显式上报给用户'
+counterexample:
+  expression: '存在被丢弃且用户不知情的识别片段'
+required_verifiers:
+    - 'property_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

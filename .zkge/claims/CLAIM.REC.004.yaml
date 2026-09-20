@@ -1,0 +1,31 @@
+# 来源能力问题：C-034
+schema: zkge.claim/v1
+id: CLAIM.REC.004
+business_id: C-034
+business_entry: '设置页清除历史 → 会议白板'
+business_question: '「清除历史」会把通往已保存白板正文的路一起铲掉：白板的会议场次是从记录文件反推出来的，记录没了，场次列表塌掉，用户之前存过的 AI 正文还躺在电脑上，界面上却再也没有入口找到它们。'
+statement: '清除历史不得在白板会议列表中留下指向已删除记录的死入口，也不得让已保存的白板正文失去访问途径'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '白板中已保存过 AI 正文'
+  excluded:
+    - '用户明确选择连同白板内容一起清除'
+assumptions:
+  - id: ASSUMPTION.REC.004
+    text: '白板场次由记录文件反推，这个耦合必须被显式处理而不是任其坍塌'
+oracle:
+  type: integration
+  expression: '清除后，白板中不存在选中后无法加载内容的场次；已保存正文仍有可达入口'
+counterexample:
+  expression: '清除后白板场次列表塌掉，用户已保存的正文在界面上找不到入口'
+required_verifiers:
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

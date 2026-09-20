@@ -1,0 +1,31 @@
+# 来源能力问题：S-147
+schema: zkge.claim/v1
+id: CLAIM.CONFIG.004
+business_id: S-147
+business_entry: '版本回退后打开设置页'
+business_question: '以后配置里加出新项目，老版本的应用会不会把新项目抹掉？'
+statement: '旧版本应用不得抹掉配置文件中它不认识的新项目'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A2
+scope:
+  included:
+    - '版本回退 / 多版本共存'
+  excluded:
+    - '用户显式清除数据'
+assumptions:
+  - id: ASSUMPTION.CONFIG.004
+    text: '配置是前向兼容的载体，未知键必须透传而不是丢弃'
+oracle:
+  type: invariant
+  expression: '写入后，原本存在但当前版本不认识的配置键全部保留'
+counterexample:
+  expression: '版本回退或旧版本运行时，较新版本写入的配置项消失'
+required_verifiers:
+    - 'unit_test'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

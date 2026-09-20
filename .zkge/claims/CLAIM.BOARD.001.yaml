@@ -1,0 +1,32 @@
+# 来源能力问题：S-209, C-020
+schema: zkge.claim/v1
+id: CLAIM.BOARD.001
+business_id: S-209
+business_entry: '白板编辑模式 + 外部写入'
+business_question: '外部 AI 助手写回来的时候，会不会把用户自己写的内容覆盖掉？用户事先知道吗？'
+statement: '外部整篇替换正文时必须保留用户手写段落，或事先阻止，不得静默抹掉'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '白板中已有用户编辑的正文'
+  excluded:
+    - '写入方显式使用保留原文的写入模式'
+assumptions:
+  - id: ASSUMPTION.BOARD.001
+    text: '提醒出现在命令行 stderr 是给助手看的，而受伤的是用户'
+oracle:
+  type: invariant
+  expression: '非 append 写入后，用户手写段落仍存在，或被明确拒绝'
+counterexample:
+  expression: '外部整篇替换后用户手写内容永久消失，且用户界面上无任何提示'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

@@ -37,7 +37,7 @@
   #dot.on{ background:var(--seal); box-shadow:0 0 0 3px rgba(191,58,30,.2); }
   /* 状态机：异常状态点，复用既有告警色 */
   #dot.err{ background:var(--seal-deep); }
-  .header-actions{ display:flex; align-items:center; gap:10px; }
+  .header-actions{ display:flex; align-items:center; gap:12px; }
   .statsWrap{ position:relative; display:flex; align-items:center; }
   /* 顶栏这一排图标（统计 / 推荐 / 搜索 / 语音指令 / 白板 / 设置）********
      六个入口共用四段规则：盒模型 / svg / 悬停 / 焦点。新增顶栏入口时加进这四段，别再各写一套。
@@ -47,11 +47,11 @@
      悬停不再变印章红，而是给一层浅色的纸底（--paper-2）加图标转墨色：红是稀缺色，
      留给录音中的圆点、输入光标和键盘焦点（见规范第 1 节）。 */
   #statsBtn, #shareBtn, #searchBtn, #cmdBtn, #meetingBoardBtn, #settingsBtn{
-        background:none; border:none; color:var(--ink-soft); padding:4px;
+        background:none; border:none; color:var(--ink-soft); padding:5px;
         border-radius:var(--radius); cursor:pointer; line-height:0;
         display:inline-flex; align-items:center; justify-content:center; }
   #statsBtn svg, #shareBtn svg, #searchBtn svg, #cmdBtn svg, #meetingBoardBtn svg, #settingsBtn svg{
-        display:block; width:15px; height:15px; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+        display:block; width:17px; height:17px; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   #statsBtn:hover, #shareBtn:hover, #searchBtn:hover, #cmdBtn:hover, #meetingBoardBtn:hover, #settingsBtn:hover{
         background:var(--paper-2); color:var(--ink); }
   #statsBtn:focus-visible, #shareBtn:focus-visible, #searchBtn:focus-visible, #cmdBtn:focus-visible,
@@ -701,15 +701,32 @@
   .pasteBadge{ flex-shrink:0; display:inline-flex; align-items:center; justify-content:center;
         min-width:21px; height:21px; margin-top:2px; font-size:11px; line-height:1;
         cursor:default; -webkit-user-select:none; user-select:none; }
+  .pasteBadge[data-kind="app"]{ cursor:pointer; }
   /* 弱是弱在图标上：图标/标记半透明，悬停才实；应用名是文字，不压不透明度——
      11px 的浅墨色已经是能读的底线，再叠透明会低于可读对比度（check:ux 会报） */
   .pasteBadge img{ width:21px; height:21px; border-radius:3px; display:block;
         opacity:1; transition:opacity .15s; }
   .line:hover .pasteBadge img{ opacity:1; }
-  .pasteBadge svg{ width:20px; height:20px; color:var(--ink-faint);
-        opacity:.75; transition:opacity .15s; }
-  .line:hover .pasteBadge svg{ opacity:1; }
+  .pasteBadge svg{ width:21px; height:21px; color:var(--ink-faint);
+        opacity:.55; transition:opacity .15s; }
+  .line:hover .pasteBadge svg{ opacity:.82; }
   .pasteBadgeName{ color:var(--ink-soft); }
+  /* 应用徽标右键菜单：只承载当前应用的两条规则，不把设置页整块搬出来。 */
+  .appContextMenu{ position:fixed; z-index:120; width:190px; padding:5px;
+        background:var(--paper); border:1px solid var(--rule); border-radius:6px;
+        box-shadow:0 6px 18px rgba(26,22,17,.16); }
+  .appContextMenu.hidden{ display:none; }
+  .appContextMenuTitle{ padding:6px 9px 5px; color:var(--ink-soft); font-size:11px;
+        border-bottom:1px solid var(--rule); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .appContextMenu button{ display:flex; align-items:center; justify-content:space-between; width:100%; padding:7px 9px; border:0; border-radius:4px;
+        background:transparent; color:var(--ink); text-align:left; font:inherit; font-size:12px; cursor:pointer; }
+  .appContextMenu button:hover:not(:disabled){ background:var(--paper-2); }
+  .appContextMenuCopy{ margin-bottom:4px; border-bottom:1px solid var(--rule) !important; border-radius:0 !important; }
+  .appContextMenu button > span:first-child{ min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .appContextMenuCheck{ display:inline-flex; flex:0 0 16px; width:16px; height:16px; margin-left:12px;
+        align-items:center; justify-content:center; color:var(--ink-soft); }
+  .appContextMenuCheck svg{ width:14px; height:14px; stroke-width:2.5; }
+  .appContextMenu button:disabled{ color:var(--ink-faint); cursor:default; }
   /* 这里没有悬停提示：徽标只回答「这句去哪了」，用户明确说过没提的需求不做 */
   #err{ color:var(--seal-deep); font-size:12px; padding:5px 20px; display:none;
         background:#f3e3dc; position:relative; z-index:2; font-family:var(--font); }
@@ -801,7 +818,7 @@
   @media (max-width:640px){
     header{ padding:10px 14px; flex-wrap:wrap; gap:6px; }
     header h1{ font-size:14px; }
-    .header-actions{ flex-wrap:wrap; gap:6px; }
+    .header-actions{ flex-wrap:wrap; gap:8px; }
     .statsOverview{ grid-template-columns:repeat(3, 1fr); gap:8px; }
     #statsPage .settingsPageHeader{ padding-left:20px; padding-right:20px; }
     #statsPageBody{ padding:24px 20px 36px; }

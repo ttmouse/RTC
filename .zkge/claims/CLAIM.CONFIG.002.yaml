@@ -1,0 +1,32 @@
+# 来源能力问题：S-143
+schema: zkge.claim/v1
+id: CLAIM.CONFIG.002
+business_id: S-143
+business_entry: '手工编辑配置文件后打开应用'
+business_question: '配置文件被改坏或者损坏时，应用还能不能启动？会不会直接把用户所有设置重置掉？'
+statement: '配置文件损坏时应用必须能启动并保留可恢复的部分，不得静默重置全部设置'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '手工编辑或外部工具写坏了配置文件'
+  excluded:
+    - '配置文件不存在（首次启动，属正常路径）'
+assumptions:
+  - id: ASSUMPTION.CONFIG.002
+    text: '「读全量→改一项→写全量」的写法是配置损坏的已知来源'
+oracle:
+  type: runtime
+  expression: '损坏配置下应用可启动，且用户被明确告知发生了什么、原文件有留底'
+counterexample:
+  expression: '配置损坏后应用启动即把全部设置重置且不告知用户'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN

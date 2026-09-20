@@ -1,0 +1,251 @@
+# score-card.yaml —— 测试设计 Score Card（阶段⑤ 测试设计）
+# 项目：RTC 实时语音转文字 ｜ 人工填写（替换技能模板）
+#
+# 核心思想（诚实原则）：
+#   Score Card 先行，覆盖率只是反向校验 —— 每个测试从场景倒推而来，覆盖率是结果不是目标。
+#   「倒推影响面」列是本表灵魂：每个测试失败时，它倒推证明哪个设计点被破坏。
+#   质量密度 = 需求声明 + 状态与交互 + 错误路径 + 变异与故障 + 真实运行 五维同时成立。
+
+schema: zkge.score-card/v1
+project_id: PROJECT.RTC
+
+# ── L 级分层策略（按 RTC 实际工具链落地，不是通用模板）──────────────────────
+# L0 模块级：纯 JS 模块 / 纯函数，node 直接跑，无浏览器无 Electron——每次提交
+# L1 领域行为：VAD / 时间分组 / 应用名单 / 模型恢复，仍为 node 级——每次提交
+# L2 集成：白板编辑器（vite build + node 测试脚本）、CLI rtc、REST——每合并
+# L3 系统（真实运行环境）：Tauri 桌面端 + 真实 8931/8932/8933 服务 + 真实音频设备——每里程碑
+layering:
+  L0:
+    scope: "纯模块（node --test 风格，.test.mjs）"
+    tools: "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/*.test.mjs"
+    frequency: "每次提交（已挂在 npm test）"
+    targets:
+      - "VAD 阈值与自动噪声校准（tests/vad.test.mjs）"
+      - "聊天时间分组规则（tests/time-grouping.test.mjs）"
+      - "静态可加载性（scripts/check-static.mjs）"
+      - "未定义标识符（scripts/check-undefined.mjs，抓 ReferenceError 类整页失效）"
+  L1:
+    scope: "领域行为（状态判据、恢复路径、名单匹配）"
+    tools: "node tests/main-status.test.mjs / model-recovery.test.mjs / audio-recovery.test.mjs / app-rule-lists.test.mjs"
+    frequency: "每次提交（已挂在 npm test）"
+    targets:
+      - "主界面状态判据（就绪 / 降级 / 不可用）"
+      - "本地模型缺失或加载失败时的恢复路径"
+      - "睡眠唤醒后的音频恢复判定"
+      - "自动粘贴/自动发送的应用名单匹配（含空名单=全局老行为）"
+  L2:
+    scope: "白板编辑器 + 外部通道（需先 vite build）"
+    tools: "cd meeting-board && npx vite build && node --test meeting-board/tests/*.test.mjs"
+    frequency: "每合并"
+    targets:
+      - "外部 AI 写入与正文/分析的分离（ai-content-write.test.mjs）"
+      - "外部刷新指纹三分支（external-refresh.test.mjs）"
+      - "逐字稿面板与场次搜索（transcript / session-search / preliminary-panel）"
+      - "编辑器滚动与 IME 守卫（editor-scroll.test.mjs）"
+  L3:
+    scope: "系统级真实运行（Tauri/WKWebView + 真实本机服务 + 真实麦克风）"
+    tools: "npm run dev（桌面端人工实测）｜npm run check:audio（音频链路，需 Playwright）｜npm run check:ux（需先 vite build）"
+    frequency: "每里程碑 / 发布前"
+    targets:
+      - "录音中拔麦、系统静音、设备切换的真实表现"
+      - "睡眠唤醒后音频上下文 interrupted 的真实恢复"
+      - "磁盘满 / 目录不可写时的落盘失败表现"
+      - "更新安装期间正在录音的处理"
+      - "图谱 roundtrip（阶段⑨）"
+
+# ── Score Card 用例（每行 9 列）──────────────────────────────────────────────
+# id | scenario | stage | system | component | code_loc | deps | risk | impact_if_fails
+cases:
+  - id: L0-01
+    scenario: "VAD 静音判定与自动噪声校准：静音不得被当成有效语音，且不吞掉低音量真语音"
+    stage: "采集·判定"
+    system: "RTC 前端"
+    component: "src/js/vad.js"
+    code_loc: "src/js/vad.js"
+    deps: "无"
+    risk: "中：误判=丢内容或录空气"
+    impact_if_fails: "CLAIM.AUDIO.001 / CLAIM.AUDIO.003；能力问题 S-009/S-015"
+  - id: L0-02
+    scenario: "录制按钮与界面元素在静态层面可被加载（历史事故：CSS 游离声明块吞掉下一条规则，按钮退化成灰方块）"
+    stage: "主界面"
+    system: "RTC 前端"
+    component: "scripts/check-static.mjs"
+    code_loc: "scripts/check-static.mjs"
+    deps: "无"
+    risk: "中：整块 UI 静默失效"
+    impact_if_fails: "能力问题 S-002 类；UI 基本可用性"
+  - id: L0-03
+    scenario: "模块顶层常量被删导致整页停在 hidden（ReferenceError）"
+    stage: "全站"
+    system: "RTC 前端"
+    component: "scripts/check-undefined.mjs"
+    code_loc: "scripts/check-undefined.mjs"
+    deps: "tsc --checkJs"
+    risk: "高：入口点了没反应"
+    impact_if_fails: "全部前端 claim 的前置条件"
+  - id: L1-01
+    scenario: "主界面状态判据：端口可达但模型未加载时不得显示「就绪」"
+    stage: "状态区"
+    system: "RTC 前端 + 本机服务"
+    component: "src/js/state.js / asr.js"
+    code_loc: "tests/main-status.test.mjs"
+    deps: "无（模拟服务探测结果）"
+    risk: "高：状态说谎"
+    impact_if_fails: "CLAIM.ASR.001；能力问题 C-005 / S-042"
+  - id: L1-02
+    scenario: "本机模型缺失或加载失败时的恢复路径"
+    stage: "识别"
+    system: "RTC + asr_local"
+    component: "src/js/asr.js"
+    code_loc: "tests/model-recovery.test.mjs"
+    deps: "无"
+    risk: "高：录音中静默丢话"
+    impact_if_fails: "CLAIM.ASR.002；能力问题 S-042"
+  - id: L1-03
+    scenario: "睡眠唤醒后音频/识别链路不可用时的判定与恢复动作"
+    stage: "生命周期"
+    system: "RTC（WKWebView）"
+    component: "src/js/audio.js / lifecycle.js"
+    code_loc: "tests/audio-recovery.test.mjs"
+    deps: "无（模拟上下文状态）"
+    risk: "高：界面照旧却不转写"
+    impact_if_fails: "CLAIM.LIFECYCLE.001 / 002；能力问题 S-189 / S-190"
+  - id: L1-04
+    scenario: "自动粘贴/自动发送的应用名单匹配（含名单外静默、空名单=全局老行为）"
+    stage: "投递"
+    system: "RTC 前端"
+    component: "src/js/pastebadge.js / clipboard.js"
+    code_loc: "tests/app-rule-lists.test.mjs"
+    deps: "无"
+    risk: "中：发到错误应用"
+    impact_if_fails: "CLAIM.PASTE.001；能力问题 S-105 / S-125"
+  - id: L2-01
+    scenario: "外部 AI 整篇替换正文时不得静默抹掉用户手写段落"
+    stage: "白板·写入"
+    system: "meeting-board"
+    component: "src/lib/*（write-document 通道）"
+    code_loc: "meeting-board/tests/ai-content-write.test.mjs"
+    deps: "先 npx vite build"
+    risk: "高：用户内容不可恢复"
+    impact_if_fails: "CLAIM.BOARD.001；能力问题 S-209 / C-020"
+  - id: L2-02
+    scenario: "外部写入后白板界面的自动重读（指纹三分支）"
+    stage: "白板·刷新"
+    system: "meeting-board"
+    component: "externalRefresh"
+    code_loc: "meeting-board/tests/external-refresh.test.mjs"
+    deps: "先 npx vite build"
+    risk: "中：内容变了界面不显示"
+    impact_if_fails: "CLAIM.BOARD.003 / BOARD.006；能力问题 C-024"
+  - id: L2-03
+    scenario: "场次搜索与逐字稿面板在记录被清除后的表现（死入口）"
+    stage: "白板·场次"
+    system: "meeting-board"
+    component: "src/lib/sessionSearch.js / transcript"
+    code_loc: "meeting-board/tests/session-search.test.mjs"
+    deps: "先 npx vite build"
+    risk: "高：清除后仍可打开旧内容"
+    impact_if_fails: "CLAIM.REC.004；能力问题 C-034"
+  - id: L3-01
+    scenario: "录音中拔麦 / 系统静音输入：界面必须报出无有效声音"
+    stage: "采集·真实设备"
+    system: "Tauri 桌面端 + 真实麦克风"
+    component: "src/js/audio.js startAudioFlowWatch"
+    code_loc: "（人工实测脚本待补）"
+    deps: "真实设备 + 系统设置"
+    risk: "高：录的是空气，用户以为在录"
+    impact_if_fails: "CLAIM.AUDIO.001；能力问题 C-001"
+  - id: L3-02
+    scenario: "落盘失败（磁盘满 / 目录不可写）时不得显示成功"
+    stage: "记录·持久化"
+    system: "Tauri 桌面端 + 真实文件系统"
+    component: "src/js/storage.js / history.js"
+    code_loc: "（人工实测脚本待补）"
+    deps: "需构造故障（挂载只读卷 / 占满磁盘）"
+    risk: "高：内容丢失且无告知"
+    impact_if_fails: "CLAIM.REC.001 / REC.002；能力问题 C-003 / S-064"
+  - id: L3-03
+    scenario: "清除历史后所有界面同步（主列表 / 统计 / 白板），且无残留副本"
+    stage: "数据生命周期"
+    system: "Tauri 桌面端"
+    component: "src/js/history.js / state.js"
+    code_loc: "（人工实测脚本待补）"
+    deps: "真实数据目录（须用 RTC_DATA_DIR 隔离，勿动真实记录）"
+    risk: "高：不可逆清除不彻底"
+    impact_if_fails: "CLAIM.REC.003 / REC.004 / REC.005；能力问题 S-072 / S-184 / C-025 / C-034"
+  - id: L3-04
+    scenario: "同机多实例并发写同一份记录与配置"
+    stage: "并发"
+    system: "Tauri 桌面端 + 浏览器版"
+    component: "src/js/storage.js"
+    code_loc: "（人工实测脚本待补）"
+    deps: "需同时启动 dev 与已安装应用"
+    risk: "高：静默互相覆盖"
+    impact_if_fails: "CLAIM.CONFIG.005；能力问题 C-037"
+
+# ── 覆盖率策略 ───────────────────────────────────────────────────────────────
+coverage:
+  hard_gates:
+    - "L0/L1 全绿（npm test 通过）——否则不得进入任何里程碑"
+  targets:
+    - "L2 白板测试全绿（先 vite build）"
+    - "L3 每个 R3 冻结 claim 至少一条真实环境实测记录"
+  honest_declaration: |
+    当前状态：L0/L1 已有 6 个测试文件（挂在 npm test）；L2 有 8 个白板测试文件但未挂进 CI；
+    L3 为 0 —— 4 条 L3 用例（L3-01..04）连脚本都还没有。
+    与目标的差距：
+    ① 38 条 R3 claim 中，只有约 12 条能映射到现有测试，其余依赖人工实测或属性测试框架（未自建）；
+    ② 真实故障形态（磁盘满 / 设备拔插 / 系统静音 / 睡眠唤醒 / 更新中断）没有任何自动化等价覆盖；
+    ③ 浏览器检查（check:audio / check:ux）无法复现 WKWebView 的 AudioContext 'interrupted'，需 Playwright 且当前依赖不在仓库中；
+    ④ 覆盖率数字 ≠ 故障注入等价性——本表不提供行覆盖率，也不以覆盖率作为通过依据。
+
+# ── CQ → 测试 roundtrip 映射（阶段⑨ 的测试侧锚）─────────────────────────────
+# 每个能力问题必须能映射到 ≥1 个测试；答不出 → 覆盖缺口。
+# 键用 claim id（R3 冻结项）；括号内为来源能力问题编号。
+cq_test_mapping:
+  CLAIM.ASR.001: { questions: [C-005, S-042], tests: [L1-01], verified: false }
+  CLAIM.ASR.002: { questions: [S-042], tests: [L1-02, L3-02], verified: false }
+  CLAIM.ASR.003: { questions: [S-045], tests: [], verified: false, gap: "无测试——依赖未自建的属性测试框架" }
+  CLAIM.ASR.004: { questions: [S-048], tests: [], verified: false, gap: "无测试——需先确定「可找回」的产品形态" }
+  CLAIM.ASR.005: { questions: [S-040], tests: [], verified: false, gap: "无测试——密钥落盘形态未查证" }
+  CLAIM.AUDIO.001: { questions: [C-001], tests: [L0-01, L3-01], verified: false }
+  CLAIM.AUDIO.002: { questions: [C-002, S-021], tests: [L1-01], verified: false }
+  CLAIM.AUDIO.003: { questions: [S-009], tests: [L0-01], verified: false }
+  CLAIM.AUDIO.004: { questions: [S-024, S-068], tests: [], verified: false, gap: "无测试——边录边清除的时序需 L3" }
+  CLAIM.BOARD.001: { questions: [S-209, C-020], tests: [L2-01], verified: false }
+  CLAIM.BOARD.002: { questions: [S-166, S-215, C-019], tests: [], verified: false, gap: "无测试——冲突提示当前无实现" }
+  CLAIM.BOARD.003: { questions: [S-162], tests: [L2-02], verified: false }
+  CLAIM.BOARD.004: { questions: [S-170], tests: [L2-03], verified: false }
+  CLAIM.BOARD.005: { questions: [S-214], tests: [], verified: false, gap: "无测试——连续两次外部写入未覆盖" }
+  CLAIM.BOARD.006: { questions: [C-024], tests: [L2-02], verified: false }
+  CLAIM.CMD.001: { questions: [S-096, S-098], tests: [L1-04], verified: false }
+  CLAIM.CMD.002: { questions: [C-017], tests: [], verified: false, gap: "无测试——陈旧快照复活条目需专项用例" }
+  CLAIM.CMD.003: { questions: [S-095], tests: [], verified: false, gap: "无测试——恢复默认的确认与写盘时序" }
+  CLAIM.CMD.004: { questions: [C-036, S-127], tests: [], verified: false, gap: "无测试——取消不写入需专项用例" }
+  CLAIM.CONFIG.001: { questions: [S-140, C-014, C-015], tests: [], verified: false, gap: "无测试——并发写配置需 L3" }
+  CLAIM.CONFIG.002: { questions: [S-143], tests: [], verified: false, gap: "无测试——配置损坏的启动路径" }
+  CLAIM.CONFIG.003: { questions: [S-128, S-145], tests: [], verified: false, gap: "无测试——恢复默认的留底" }
+  CLAIM.CONFIG.004: { questions: [S-147], tests: [], verified: false, gap: "无测试——未知键透传" }
+  CLAIM.CONFIG.005: { questions: [C-037], tests: [], verified: false, gap: "无测试——需 L3-04 多实例并发" }
+  CLAIM.EXT.001: { questions: [S-210, S-211], tests: [], verified: false, gap: "无测试——跨源读取需真实浏览器 + 本机服务" }
+  CLAIM.EXT.002: { questions: [S-218], tests: [], verified: false, gap: "无测试——同机其它程序读取面未查证" }
+  CLAIM.LIFECYCLE.001: { questions: [S-189], tests: [L1-03], verified: false }
+  CLAIM.LIFECYCLE.002: { questions: [S-190], tests: [L1-03], verified: false }
+  CLAIM.PASTE.001: { questions: [S-105, S-125], tests: [L1-04], verified: false }
+  CLAIM.PKG.001: { questions: [S-230, S-245, C-040], tests: [L0-02], verified: false }
+  CLAIM.REC.001: { questions: [C-003], tests: [L3-02], verified: false }
+  CLAIM.REC.002: { questions: [S-064], tests: [], verified: false, gap: "无测试——半截行需故障注入" }
+  CLAIM.REC.003: { questions: [S-072, S-184, C-025], tests: [L3-03], verified: false }
+  CLAIM.REC.004: { questions: [C-034], tests: [L2-03, L3-03], verified: false }
+  CLAIM.REC.005: { questions: [S-078], tests: [], verified: false, gap: "无测试——残留副本需逐个载体排查" }
+  CLAIM.UPDATE.001: { questions: [S-225, C-033], tests: [], verified: false, gap: "无测试——更新中断录音需真实更新包" }
+  CLAIM.UPDATE.002: { questions: [S-228], tests: [], verified: false, gap: "无测试——更新不动用户数据需真实更新包" }
+  CLAIM.UPDATE.003: { questions: [C-043], tests: [], verified: false, gap: "无测试——更新后授权失效需真实系统授权变更" }
+
+cq_coverage_gap_summary: |
+  38 条 R3 冻结 claim 中：
+    有测试文件可映射：14 条
+    完全无测试：24 条
+  无测试的 24 条中，缺口最集中在：配置并发写（CONFIG 5 条）、更新与授权（UPDATE 3 条）、
+  本机端口暴露面（EXT 2 条）、白板冲突（BOARD.005 / CMD.002-004）。
+  这些缺口必须在对应 claim 判定 PASS 之前补齐——当前所有 claim 的 status 均为 UNKNOWN。

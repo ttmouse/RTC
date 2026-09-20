@@ -1,0 +1,32 @@
+# 来源能力问题：S-072, S-184, C-025
+schema: zkge.claim/v1
+id: CLAIM.REC.003
+business_id: S-072
+business_entry: '设置页清除历史记录按钮'
+business_question: '用户点「清除历史记录」，是不是真的删干净了？还能不能找回？他清之前知不知道后果？'
+statement: '执行「清除历史」后所有界面（主列表 / 统计页 / 白板逐字稿）必须同步反映，不得残留旧内容'
+owner: product.rtc
+risk_level: R3
+required_assurance_level: A3
+scope:
+  included:
+    - '用户在主界面或设置页触发清除'
+  excluded:
+    - '清除失败（应由 CLAIM.REC.001 的失败路径覆盖）'
+assumptions:
+  - id: ASSUMPTION.REC.003
+    text: '破坏性操作的「做完之后」与「做的时候」同等重要'
+oracle:
+  type: integration
+  expression: '清除完成后，所有界面读到的记录集合为空且计数为 0'
+counterexample:
+  expression: '任一界面仍显示清除前的内容或数字'
+required_verifiers:
+    - 'unit_test'
+    - 'runtime_manual'
+invalidation_inputs:
+  - specification_digest
+  - source_digest
+  - artifact_digest
+  - verifier_digest
+status: UNKNOWN
