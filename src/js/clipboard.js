@@ -3,7 +3,7 @@ import { toast } from './ui.js';
 import { apiUrl } from './api.js';
 import { playPaste } from './sfx.js';
 
-export function pasteToCursor(text, autoEnter) {
+export function pasteToCursor(text, autoEnter, { suppressSound = false } = {}) {
   const t0 = performance.now();
   const logTiming = (stage, ok = true) => {
     console.log('[timing-js]', JSON.stringify({
@@ -27,7 +27,7 @@ export function pasteToCursor(text, autoEnter) {
     }
     logTiming('paste.done');
     console.log(`[paste] ${source} Cmd+V 已发送`);
-    playPaste();
+    playPaste({ suppress: suppressSound });
     return status;
   };
   const tauriInvoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;

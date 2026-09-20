@@ -117,6 +117,13 @@ for (const file of jsFiles) {
       }
     }
   }
+
+  // `new URL('./asset', import.meta.url)` 也是模块的静态依赖。漏拷音效这类资源时，
+  // JS 语法完全正常、页面也能打开，只会在用户点击后悄悄 404，所以在构建前钉死。
+  for (const m of src.matchAll(/new URL\(['"](\.[^'"]+)['"],\s*import\.meta\.url\)/g)) {
+    const asset = path.resolve(path.dirname(filePath), m[1]);
+    if (!fs.existsSync(asset)) fail(`${rel(filePath)}: 引用了不存在的静态资源 ${m[1]}`);
+  }
 }
 
 // ── 3) 后端 JS：语法 ──
