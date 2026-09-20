@@ -4,7 +4,7 @@
  * 端口 8931：HTTP 服务（前端页面）+ WebSocket 代理（引擎分流）
  *
  * 浏览器 → ws://localhost:8931 → 本服务器 → 上游引擎
- *                                      ├─ engine=bailian → wss://dashscope（百炼 ASR，过滤中间帧）
+ *                                      ├─ engine=bailian → wss://dashscope（百炼 ASR，结果原样转发）
  *                                      └─ engine=local   → ws://127.0.0.1:8932（本地 SenseVoice，全转发）
  */
 
@@ -107,6 +107,7 @@ const MIME = {
   '.json': 'application/json',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.wav': 'audio/wav',
 };
 
 /**
@@ -438,7 +439,13 @@ function deepMerge(base, patch) {
 function patchConfig(partial, callback) {
   enqueueConfigTask(async () => {
     const current = await readConfigFile();
-    await writeConfigFile(deepMerge(current, partial));
+    const next = deepMerge(current, partial);
+    // VAD 已从「自动 / 手动」收敛为主界面单一刻度。旧字段只读一次做迁移，
+    // 前端以 null 作删除请求；不把 null 改成全局删除语义，避免影响其它配置。
+    if (partial.settings && partial.settings.vadMode === null && next.settings) {
+      delete next.settings.vadMode;
+    }
+    await writeConfigFile(next);
   }, callback);
 }
 
@@ -2036,7 +2043,7 @@ const server = http.createServer((req, res) => {
  * `auto_paste` 是「本地引擎切换 + 本地 VAD 调参」用的，百炼那边没有任何对应概念。
  * 用户可见的 auto_paste 保留（前端要读回），其余在百炼分支剥掉。
  */
-const LOCAL_ONLY_PARAMS = ['engine', 'qwen3_model_dir', 'vad_threshold', 'silence_timeout'];
+const LOCAL_ONLY_PARAMS = ['engine', 'qwen3_model_dir', 'vad_threshold', 'silence_timeout', 'push_to_talk'];
 
 /** 百炼分支的 run-task 清洗：剥掉本地专用参数，其余字段原样保留。 */
 function sanitizeBailianTask(text) {
@@ -2166,19 +2173,15 @@ wss.on('connection', (ws, request) => {
               ws.send(TIMING_LOGS ? JSON.stringify(parsed) : text);
             }
           } else {
-            // 百炼中间帧只用于前端实时显示，最终是否落盘由前端的 sentence_end 决定。
-            // 不能在这里按标点或 end_time 过滤，否则会把 RTC 的实时打字效果一起删掉。
+            // 百炼的中间帧和最终帧统一原样转给前端：原始项目就是这样处理的，
+            // 前端根据 sentence_end / end_time 决定临时显示还是定型保存。
+            // 这里如果先在代理层改造成自定义消息或过滤帧，容易丢掉百炼用于
+            // 补全首句的后续结果，表现为「只识别出半句话」或「晚一帧才完整」。
             if (textContent) {
-              const isFinal = sentence && (sentence.sentence_end === true || sentence.end_time > 0);
-              console.log(`[server] bailian ${isFinal ? 'final' : 'interim'}: ${textContent.slice(0, 40)}...`);
-              if (isFinal) {
-                ws.send(TIMING_LOGS ? JSON.stringify(parsed) : text);
-              } else {
-                // 中间帧使用独立消息类型，避免旧前端把它误当成正式 result-generated 落盘。
-                ws.send(JSON.stringify({ type: 'bailian-interim', sentence }));
-              }
+              console.log(`[server] bailian result: ${textContent.slice(0, 40)}...`);
+              ws.send(TIMING_LOGS ? JSON.stringify(parsed) : text);
             } else {
-              console.log(`[server] skip interim (no text)`);
+              console.log(`[server] skip result (no text)`);
             }
           }
         } else {

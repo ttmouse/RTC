@@ -235,15 +235,6 @@
       </div>
 
       <!-- 拾音参数：仅本地引擎使用，选中本地引擎时直接显示在下方 -->
-      <div class="s-field">
-        <div class="fl">VAD 调整</div>
-        <div class="fd">自动适应环境噪声；手动模式使用主界面刻度</div>
-        <select id="vadMode" class="settingsSelect" aria-label="VAD 调整模式">
-          <option value="auto">自动</option>
-          <option value="manual">手动</option>
-        </select>
-      </div>
-
       <div class="localTuning" id="localTuningPanel">
         <div class="s-field">
           <div class="fl">静音超时</div>
@@ -263,6 +254,27 @@
         </div>
       </div>
 
+    </div>
+
+    <div class="s-group">
+      <div class="sg-title">按住说话</div>
+      <div class="s-field">
+        <div class="toggle-row">
+          <div class="ti">
+            <div class="tt">启用按住说话</div>
+            <div class="ts">开启后，按住下方快捷键开始这一句，松开立即识别并粘贴</div>
+          </div>
+          <button type="button" class="settingsToggle" id="pushToTalkEnabledToggle" aria-label="启用按住说话" aria-pressed="false"></button>
+        </div>
+      </div>
+      <div class="s-field">
+        <div class="fl">启动快捷键</div>
+        <div class="fd">点击录制后，单独按一次左/右 Control 或 Option；录制新快捷键会同时开启此功能。按住说话的识别结果会直接粘贴，不受主界面“自动粘贴”开关影响。</div>
+        <button type="button" class="shortcut-record-btn" id="pushToTalkShortcutBtn" aria-label="录制按住说话快捷键">
+          <span id="pushToTalkShortcutValue">左 ⌥</span>
+          <span class="shortcut-record-action" id="pushToTalkShortcutAction">点击录制</span>
+        </button>
+      </div>
     </div>
 
     <!-- AI 服务商：默认收起为一个子流程，标题行显示当前服务商/模型；点击展开编辑 -->

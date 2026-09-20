@@ -116,6 +116,11 @@ export function trayView(st, speaking = false, now = Date.now()) {
   if (!glyph) return null; // 没见过的状态：不猜（维持上一次的图标，也比给个可能相反的图好）
   // 出事：红压倒一切，包括「正在说话」
   if (ABNORMAL_GLYPHS.has(glyph)) return { glyph, color: TONE_ERROR, background: null };
+  // 「按住说话」表达的是用户已经主动按下，不是 VAD 有没有听到声音。
+  // 所以这条在「是否已开始录音」之前：首次按下时麦克风还在启动，反馈也必须立即出现。
+  if (state.pushToTalkVisualActive) {
+    return { glyph: SPEAKING_GLYPH, color: SPEAKING_INK, background: TONE_SPEAKING };
+  }
   // 没在录：黑白模板图（麦克风），也没有底色
   if (st.time !== 'rec') return { glyph, color: null, background: null };
   // 在录：安静是黑白圆点（= 在等你开口）；听到声音就换成白柱子 + 橙色底块

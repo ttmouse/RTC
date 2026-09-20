@@ -13,6 +13,8 @@ import { computeRunStatus } from '../src/js/ui.js';
 // 只有重开应用才恢复。所以这里钉三件事：
 //   1) 非 running 的音频上下文（含 WebKit 特有的 'interrupted'）必须被拉回 running，
 //      拉不回来就得抛错——不能假装还能录；
+//      同一条规则对**两处**实现都成立：录音的 audio.js 和提示音的 sfx.js。后者一度
+//      只认 'suspended'，结果就是「所有音效静默、界面完全正常」（用户 2026-09-20 报的）；
 //   2) 旧麦克风流「还活着吗」要按音轨状态判断，不能只看对象在不在；
 //   3) 录音中确认没有音频输入时，状态区必须说「没有声音输入」，不许继续写「识别中」。
 //
@@ -114,6 +116,14 @@ check('main.js 真的启动了音频流动看护', /startAudioFlowWatch\(\)/.tes
 check(
   'main.js 取麦克风前先问过旧流是不是死的',
   /streamIsDead\(state\.stream\)/.test(mainSrc),
+);
+
+// —— 同一个坑的另一处实现：提示音的音频上下文（sfx.js） ——
+const sfxSrc = fs.readFileSync(path.join(root, 'src/js/sfx.js'), 'utf8');
+check(
+  '提示音的音频上下文也认 WebKit 的 interrupted（只认 suspended = 所有音效静默）',
+  /async function ready\(a\)[\s\S]{0,1200}a\.resume\(\)/.test(sfxSrc)
+    && !/ctx\.state === 'suspended'\)\s*ctx\.resume\(\)/.test(sfxSrc),
 );
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

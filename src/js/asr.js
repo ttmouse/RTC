@@ -8,7 +8,6 @@ import { tryHandleSpecialCommand, learnSpecialCommand, consumeCommandMode, runCo
 import { saveEntry } from './history.js';
 import { saveTotalDuration, updateEngineBadge, shouldAutoPaste, shouldAutoEnter } from './settings.js';
 import { setLineTargets, setLinePasteState, specFromActiveApp } from './pastebadge.js';
-import { AdaptiveVAD } from './vad.js';
 
 // 这一批「去向还没确定」的记录行：本地引擎一句一行，百炼是几段一起粘。决策一回来就把
 // 去向贴到这些行上（见 pastebadge.js），然后清空。
@@ -34,7 +33,6 @@ const SILENCE_THRESH = 300;
 // 只保留最近 10 秒，恢复连接后补发，超出部分丢弃并明确告知用户。
 const PCM_BUFFER_MAX_MS = 10000;
 const PCM_CHUNK_MS = 4096 / 16000 * 1000;
-let adaptiveVAD = null;
 
 export function setAsrStopHandler(handler) {
   state.asrStopHandler = handler;
@@ -65,15 +63,23 @@ export function connectASR() {
 
   const connectTimeout = setTimeout(() => {
     if (state.asrWs !== ws) return;   // 这条连接早就不作数了（已停录或已重连）
-    if (!state.asrReady && state.recording) {
+    if (!state.asrReady && (state.recording || state.pushToTalkManual)) {
       connectionTimedOut = true;
       const msg = isLocal
         ? engineStatusText(eng) + ' 服务未运行：请先执行 ./scripts/serve-local.sh 启动本地 ASR 服务，或切换至百炼引擎'
         : '百炼 ASR 连接超时，请检查 API Key 和网络连接';
       toast(msg);
       state.pcmSendBuffer = [];
-      state.wantRecording = false;
-      if (state.asrStopHandler) state.asrStopHandler();
+      if (state.recording) {
+        state.wantRecording = false;
+        if (state.asrStopHandler) state.asrStopHandler();
+      } else if (state.pushToTalkManual) {
+        if (state.asrWs === ws) state.asrWs = null;
+        try { ws.close(); } catch (e) {}
+        setTimeout(() => {
+          if (state.pushToTalkManual && !state.asrWs) connectASR();
+        }, 2000);
+      }
     }
   }, 15000);
 
@@ -108,13 +114,6 @@ export function connectASR() {
       }
       const data = JSON.parse(text);
 
-      if (data.type === 'bailian-interim') {
-        if (data.sentence && data.sentence.text) {
-          handleASRResult(data.sentence, Date.now(), eng);
-        }
-        return;
-      }
-
       if (data.type === 'connected') {
         ws.send(JSON.stringify({
           header: { action: 'run-task', task_id: state.asrTaskId, streaming: 'duplex' },
@@ -125,8 +124,9 @@ export function connectASR() {
               format: 'pcm', sample_rate: 16000, enable_punctuation_prediction: true,
               engine: eng,   // sensevoice / qwen3 → 本地 Python 引擎切换
               qwen3_model_dir: eng === 'qwen3' && state.qwen3ModelDir ? state.qwen3ModelDir : undefined,
-              vad_threshold: state.vadThreshold, vad_mode: state.vadMode,
+              vad_threshold: state.vadThreshold,
               silence_timeout: state.silenceTimeout,
+              push_to_talk: state.pushToTalkManual,
               auto_paste: state.autoPaste,
             },
             input: {},
@@ -142,9 +142,15 @@ export function connectASR() {
 
       const event = data.header && data.header.event;
       if (event === 'task-started') {
+        if (state.asrWs !== ws) return; // 旧连接迟到的就绪事件不得改新连接的状态或阈值
         clearTimeout(connectTimeout);
         state.asrReady = true;
         state.pcmBufferStartTime = 0;
+        // run-task 发出后模型可能还要加载数秒；这期间用户拖过刻度的话，
+        // 当初封在 run-task 里的已是旧值。就绪后先补发当前值，再送积压音频。
+        sendVADThreshold(ws, (data.header && data.header.task_id) || state.asrTaskId);
+        flushBufferedPCM(ws);
+        if (state.pushToTalkFlushPending) flushPushToTalkSegment();
         renderRunStatus(); // 「正在连接」→「识别中」
       } else if (event === 'task-failed') {
         const msg = (data.payload && data.payload.message) ||
@@ -153,21 +159,35 @@ export function connectASR() {
           (data.header && data.header.error_code) ||
           '未知错误';
         toast((isLocal ? engineStatusText(eng) + ' 识别失败: ' : '百炼任务失败: ') + msg);
+        if (state.pushToTalkPasteTaskId === (data.header && data.header.task_id)) {
+          state.pushToTalkPasteTaskId = '';
+        }
         state.asrReady = false;
         renderRunStatus();
-        if (state.recording && !isLocal) {
+        if ((state.recording || state.pushToTalkManual) && !isLocal) {
           setTimeout(() => {
-            if (state.recording && state.asrEngine === 'bailian') connectASR();
+            if ((state.recording || state.pushToTalkManual) && state.asrEngine === 'bailian') connectASR();
           }, 2000);
         }
-        if (state.recording && isLocal) {
+        if ((state.recording || state.pushToTalkManual) && isLocal) {
           setTimeout(() => {
-            if (state.recording && isLocalEngine(normalizeEngine(state.asrEngine))) connectASR();
+            if ((state.recording || state.pushToTalkManual) && isLocalEngine(normalizeEngine(state.asrEngine))) connectASR();
           }, 2000);
         }
       } else if (event === 'result-generated') {
         const sentence = data.payload && data.payload.output && data.payload.output.sentence;
-        if (sentence && sentence.text) handleASRResult(sentence, Date.now(), eng);
+        if (sentence && sentence.text) {
+          handleASRResult(sentence, Date.now(), eng, data.header && data.header.task_id);
+        }
+      } else if (event === 'task-finished' && (state.recording || state.pushToTalkManual) && eng === 'bailian') {
+        // 百炼的 finish-task 会结束整条任务；常态录音必须马上重开一条，否则松开之后
+        // 录音还在跑、却没有任何任务在接了（界面照样写「录音中」）。
+        // 判据不能只看 pushToTalkManual：松开那一刻它已经被清掉，而录音是继续的。
+        // 本地引擎使用 flush-segment，不结束任务，因此不会走到这里。
+        if (state.asrWs === ws) state.asrWs = null;
+        try { ws.close(); } catch (e) {}
+        state.asrReady = false;
+        connectASR();
       }
     } catch (ex) {
       console.error('[ws] onmessage error:', ex);
@@ -185,20 +205,30 @@ export function connectASR() {
   ws.onclose = () => {
     if (state.asrWs !== ws) return;   // 同上：旧连接的关闭不代表现在这条断了
     clearTimeout(connectTimeout);
+    state.asrWs = null;
     state.asrReady = false;
     renderRunStatus();
+    if (state.recording || state.pushToTalkManual) {
+      setTimeout(() => {
+        if ((state.recording || state.pushToTalkManual) && !state.asrWs) connectASR();
+      }, 500);
+    }
   };
 }
 
 export function resetVAD() {
-  adaptiveVAD = new AdaptiveVAD({ threshold: state.vadThreshold, mode: state.vadMode });
+  state.vadState = 'silent';
+  state.vadSilenceCount = 0;
+  state.vadHeartbeat = 0;
+  state.vadSpeechBlocks = 0;
+  state.vadBuf.length = 0;
 }
 
 /**
  * 电平 → 说话状态（**唯一判断处**）。返回这次的电平与生效门槛，调用方再决定要不要送音频。
  *
  * 为什么单独抽出来：本地引擎（SenseVoice）的音频不走前端 VAD 闸门（分段由
- * asr_local/server.py 自己那套同样的自适应 VAD 做），但菜单栏的「说话中」需要同一套结论。
+ * asr_local/server.py 使用主界面刻度对应的固定阈值做），但菜单栏的「说话中」也要用这个阈值。
  * 两处各写一份判断，迟早出现「电平尺在跳、菜单栏说没人说话」。
  *
  * 起说与结束都带时间门槛（VAD_ONSET_BLOCKS / VAD_SILENCE_BLOCKS），
@@ -209,11 +239,7 @@ function updateSpeechState(down) {
   let sum = 0;
   for (let i = 0; i < down.length; i++) sum += down[i] * down[i];
   const rms = Math.sqrt(sum / down.length);
-  if (!adaptiveVAD) resetVAD();
-  const threshold = adaptiveVAD.update(rms);
-  if (state.vadMode === 'auto') state.vadThreshold = threshold;
-  // 让云端引擎也使用同一套自适应门槛；手动模式则保持用户设置。
-  const vadRms = state.vadMode === 'auto' ? threshold : state.vadThreshold;
+  const vadRms = state.vadThreshold;
   const loud = rms >= vadRms;
 
   if (state.vadState === 'silent') {
@@ -338,14 +364,7 @@ export function sendPCM(pcm) {
 
   state.pcmStallNotified = false;
 
-  if (state.pcmSendBuffer.length > 0) {
-    const buf = state.pcmSendBuffer;
-    state.pcmSendBuffer = [];
-    for (const b of buf) {
-      if (state.asrEngine === 'bailian') checkSilence(b);
-      state.asrWs.send(b.buffer);
-    }
-  }
+  flushBufferedPCM(state.asrWs);
 
   if (state.asrEngine === 'bailian') checkSilence(pcm);
   state.asrWs.send(pcm.buffer);
@@ -358,6 +377,134 @@ export function sendPCM(pcm) {
     // 不变的 DOM 属于白干活（textContent 同值赋值仍会触发重排）。
     updateEngineBadge();
   }
+}
+
+/** 把连接建立前积压的音频按原顺序送出；按住说话的短句可能整句都在这里。 */
+function flushBufferedPCM(ws) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !state.asrReady || !state.pcmSendBuffer.length) return;
+  const buf = state.pcmSendBuffer;
+  state.pcmSendBuffer = [];
+  state.pcmBufferStartTime = 0;
+  for (const b of buf) {
+    if (state.asrEngine === 'bailian') checkSilence(b);
+    ws.send(b.buffer);
+  }
+}
+
+/**
+ * 主界面刻度是识别阈值的唯一来源。
+ *
+ * 云端引擎在前端裁决，读 state.vadThreshold 就会立即生效；本地引擎在 Python
+ * 服务里分段，必须在拖动时把新值发过去。未连接时不需缓存，下次 run-task
+ * 会携带当前值。
+ */
+export function sendVADThreshold(ws = state.asrWs, taskId = state.asrTaskId) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !state.asrReady) return false;
+  if (!isLocalEngine(normalizeEngine(state.asrEngine))) return false;
+  ws.send(JSON.stringify({
+    header: { action: 'set-vad-threshold', task_id: taskId, streaming: 'duplex' },
+    payload: { threshold: state.vadThreshold },
+  }));
+  return true;
+}
+
+/**
+ * 把「这一句是否由手动接管」告诉本地服务端（见 asr_local/server.py 的 set-manual-segment）。
+ *
+ * 常态录音里麦克风与连接都是热的，按键只是换一种断句方式；本地引擎的分段在服务端，
+ * 所以必须显式告诉它。百炼的句尾由它自己的 VAD 定，没有这个开关（返回 false 不动）。
+ *
+ * 连接还没就绪时不发也没关系：run-task 会带上 push_to_talk 初值，不会漏。
+ */
+function sendManualSegment(enabled) {
+  const ws = state.asrWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN || !state.asrReady) return;
+  if (!isLocalEngine(normalizeEngine(state.asrEngine))) return;
+  ws.send(JSON.stringify({
+    header: { action: 'set-manual-segment', task_id: state.asrTaskId, streaming: 'duplex' },
+    payload: { enabled: !!enabled },
+  }));
+}
+
+/**
+ * 按下快捷键：这一段交给手动。
+ *
+ * 不动录音生命周期：常态录音该继续就继续，麦克风、连接、时长都不重启。
+ * 服务端从这一刻起不再用 VAD / 静音阈值切句，这一句的尾完全由松开决定。
+ */
+export function beginPushToTalkSegment() {
+  sendManualSegment(true);
+}
+
+/**
+ * 组合键作废（如 ⌥Tab）：这一段回到自动断句。
+ *
+ * 不冲刷也不丢弃——音频本来就在常态那一句里，只是句尾重新交给 VAD。
+ */
+export function cancelPushToTalkSegment() {
+  sendManualSegment(false);
+}
+
+/**
+ * 按住说话松开：把当前音频立即定型，不等待静音阈值，然后断句权交回 VAD。
+ * 本地引擎只冲刷当前段，连接与录音继续热着；百炼只能结束任务，task-finished 后自动重连。
+ */
+export function flushPushToTalkSegment() {
+  const ws = state.asrWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN || !state.asrReady) {
+    state.pushToTalkFlushPending = true;
+    return;
+  }
+  flushBufferedPCM(ws);
+  state.pushToTalkFlushPending = false;
+  const action = isLocalEngine(normalizeEngine(state.asrEngine)) ? 'flush-segment' : 'finish-task';
+  // 百炼会在松手后异步返回最终结果，那时 pushToTalkManual 已经恢复 false；用本次 task_id
+  // 保留“这条来自快捷键”的身份，保证它不误读主界面的自动粘贴开关。
+  if (action === 'finish-task') state.pushToTalkPasteTaskId = state.asrTaskId;
+  ws.send(JSON.stringify({
+    header: { action, task_id: state.asrTaskId, streaming: 'duplex' },
+    payload: { input: {} },
+  }));
+  // 先冲刷再交回断句权：服务端在 push_to_talk 仍为 True 时定型，轻声/短词不会被门槛丢掉。
+  sendManualSegment(false);
+  if (action === 'finish-task') state.asrReady = false;
+}
+
+/**
+ * 选中的修饰键随后被用于组合键时，整段按住说话必须作废，不能把普通快捷键误当成语音。
+ * 本地连接支持只丢当前段；云端协议没有“丢段”动作，只能关闭本次任务再预热一条新连接。
+ */
+export function discardPushToTalkSegment() {
+  state.pushToTalkFlushPending = false;
+  state.pushToTalkPasteTaskId = '';
+  state.pcmSendBuffer = [];
+  state.pcmBufferStartTime = 0;
+  if (state.pendingLine) {
+    try { state.pendingLine.remove(); } catch (e) {}
+    state.pendingLine = null;
+  }
+  state.asrLastText = '';
+
+  const ws = state.asrWs;
+  if (ws && ws.readyState === WebSocket.OPEN && state.asrReady
+      && isLocalEngine(normalizeEngine(state.asrEngine))) {
+    ws.send(JSON.stringify({
+      header: { action: 'discard-segment', task_id: state.asrTaskId, streaming: 'duplex' },
+      payload: { input: {} },
+    }));
+    return;
+  }
+
+  if (ws) {
+    try { ws.close(); } catch (e) {}
+  }
+  state.asrWs = null;
+  state.asrReady = false;
+  state.asrTaskId = '';
+  state.asrSentenceId = null;
+  if (state.recording || state.pushToTalkManual) setTimeout(() => {
+    if ((state.recording || state.pushToTalkManual) && !state.asrWs) connectASR();
+  }, 120);
 }
 
 export function disconnectBailian() {
@@ -380,6 +527,8 @@ export function disconnectBailian() {
   state.asrTaskId = '';
   state.asrSentenceId = null;
   state.asrLastText = '';
+  state.pushToTalkFlushPending = false;
+  state.pushToTalkPasteTaskId = '';
   renderRunStatus();
 }
 
@@ -408,10 +557,20 @@ export function finalizePending(activeApp, status) {
  * 名单是按应用分的（settings.shouldAutoPaste），所以粘贴判定必须等目标回来；
  * 前台快照本身则无论自动粘贴开关是否打开都要记录。
  */
-function resolvePaste(activeApp) {
+export function pasteEnabledForResult(target, forcePaste = false) {
+  return forcePaste || shouldAutoPaste(target);
+}
+
+function resolvePaste(activeApp, forcePaste = false) {
   return Promise.resolve(activeApp)
     .catch(() => null)
-    .then(app => ({ app, paste: !!state.autoPaste && shouldAutoPaste(app) }));
+    .then(app => ({
+      app,
+      paste: pasteEnabledForResult(app, forcePaste),
+      // 当前只有「按住说话」会强制粘贴，而松手时已播放结束音。
+      // 这个身份随本句结果走，不用全局静音标记污染后续连续听写。
+      suppressPasteSound: forcePaste,
+    }));
 }
 
 /** 只记录粘贴动作是否被执行，前台应用另由 activeApp 保存。 */
@@ -445,7 +604,7 @@ function applyPaste(text, paste, lineOverride = null) {
         setLinePasteState(lines, false);
         return 'not-pasted';
       }
-      return pasteToCursor(text, shouldAutoEnter(d.app))
+      return pasteToCursor(text, shouldAutoEnter(d.app), { suppressSound: d.suppressPasteSound })
         .then(status => {
           const pasted = status === 'ok';
           setLinePasteState(lines, pasted);
@@ -463,13 +622,18 @@ function applyPaste(text, paste, lineOverride = null) {
     });
 }
 
-function handleASRResult(sentence, browserReceivedAt, resultEngine) {
+function handleASRResult(sentence, browserReceivedAt, resultEngine, resultTaskId = '') {
   const text = sentence.text;
   if (!text) return;
   const localResult = isLocalEngine(normalizeEngine(resultEngine || state.asrEngine));
   const isFinal = localResult
     ? !!(sentence.end_time > 0)
     : !!(sentence.sentence_end === true || sentence.end_time > 0);
+  const pushToTalkResult = isFinal && (
+    sentence.manual_segment === true
+    || (!!resultTaskId && resultTaskId === state.pushToTalkPasteTaskId)
+  );
+  if (isFinal && resultTaskId === state.pushToTalkPasteTaskId) state.pushToTalkPasteTaskId = '';
   const corrected = applyCorrection(text);
   if (isFinal && consumeCommandMode()) {
     // 指令模式先判断：已有指令执行；普通话则继续走自动粘贴，不能因为开了指令模式而丢掉原有工作流。
@@ -493,7 +657,7 @@ function handleASRResult(sentence, browserReceivedAt, resultEngine) {
     saveEntry(corrected, activeApp, statusGate.promise, resultEngine);
     if (!isLikelyCommandText(corrected)) {
       // 明显是普通话时不请求模型，立即恢复自动粘贴的原有时序。
-      const paste = resolvePaste(activeApp);
+      const paste = resolvePaste(activeApp, pushToTalkResult);
       applyPaste(corrected.replace(/[。！？；，、\s]+$/, ''), paste, line ? [line] : [])
         .then(status => statusGate.resolve(status));
       return;
@@ -503,11 +667,11 @@ function handleASRResult(sentence, browserReceivedAt, resultEngine) {
         statusGate.resolve('not-pasted');
         return;
       }
-      const paste = resolvePaste(activeApp);
+      const paste = resolvePaste(activeApp, pushToTalkResult);
       applyPaste(corrected.replace(/[。！？；，、\s]+$/, ''), paste, line ? [line] : [])
         .then(status => statusGate.resolve(status));
     }).catch(() => {
-      const paste = resolvePaste(activeApp);
+      const paste = resolvePaste(activeApp, pushToTalkResult);
       applyPaste(corrected, paste, line ? [line] : [])
         .then(status => statusGate.resolve(status));
     });
@@ -543,7 +707,7 @@ function handleASRResult(sentence, browserReceivedAt, resultEngine) {
   }
   const segId = sentence.seg_id || null;
   const timing = sentence.timing || null;
-  const context = { taskId: state.asrTaskId, segId, final: isFinal, rawText: text, text: corrected, autoPaste: state.autoPaste, engine: state.asrEngine, browserReceivedAt };
+  const context = { taskId: state.asrTaskId, segId, final: isFinal, rawText: text, text: corrected, autoPaste: pushToTalkResult || state.autoPaste, pushToTalkResult, engine: state.asrEngine, browserReceivedAt };
   console.log('[ASR]', JSON.stringify(context));
   if (timing) {
     const nodeSentAt = timing.node_sent_wall_ms || timing.py_flush_wall_ms || null;
@@ -561,7 +725,9 @@ function handleASRResult(sentence, browserReceivedAt, resultEngine) {
     }));
   }
 
-  if (state.noiseFilter) {
+  // 按住说话是用户主动圈定的内容，包括“好”“嗯”这类短词；不能再用连续录音的
+  // 文本去噪规则把它们删掉。回声消除与系统降噪仍在采音层保留。
+  if (state.noiseFilter && !pushToTalkResult) {
     const trimmed = corrected.trim();
     if (trimmed.length < 2) {
       console.log('[filter]', JSON.stringify({ ...context, rule: 'short_text' }));
@@ -600,7 +766,7 @@ function handleASRResult(sentence, browserReceivedAt, resultEngine) {
       // frontmost.js）。查询与粘贴是并行的两条路，谁也不等谁，粘贴的手感不变。
       // 粘不粘由名单定（resolvePaste / applyPaste）。
       const activeApp = getFrontmostApp();
-      const paste = resolvePaste(activeApp);
+      const paste = resolvePaste(activeApp, pushToTalkResult);
       const pasteResult = applyPaste(corrected, paste);
       saveEntry(corrected, activeApp, pasteResult, resultEngine);
     } else {
@@ -637,7 +803,7 @@ function handleASRResult(sentence, browserReceivedAt, resultEngine) {
   }
 
   const activeApp = getFrontmostApp();
-  const paste = resolvePaste(activeApp);
+  const paste = resolvePaste(activeApp, pushToTalkResult);
   const statusGate = deferredStatus();
   let line = state.pendingLine;
   if (line) {

@@ -1,4 +1,4 @@
-import { state } from './state.js';
+import { state, pushToTalkKeyLabel } from './state.js';
 import { apiUrl } from './api.js';
 import { setLineTarget, setLinePasteState, specFromActiveApp } from './pastebadge.js';
 import { shouldShowTimestamp } from './timeGrouping.js';
@@ -202,7 +202,13 @@ export function flashPulse(el) {
 
 export function setRecordBtn(recording) {
   // 按钮已简化成纯图标圆形按钮：文案只留在 title/aria-label，保证可访问性
-  const label = (recording ? '停止录音' : '开始录音') + ' · 空格键';
+  // 常态就是键：开始/停止录音。按住说话只占「正在按住」那一小段，所以这里看 pushToTalkManual，
+  // 不再看模式开关——模式开着但手没按的时候，按钮仍然是常态的录音按钮（2026-09-20 起两种方式共存）。
+  const key = pushToTalkKeyLabel(state.pushToTalkKey);
+  const label = state.pushToTalkManual
+    ? `正在按住说话 · 松开${key}立即识别`
+    : (recording ? '停止录音' : '开始录音') + ' · 空格键'
+      + (state.pushToTalk ? ` / 按住${key}` : '');
   const btn = $('btn');
   if (btn) { btn.title = label; btn.setAttribute('aria-label', label); }
   // 录制按钮的两种状态（常态黑底 / 录音中红底）只在这里切换，脉冲也挂在同一个

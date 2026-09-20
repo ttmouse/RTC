@@ -29,7 +29,8 @@ core-foundation = "0.10"
 objc2 = { version = "0.6", features = ["alloc"] }
 # NSImage / NSBitmapImageRep：把前台应用的图标编成 PNG（底标那个小图标）。
 # 这两个类和 NSData / NSDictionary 都在 objc2-app-kit 自己的 feature 里标好了。
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWorkspace", "NSRunningApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSView", "NSStatusItem", "NSStatusBarButton", "NSColor", "objc2-quartz-core", "objc2-core-graphics", "libc"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWorkspace", "NSRunningApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSEvent", "NSView", "NSStatusItem", "NSStatusBarButton", "NSColor", "block2", "objc2-quartz-core", "objc2-core-graphics", "libc"] }
+block2 = "0.6"
 # 菜单栏图标的背景块（「正在说话」那块橙色底）靠 NSStatusItem 自己的按钮图层画：
 # 高度由系统定，所以和系统点击时那块高亮底**天然一样高**。两个 crate 本来就在依赖树里
 # （tauri 的传递依赖），这里只是把它们提到直接依赖并把 CALayer / CGColor 打开。

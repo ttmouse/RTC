@@ -22,7 +22,9 @@
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use block2::RcBlock;
     use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::NSCopying;
 
     /// 前台应用的身份：三种名字都带上，调用方按哪个能对上用哪个。
     #[derive(Clone, serde::Serialize)]
@@ -86,9 +88,8 @@ mod imp {
     /// 而 frontmost_app 每句话定型都要调一次；前端按名字缓存，同一个应用一个会话只取一次。
     pub fn icon_png_data_url(name: &str) -> Option<String> {
         use base64::Engine;
-        use objc2::AnyThread;   // NSImage::alloc() 来自这个 trait
         use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSWorkspace};
-        use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize};
+        use objc2_foundation::{NSDictionary, NSRect, NSSize};
 
         // 底栏那一格是 18px，@2x 屏幕给到 36px 就够。
         // 不缩的话原图是 1024（Cindy 的图标 PNG 有 2.9 MB），一个 18px 的小格子拿不动。
@@ -109,16 +110,21 @@ mod imp {
 
         /// 缩小到 ICON_PX 见方。
         ///
-        /// 为什么用 lockFocus 这条老路：NSImage 没有缩放接口，而它内部那几十档 rep
-        /// （实测 24/48/128/…/2048）都不是 NSBitmapImageRep，拿不到它们的编码器。
-        /// lockFocus 是 AppKit 一直以来的离屏画法，本命令跑在主线程（同 lib.rs 里
-        /// paste_text 保持同步的理由），且每个应用一个会话只跑一次。
+        /// 使用 NSImage 的分辨率无关绘制回调，而不是 lockFocus/unlockFocus：后者已被
+        /// AppKit 标记为弃用，在 Retina 与非 Retina 环境下可能产生错误的绘制尺寸。
         fn resized_png(icon: &NSImage) -> Option<Vec<u8>> {
             let size = NSSize::new(ICON_PX, ICON_PX);
-            let small = NSImage::initWithSize(NSImage::alloc(), size);
-            small.lockFocus();
-            icon.drawInRect(NSRect::new(NSPoint::new(0.0, 0.0), size));
-            small.unlockFocus();
+            // 绘制回调可能由 NSImage 延后调用，因此不能捕获借用的 `icon`。
+            let source = icon.copy();
+            let drawing_handler: RcBlock<dyn Fn(NSRect) -> objc2::runtime::Bool> = RcBlock::new(move |rect: NSRect| {
+                source.drawInRect(rect);
+                objc2::runtime::Bool::YES
+            });
+            let small = NSImage::imageWithSize_flipped_drawingHandler(
+                size,
+                false,
+                &drawing_handler,
+            );
             encode_png(&small)
         }
 

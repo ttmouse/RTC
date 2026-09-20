@@ -1,4 +1,4 @@
-import { state, ASR_PRICE, rmsToMeterPct, clampVADThreshold, normalizeEngine, engineLabel } from './state.js';
+import { state, ASR_PRICE, rmsToMeterPct, normalizeEngine, engineLabel, normalizePushToTalkKey, resolveVADThreshold } from './state.js';
 import { $ } from './ui.js';
 import { fetchLocalConfig, patchLocalConfig } from './storage.js';
 import { apiUrl, wsProxyUrl } from './api.js';
@@ -182,13 +182,14 @@ function settingsFromState() {
     engine: state.asrEngine,
     qwen3ModelDir: state.qwen3ModelDir,
     vadThreshold: state.vadThreshold,
-    vadMode: state.vadMode,
     silenceTimeout: state.silenceTimeout,
     gainMultiplier: state.gainMultiplier,
     autoPaste: state.autoPaste,
     autoPasteApps: state.autoPasteApps,
     autoEnter: state.autoEnter,
     autoEnterApps: state.autoEnterApps,
+    pushToTalk: state.pushToTalk,
+    pushToTalkKey: state.pushToTalkKey,
     filterOn: state.filterOn,
     sfx: state.sfxOn,
     ai: { ...state.aiConfig },
@@ -197,12 +198,14 @@ function settingsFromState() {
 
 function applySettings(config) {
   const s = config.settings || {};
-  state.vadThreshold = s.vadThreshold != null ? clampVADThreshold(s.vadThreshold) : 0.006;
-  state.vadMode = s.vadMode === 'manual' ? 'manual' : 'auto';
+  const vad = resolveVADThreshold(s);
+  state.vadThreshold = vad.threshold;
   state.silenceTimeout = s.silenceTimeout || 2000;
   state.gainMultiplier = s.gainMultiplier || 1;
   state.autoPaste = s.autoPaste || false;
   state.autoEnter = s.autoEnter || false;
+  state.pushToTalk = s.pushToTalk === true;
+  state.pushToTalkKey = normalizePushToTalkKey(s.pushToTalkKey);
   state.autoPasteApps = readAppList(s.autoPasteApps);
   state.autoEnterApps = readAppList(s.autoEnterApps);
   state.sfxOn = s.sfx !== false;   // 旧配置无此字段 → 默认开启
@@ -222,6 +225,7 @@ function applySettings(config) {
   let eng = normalizeEngine(s.engine || 'sensevoice');
   if (eng === 'bailian' && !state.apiKey) eng = 'sensevoice';
   state.asrEngine = eng;
+  return vad.legacyMode;
 }
 
 export async function loadTotalDuration() {
@@ -344,11 +348,16 @@ export function refreshModelStateLabels(states = {}, modes = {}) {
 
 export async function loadASRSettings() {
   const config = await fetchLocalConfig();
-  applySettings(config);
+  const legacyVADMode = applySettings(config);
+  if (legacyVADMode) {
+    // 一次性迁移：落下正确阈值，并请服务端删掉已废弃的旧模式字段。
+    // 迁移写失败不能拦住录音主流程；下次启动还会再尝试。
+    patchLocalConfig({ settings: { vadThreshold: state.vadThreshold, vadMode: null } })
+      .catch(err => console.warn('[settings] legacy VAD migration failed:', err));
+  }
   $('apiKey').value = state.apiKey;
   if ($('qwen3ModelDir')) $('qwen3ModelDir').value = state.qwen3ModelDir;
   syncAIForm();
-  if ($('vadMode')) $('vadMode').value = state.vadMode;
   if ($('silenceTimeout')) {
     $('silenceTimeout').value = state.silenceTimeout;
     $('silenceTimeoutLabel').textContent = state.silenceTimeout + 'ms';
@@ -415,6 +424,17 @@ export function syncToggleUI() {
   if (fp) fp.classList.toggle('on', state.autoPaste);
   const fe = $('ftEnter');
   if (fe) fe.classList.toggle('on', state.autoEnter);
+  const meter = $('levelMeterBlock');
+  if (meter) {
+    // 阈值刻度只在「正在按住」的那一段失效：常态录音照旧由 VAD 裁决，刻度必须还在。
+    meter.classList.toggle('threshold-disabled', state.pushToTalkManual);
+    meter.dataset.tip = state.pushToTalkManual
+      ? '实时音量；按住期间不使用静音阈值，松开即提交识别。'
+      : '实时音量；刻度线是识别阈值。音量低于刻度，可能被判定为静音；超过刻度，才会触发语音识别。拖动刻度可调整灵敏度。';
+    meter.setAttribute('aria-label', state.pushToTalkManual
+      ? '实时音量，按住说话期间不使用静音阈值'
+      : 'VAD 灵敏度，可拖动调整，值越大越不敏感');
+  }
 }
 
 // ---------- 设置分组折叠 ----------

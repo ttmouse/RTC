@@ -229,6 +229,9 @@
      静态回退值 -100% 表示「先别露」，等第一帧 JS 接手 */
   #levelMeterTickInv{ position:absolute; top:0; bottom:0; width:1px; left:-100%;
         background:var(--paper); }
+  #levelMeterBlock.threshold-disabled #levelMeterTick,
+  #levelMeterBlock.threshold-disabled #levelMeterTickInv{ display:none; }
+  #levelMeterBlock.threshold-disabled #levelMeterBg{ cursor:default !important; }
   /* 峰值延迟条：从尺子左端铺到历史峰值，作为第二条完整进度条。
      实时条在上层覆盖它的前段；实时条回落后，后面的灰色部分露出来，
      用两条宽度的差表达「实时」与「延迟」的时间差。
@@ -462,6 +465,15 @@
   .s-field .s-count{ font-family:var(--mono); font-size:11px; color:var(--ink-faint);
         font-variant-numeric:tabular-nums; white-space:nowrap; }
   .s-field .s-actions{ display:flex; gap:6px; margin-top:7px; }
+  .shortcut-record-btn{ display:flex; align-items:center; justify-content:space-between; width:100%;
+        min-height:38px; padding:7px 10px; border:1px solid var(--rule); border-radius:3px;
+        background:var(--paper-2); color:var(--ink); cursor:pointer; text-align:left; }
+  .shortcut-record-btn:hover{ border-color:var(--ink-soft); }
+  .shortcut-record-btn:focus-visible{ outline:2px solid var(--seal); outline-offset:2px; }
+  .shortcut-record-btn.recording{ border-color:var(--seal); box-shadow:0 0 0 3px rgba(191,58,30,.12); }
+  .shortcut-record-btn #pushToTalkShortcutValue{ font-family:var(--mono); font-size:13px; }
+  .shortcut-record-btn .shortcut-record-action{ font-size:11px; color:var(--ink-faint); }
+  .shortcut-record-btn.recording .shortcut-record-action{ color:var(--seal-deep); }
   /* 窄窗（窗口最小 480px）时「109 条规则 + 管理」会把说明文字挤成两行；
      把右侧的计数与按钮整块放到下一行，说明文字就能用满整行。 */
   @media (max-width:560px){

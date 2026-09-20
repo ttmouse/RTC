@@ -1,9 +1,9 @@
 import { $, renderRunStatus, initRunStatus, refreshServerStatus, toast, setRecordBtn, flashPulse, initListAutoScroll, listNearTop } from './ui.js';
-import { state, meterPctToRms, clampVADThreshold } from './state.js';
+import { state, meterPctToRms, clampVADThreshold, normalizePushToTalkKey, pushToTalkKeyLabel } from './state.js';
 import { DEFAULT_RULES, flushCorrectionRules, loadCorrectionRules, saveCorrectionRules } from './correction.js';
 import { ensurePastePermission } from './clipboard.js';
-import { connectASR, resetVAD, setAsrStopHandler } from './asr.js';
-import { getAudioConstraints, startAudio, stopRec, streamIsDead, rebuildAudioInput, startAudioFlowWatch } from './audio.js';
+import { connectASR, disconnectBailian, resetVAD, sendVADThreshold, setAsrStopHandler, beginPushToTalkSegment, cancelPushToTalkSegment, flushPushToTalkSegment } from './asr.js';
+import { getAudioConstraints, startAudio, stopRec, cancelPushToTalkRec, streamIsDead, rebuildAudioInput, startAudioFlowWatch } from './audio.js';
 import { watchWake } from './lifecycle.js';
 import { clearHistory, loadEarlier, renderHistory } from './history.js';
 import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updateEngineBadge, loadTotalDuration, renderVADThresholdMarker, testBailianConnection, syncAIForm, readAIForm, testAIConnection, syncCollapsibleGroups, refreshGroupSummaries, toggleGroup, renderAppRuleLists, addAppRule, toggleAppRule, commitAppRules, resetAppRulesDraft, AI_PROVIDERS } from './settings.js';
@@ -11,7 +11,7 @@ import { flushASRSettings, loadASRSettings, saveASRSettings, syncToggleUI, updat
 import { renderModelStatus, getModelStatus, watchModelService, probeModelService } from './model.js';
 import { initLearnedCommands, pickApplication } from './commands.js';
 import { checkForUpdates, setupUpdateUI, updateVersionInfo } from './updater.js';
-import { playStart, playToggle } from './sfx.js';
+import { playStart, playStop, playToggle } from './sfx.js';
 import { apiUrl } from './api.js';
 import { showStatsPage } from './stats.js';
 
@@ -54,7 +54,7 @@ function toggleAutoEnter() {
   setAutoEnter(!state.autoEnter);
 }
 
-$('btn').onclick = async () => {
+async function toggleRecording() {
   if (state.wantRecording) {
     // 录音中，或正在 await getUserMedia 的半启动状态。
     // 后者以前会漏：wantRecording 只写不读，用户连点两下时 state.recording 还是 false，
@@ -75,7 +75,6 @@ $('btn').onclick = async () => {
     return;
   }
   state.wantRecording = true;
-  playStart();   // 在 getUserMedia / 建立 WS 之前先响，避免提示音被麦克风录进识别结果
   // 旧流还要能用才行：`state.stream` 这个对象留着，不代表设备还在干活。
   // 睡眠唤醒后 macOS 会让旧麦克风句柄失效（音轨 ended），这时只判断 `!state.stream`
   // 会老老实实复用一条死流——界面正常、录音正常、一个字都不会出。
@@ -101,6 +100,9 @@ $('btn').onclick = async () => {
   renderRunStatus();
   try {
     await startAudio();
+    // 快捷键路径不是浏览器用户手势，必须等录音 AudioContext 已经 running 后再播；
+    // 否则 WKWebView 会静默拦掉开始音。播放在 ASR 连接前发生，仍不会进入识别结果。
+    playStart();
     state.pendingLine = null;
     state.finalizedText = '';
     state.silenceChunks = 0;
@@ -111,7 +113,8 @@ $('btn').onclick = async () => {
     state.speechHeardAt = 0;
     state.vadBuf.length = 0;
     resetVAD();
-    connectASR();
+    // 按住说话模式在开关开启时已经预热连接；这里只在连接尚未就绪时补建。
+    if (!state.asrReady) connectASR();
   } catch (e) {
     console.error('[start]', e);
     toast('启动录音失败: ' + e.message);
@@ -122,7 +125,202 @@ $('btn').onclick = async () => {
     try { if (state.stream) state.stream.getTracks().forEach(t => t.stop()); } catch (ex) {}
     state.stream = null;
   }
+}
+
+$('btn').onclick = () => {
+  void toggleRecording();
 };
+
+function preparePushToTalk() {
+  if (!state.pushToTalk || state.asrReady || state.asrWs) return;
+  connectASR();
+}
+
+/**
+ * 按住说话开关：只控制「快捷键是否生效」。
+ *
+ * 2026-09-20 用户明确要求两种方式不冲突：开关**不再**停掉正在跑的常态录音，
+ * 录音按钮也不再被锁住。常态是 VAD 自动断句、自动上屏；按住只是把这一句的句尾
+ * 暂时交给手，松开立刻接回常态（细节见 beginPushToTalk / endPushToTalk）。
+ */
+function setPushToTalk(on, { persist = true, feedback = true } = {}) {
+  const next = !!on;
+  if (state.pushToTalk === next) return;
+  cancelPushToTalkStart({ discard: !next });
+  state.pushToTalk = next;
+  state.pushToTalkHeld = false;
+  state.pushToTalkVisualActive = false;
+  pushToTalkChorded = false;
+  if (next) preparePushToTalk();
+  syncToggleUI();
+  setRecordBtn(state.recording);
+  renderRunStatus();
+  if (persist) saveASRSettings();
+  if (feedback) playToggle(next);
+}
+
+const PUSH_TO_TALK_HOLD_DELAY_MS = 180;
+let pushToTalkStartTimer = null;
+let pushToTalkChorded = false;
+// 这次录音是快捷键替用户开的（按下前没在录）。松开后它转入常态、不撤销；
+// 但如果这次按键其实是系统组合键（⌥Tab），就是误开，必须收回去。
+let pushToTalkOwnsRecording = false;
+let recordingPushToTalkShortcut = false;
+let pushToTalkKeyDraft = state.pushToTalkKey;
+let pushToTalkEnabledDraft = state.pushToTalk;
+
+function syncPushToTalkEnabledDraft() {
+  const toggle = $('pushToTalkEnabledToggle');
+  if (!toggle) return;
+  toggle.classList.toggle('on', pushToTalkEnabledDraft);
+  toggle.setAttribute('aria-pressed', pushToTalkEnabledDraft ? 'true' : 'false');
+  toggle.setAttribute('aria-label', `${pushToTalkEnabledDraft ? '关闭' : '开启'}按住说话`);
+}
+
+function syncPushToTalkShortcutRecorder() {
+  const btn = $('pushToTalkShortcutBtn');
+  const value = $('pushToTalkShortcutValue');
+  const action = $('pushToTalkShortcutAction');
+  if (!btn || !value || !action) return;
+  btn.classList.toggle('recording', recordingPushToTalkShortcut);
+  btn.setAttribute('aria-pressed', recordingPushToTalkShortcut ? 'true' : 'false');
+  value.textContent = recordingPushToTalkShortcut ? '请按快捷键…' : pushToTalkKeyLabel(pushToTalkKeyDraft);
+  action.textContent = recordingPushToTalkShortcut ? '等待输入' : '点击录制';
+}
+
+/**
+ * 按下没走到「这一段归手动」就提前作废。
+ *
+ * discard 只在一种情况下真的要收回去：这次录音是快捷键替他开的，而按键其实是组合键。
+ * 常态录音本来就在跑时，音频属于刚才那一句，只能取消手动接管，不能丢也不能停。
+ */
+function cancelPushToTalkStart({ discard = false } = {}) {
+  clearTimeout(pushToTalkStartTimer);
+  pushToTalkStartTimer = null;
+  state.pushToTalkVisualActive = false;
+  renderRunStatus();
+  if (!state.pushToTalkManual) {
+    if (discard && pushToTalkOwnsRecording) { pushToTalkOwnsRecording = false; undoAutoStartedRecording(); }
+    return;
+  }
+  state.pushToTalkManual = false;
+  cancelPushToTalkSegment();
+  renderRunStatus();
+  setRecordBtn(state.recording);
+  syncToggleUI();
+  if (discard && pushToTalkOwnsRecording) { pushToTalkOwnsRecording = false; undoAutoStartedRecording(); }
+}
+
+/** 快捷键误开了一次常态录音（组合键）：停采集、丢掉这一段，并把这次开起来的连接收掉。 */
+function undoAutoStartedRecording() {
+  if (!state.recording && !state.wantRecording) return;
+  cancelPushToTalkRec();   // 停采集（无声）+ 丢弃当前段
+  disconnectBailian();     // 连接是这次误按开的，不能留在那儿（stopRec 会做的事，但这里不能 finalizePending）
+  setRecordBtn(state.recording);
+  syncToggleUI();
+}
+
+/** 过了组合键判定窗口、确认只是单独按住：把这一句交给手动。 */
+async function startPushToTalk() {
+  if (!state.pushToTalkHeld || pushToTalkChorded) return;
+  // 先置位再开录：run-task 会带上这个初值，避开「连上之后再补一条控制消息」的竞态。
+  // ownsRecording 也在等待前置位，因为等待的正是 getUserMedia：用户可能在那一刻按下 Tab
+  // 组成系统快捷键，那时必须能把这半次误开的录音收回去（见 cancelPushToTalkStart）。
+  pushToTalkOwnsRecording = !state.recording;
+  state.pushToTalkManual = true;
+  if (pushToTalkOwnsRecording) {
+    await toggleRecording();
+    if (!state.pushToTalkManual) {
+      // 等待期间已经松手或被组合键作废：不要再补发「手动」，录音由取消路径收尾。
+      if (pushToTalkOwnsRecording) { pushToTalkOwnsRecording = false; undoAutoStartedRecording(); }
+      return;
+    }
+    if (!state.recording) {
+      // 麦克风或服务起不来：当作没按过，别把「手动接管」留在指示上。
+      state.pushToTalkManual = false;
+      pushToTalkOwnsRecording = false;
+      syncToggleUI();
+      return;
+    }
+  }
+  beginPushToTalkSegment();   // 常态录音已有连接：把「这一句不听 VAD」告诉服务端
+  // 首次按住若顺带开启了底层录音，toggleRecording 已经播放开始音；常态录音本来就在跑时，
+  // 这里补上“这一句开始”的反馈。两条路径保证每句一次，不重复。
+  if (!pushToTalkOwnsRecording) playStart();
+  renderRunStatus();
+  setRecordBtn(state.recording);
+  syncToggleUI();
+}
+
+function beginPushToTalk() {
+  if (!state.pushToTalk || state.pushToTalkHeld) return;
+  state.pushToTalkHeld = true;
+  state.pushToTalkVisualActive = true;
+  pushToTalkChorded = false;
+  // 用户的动作是「按下」，所以顶部反馈就在这一刻出现；
+  // 不等组合键窗口，更不等 VAD 听到人声。
+  renderRunStatus();
+  // 留出极短窗口判断这是不是普通组合键（如 ⌥Tab）。确认只是单独按住后才接管。
+  pushToTalkStartTimer = setTimeout(() => {
+    pushToTalkStartTimer = null;
+    void startPushToTalk();
+  }, PUSH_TO_TALK_HOLD_DELAY_MS);
+}
+
+function endPushToTalk() {
+  if (!state.pushToTalk || !state.pushToTalkHeld) return;
+  state.pushToTalkHeld = false;
+  state.pushToTalkVisualActive = false;
+  // 松开同样立即撤回顶部反馈，不等识别结果返回。
+  renderRunStatus();
+  // 松手只撤掉尚未触发的 180ms 等待；已经开始的手动段不能在提交前被取消。
+  clearTimeout(pushToTalkStartTimer);
+  pushToTalkStartTimer = null;
+  if (pushToTalkChorded) {
+    pushToTalkChorded = false;
+    return;
+  }
+  // 松手可能发生在半启动阶段（还没进入手动接管）。那就不冲刷，把它当一次没说完的按压。
+  if (!state.pushToTalkManual) return;
+  state.pushToTalkManual = false;
+  pushToTalkOwnsRecording = false;
+  // 松开就是明确句尾：立即定型。**不停录音**——常态的 VAD 自动断句在下一句接回。
+  // 这一句的粘贴结果自己携带「不重复播放」身份；不设全局静音，
+  // 否则底层录音继续时，后续连续听写的粘贴音会一直没有。
+  playStop({ suppressNextPaste: false });
+  flushPushToTalkSegment();
+  renderRunStatus();
+  setRecordBtn(state.recording);
+  syncToggleUI();
+}
+
+function handleModifierKey(event) {
+  const payload = event && event.payload ? event.payload : event;
+  const key = payload && payload.key;
+  const keyState = payload && payload.state;
+
+  if (recordingPushToTalkShortcut) {
+    if (keyState !== 'pressed' || !key) return;
+    pushToTalkKeyDraft = normalizePushToTalkKey(key);
+    // 用户主动录制快捷键，就表示希望使用它；仍然只改设置草稿，点保存后才生效。
+    pushToTalkEnabledDraft = true;
+    recordingPushToTalkShortcut = false;
+    syncPushToTalkShortcutRecorder();
+    syncPushToTalkEnabledDraft();
+    return;
+  }
+
+  // 选定键之后又按了任何普通键或另一个修饰键，说明用户在用系统组合键，不是说话。
+  const isOtherModifier = keyState === 'pressed' && key && key !== state.pushToTalkKey;
+  if (state.pushToTalkHeld && (keyState === 'chord' || isOtherModifier)) {
+    pushToTalkChorded = true;
+    cancelPushToTalkStart({ discard: true });
+    return;
+  }
+  if (key !== state.pushToTalkKey) return;
+  if (keyState === 'pressed') beginPushToTalk();
+  else if (keyState === 'released') endPushToTalk();
+}
 
 /**
  * 机器刚睡醒（见 lifecycle.js 的 watchWake）。
@@ -164,6 +362,11 @@ function showSettings(show) {
   $('list').style.display = show ? 'none' : '';
   document.querySelector('footer').style.display = show ? 'none' : '';
   if (show) {
+    pushToTalkKeyDraft = normalizePushToTalkKey(state.pushToTalkKey);
+    pushToTalkEnabledDraft = state.pushToTalk;
+    recordingPushToTalkShortcut = false;
+    syncPushToTalkShortcutRecorder();
+    syncPushToTalkEnabledDraft();
     renderModelStatus();
     syncAIForm();
     loadStorageInfo();
@@ -172,6 +375,9 @@ function showSettings(show) {
     // 「识别方式」的选中态与展开面板由 updateEngineBadge() 内部同步（单一写入点）
     updateEngineBadge();
     renderAppRuleLists();
+  } else {
+    recordingPushToTalkShortcut = false;
+    syncPushToTalkShortcutRecorder();
   }
 }
 
@@ -280,8 +486,18 @@ document.addEventListener('click', (e) => {
 
 $('settingsBtn').onclick = () => showSettings(true);
 $('settingsClose').onclick = () => showSettings(false);
+$('pushToTalkShortcutBtn').onclick = () => {
+  recordingPushToTalkShortcut = !recordingPushToTalkShortcut;
+  syncPushToTalkShortcutRecorder();
+};
+$('pushToTalkEnabledToggle').onclick = () => {
+  pushToTalkEnabledDraft = !pushToTalkEnabledDraft;
+  syncPushToTalkEnabledDraft();
+};
 $('settingsSaveBtn').onclick = async () => {
   commitAppRules();
+  state.pushToTalkKey = normalizePushToTalkKey(pushToTalkKeyDraft);
+  setPushToTalk(pushToTalkEnabledDraft, { persist: false, feedback: false });
   state.apiKey = $('apiKey').value.trim();
   readAIForm();
   saveASRSettings();
@@ -289,6 +505,8 @@ $('settingsSaveBtn').onclick = async () => {
   await flushASRSettings();
   await flushCorrectionRules();
   renderVADThresholdMarker();
+  syncToggleUI();
+  setRecordBtn(state.recording);
   refreshGroupSummaries();   // 保存后状态文案可能变了，折叠标题行的摘要同步刷新
   showSettings(false);
 };
@@ -300,10 +518,6 @@ $('settingsResetBtn').onclick = async () => {
   setKeyVisible(false);
   const testStatus = $('apiKeyTestStatus');
   if (testStatus) { testStatus.textContent = ''; testStatus.className = 'key-test-status'; }
-  // VAD 自动模式默认开启；手动模式仍可通过主界面刻度调节
-  state.vadMode = 'auto';
-  $('vadMode').value = 'auto';
-  state.vadThreshold = 0.006;
   state.silenceTimeout = 2000;
   $('silenceTimeout').value = 2000;
   $('silenceTimeoutLabel').textContent = '2000ms';
@@ -312,6 +526,13 @@ $('settingsResetBtn').onclick = async () => {
   $('gainMultiplierLabel').textContent = '1x';
   state.autoPaste = false;
   state.autoEnter = false;
+  state.pushToTalkKey = 'left-option';
+  pushToTalkKeyDraft = state.pushToTalkKey;
+  pushToTalkEnabledDraft = false;
+  setPushToTalk(false, { persist: false, feedback: false });
+  recordingPushToTalkShortcut = false;
+  syncPushToTalkShortcutRecorder();
+  syncPushToTalkEnabledDraft();
   resetAppRulesDraft();
   state.filterOn = true;
   // AI 服务商恢复默认（自定义：清空；预设：保留预设值）
@@ -444,18 +665,20 @@ refreshEngineMenuAvailability();
     // 按 3 位取整会让拖动在左边一路跳格，留 4 位拖动才连续
     state.vadThreshold = Math.round(clamped * 10000) / 10000;
     renderVADThresholdMarker();
+    sendVADThreshold();
     saveASRSettings();
   }
 
   bg.style.cursor = 'ew-resize';
   bg.addEventListener('pointerdown', e => {
+    if (state.pushToTalkManual) return;
     bg.setPointerCapture(e.pointerId);
     e.preventDefault();
     block.classList.add('dragging'); // 拖动中收起刻度 Tips，见 style.css 对应注释
     setThresholdFromClientX(e.clientX);
   });
   bg.addEventListener('pointermove', e => {
-    if (e.buttons & 1) setThresholdFromClientX(e.clientX);
+    if (!state.pushToTalkManual && (e.buttons & 1)) setThresholdFromClientX(e.clientX);
   });
   // 释放捕获后 pointerup / pointercancel 都会派发到 bg 上；两个都要收尾，
   // 否则拖到一半被系统取消（切窗口等）时 dragging 会一直留着，Tips 再也不弹
@@ -536,13 +759,6 @@ $('aiApiKey').addEventListener('blur', () => {
 $('aiTestBtn').onclick = testAIConnection;
 
 
-$('vadMode').onchange = function () {
-  state.vadMode = this.value === 'manual' ? 'manual' : 'auto';
-  resetVAD();
-  renderVADThresholdMarker();
-  saveASRSettings();
-};
-
 $('silenceTimeout').oninput = function () {
   state.silenceTimeout = parseInt(this.value);
   $('silenceTimeoutLabel').textContent = state.silenceTimeout + 'ms';
@@ -555,7 +771,7 @@ $('gainMultiplier').oninput = function () {
   saveASRSettings();
 };
 
-// 自动粘贴 / 自动回车：唯一入口是底部两个开关（ftPaste / ftEnter）
+// 主界面底部只保留需要随时切换的自动粘贴 / 自动回车；按住说话在设置页管理。
 $('ftPaste').onclick = () => toggleAutoPaste();
 
 $('ftEnter').onclick = () => toggleAutoEnter();
@@ -667,7 +883,8 @@ document.addEventListener('keydown', (e) => {
   const target = e.target;
   const isTyping = target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]');
   const isControl = target instanceof Element && target.closest('button, a');
-  if (e.code === 'Space' && mainInterfaceActive && !isTyping && !isControl) {
+  if (e.code === 'Space' && !e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey
+      && mainInterfaceActive && !isTyping && !isControl) {
     e.preventDefault();
     $('btn').click();
     return;
@@ -688,6 +905,7 @@ document.addEventListener('keydown', (e) => {
 // 开关脉冲 + playToggle 的音（开=高音、关=低音）。窗口不在前台时听声音即可，
 // 不再在这里补顶部提示——那行字既离操作位置远，又会连续切换时反复闪。
 window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => toggleAutoPaste());
+window.__TAURI__?.event?.listen('rtc:modifier-key', handleModifierKey);
 
 (async () => {
   renderRunStatus();
@@ -717,7 +935,8 @@ window.__TAURI__?.event?.listen('rtc:toggle-auto-paste', () => toggleAutoPaste()
   watchWake(handleSystemWake);
   startAudioFlowWatch();
   await renderHistory(true);
-  $('btn').click();
+  if (state.pushToTalk) preparePushToTalk();
+  else $('btn').click();
   // 启动 6 秒后静默检查更新；发现新版本时显示顶部横幅提醒
   setTimeout(() => checkForUpdates(false), 6000);
 })().catch(e => {

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 //
 // 这里钉三件事，每一件都会在安静中坏掉：
 //   1) 本地引擎（SenseVoice，默认引擎）的音频**不过前端 VAD 闸门**——分段由
-//      asr_local/server.py 自己那套同样的自适应 VAD 做。如果「说话状态」只在
+//      asr_local/server.py 按主界面刻度对应的固定阈值做。如果「说话状态」只在
 //      云端引擎那条路径上更新，用户用默认引擎时菜单栏永远不会说「说话中」，
 //      而且没有任何报错。所以 audio.js 必须为本地引擎也调 trackSpeech。
 //   2) 状态翻转必须**立刻**重渲染，不能等一秒一轮的轮询：用户说完半句话菜单栏才变，
@@ -32,7 +32,7 @@ globalThis.document = {
 globalThis.window = { addEventListener() {}, __TAURI__: null };
 
 const { state } = await import('../src/js/state.js');
-const { trackSpeech, vadSend, resetVAD } = await import('../src/js/asr.js');
+const { trackSpeech, vadSend, resetVAD, sendVADThreshold } = await import('../src/js/asr.js');
 const { trayView, HEARD_GRACE_MS, TONE_SPEAKING } = await import('../src/js/tray.js');
 const { computeRunStatus } = await import('../src/js/ui.js');
 const fs = await import('node:fs');
@@ -59,9 +59,9 @@ function setupRecording() {
   state.asrEngine = 'sensevoice';
   state.asrReady = true;
   state.asrWs = { readyState: 1, send() {} };
-  state.vadMode = 'manual';
   state.vadThreshold = 0.006;
   state.vadState = 'silent';
+  state.pushToTalkVisualActive = false;
   state.vadSilenceCount = 0;
   state.vadHeartbeat = 0;
   state.vadBuf.length = 0;
@@ -71,6 +71,23 @@ function setupRecording() {
 const loud = new Float32Array(4096).fill(0.05);
 const quiet = new Float32Array(4096).fill(0.0001);
 const pcm = new Int16Array(4096);
+
+// —— 按住说话的顶部反馈不等 VAD ——
+// 物理键按下就是用户的明确意图；如果仍绑定 vadState，用户不说话时
+// 无论按多久都不会有反馈。这里分别锁住底层已在录音和首次按下尚未开录两条路径。
+setupRecording();
+state.pushToTalkVisualActive = true;
+check(
+  '按住说话时即使完全安静，菜单栏也立即显示橙色波浪',
+  trayView(computeRunStatus(), false, Date.now() + 60_000).glyph === 'speaking'
+    && trayView(computeRunStatus(), false, Date.now() + 60_000).background === TONE_SPEAKING,
+);
+state.recording = false;
+check(
+  '首次按下尚在启动麦克风时，菜单栏也不等录音就绪',
+  trayView(computeRunStatus(), false, Date.now() + 60_000).background === TONE_SPEAKING,
+);
+state.pushToTalkVisualActive = false;
 
 // —— 0) 起说门槛：一瞬的噪声不许点亮「说话中」（用户 2026-09-19 提的）——
 // 一块大声 = 约 85ms 真实音频，人耳几乎察觉不到，但敲键盘/碰麦克风就是这种长度。
@@ -172,7 +189,27 @@ sent = 0;
 for (let i = 0; i < 54; i++) vadSend(quiet, pcm);
 check('长期安静：每 54 块送一次心跳（连接别被判死）', sent === 1);
 
-// —— 4) 源码层面的硬约束（行为测试覆盖不到的接线）——
+// —— 4) 主界面刻度真的会发给当前本地识别会话 ——
+setupRecording();
+state.vadThreshold = 0.012;
+state.asrTaskId = 'vad-threshold-test';
+let thresholdMessage = null;
+state.asrWs = {
+  readyState: WebSocket.OPEN,
+  send(raw) { thresholdMessage = JSON.parse(raw); },
+};
+check(
+  '本地会话就绪后，发出的是当前刻度值和当前 task_id',
+  sendVADThreshold()
+    && thresholdMessage?.header?.action === 'set-vad-threshold'
+    && thresholdMessage?.header?.task_id === 'vad-threshold-test'
+    && thresholdMessage?.payload?.threshold === 0.012,
+);
+state.asrReady = false;
+thresholdMessage = null;
+check('会话未就绪时不向错的任务发阈值', sendVADThreshold() === false && thresholdMessage === null);
+
+// —— 5) 源码层面的硬约束（行为测试覆盖不到的接线）——
 const audioSrc = readSrc('src/js/audio.js');
 const asrSrc = readSrc('src/js/asr.js');
 // 只看 updateSpeechState 这个函数体，免得断言被同文件其它地方的写法满足
@@ -184,7 +221,11 @@ check(
   '本地引擎分支里调了 trackSpeech（漏了就是「默认引擎下菜单栏永远不说说话中」）',
   /isLocalEngine[\s\S]{0,400}trackSpeech\(/.test(audioSrc),
 );
-check('停录时说话状态归零（否则菜单栏会把「说话中」留在那里）', /export function stopRec[\s\S]{0,800}vadState = 'silent'/.test(audioSrc));
+check(
+  '停录路径会把说话状态归零（按住松开不再停录，所以只剩 stopRec 这一条）',
+  /function stopCapture[\s\S]{0,800}vadState = 'silent'/.test(audioSrc)
+    && /export function stopRec\(\)[\s\S]{0,120}stopCapture\(\)/.test(audioSrc),
+);
 check(
   '说话状态翻转时立刻重渲染（等一秒轮询就失去意义）',
   /vadState = 'speech';[\s\S]*?renderRunStatus\(\)/.test(speechFn),

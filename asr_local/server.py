@@ -650,10 +650,8 @@ class Session:
         self.silence_ms = 0
         self.seg_start_ms = 0
         self.rms_threshold = RMS_THRESHOLD
-        self.vad_mode = "auto"
-        self.noise_floor = 0.0
-        self.noise_samples = deque(maxlen=48)
         self.auto_paste = False
+        self.push_to_talk = False
         self.pre_frames = deque(maxlen=int(PRE_ROLL_MS / FRAME_MS))
         self.seg_id = None
         self.seg_active_frames = 0
@@ -679,11 +677,11 @@ class Session:
                 self.engine = eng
             thr = params.get("vad_threshold")
             if thr is not None:
-                self.rms_threshold = float(thr)
-            self.vad_mode = "manual" if params.get("vad_mode") == "manual" else "auto"
+                self.rms_threshold = min(0.05, max(0.001, float(thr)))
             ap = params.get("auto_paste")
             if ap is not None:
                 self.auto_paste = bool(ap)
+            self.push_to_talk = bool(params.get("push_to_talk"))
             sil = params.get("silence_timeout")
             if sil is not None:
                 self.silence_cut_ms = int(sil)
@@ -701,6 +699,29 @@ class Session:
         elif action == "finish-task":
             await self.flush_segment(final=True, reason="finish_task")
             await self.send_event("task-finished")
+        elif action == "flush-segment":
+            # 按住说话模式的“松开”就是明确句尾，不需要再等静音超时。
+            # 只冲刷当前一句，不结束识别任务；下一次按下仍复用已预热的模型和连接。
+            await self.flush_segment(final=True, reason="manual_release")
+        elif action == "set-manual-segment":
+            # 常态录音里按下 / 松开快捷键：只在「手动」与「自动」之间切换当前这一段的断句权，
+            # 不动任务、连接、模型。松开时前端先发 flush-segment（那一刻 push_to_talk 仍为 True，
+            # 轻声短词不会被最小发声门槛丢掉），紧接着用本消息把断句权交回自动 VAD。
+            # 与 run-task 里的 push_to_talk 初值是同一个字段，两者不打架：一个只管连接建立那一刻。
+            self.push_to_talk = bool((msg.get("payload") or {}).get("enabled"))
+        elif action == "set-vad-threshold":
+            # 主界面电平尺是唯一阈值来源：拖动后当场生效，不必停录再重连。
+            threshold = (msg.get("payload") or {}).get("threshold")
+            if threshold is not None:
+                self.rms_threshold = min(0.05, max(0.001, float(threshold)))
+        elif action == "discard-segment":
+            # 修饰键被继续用于普通组合键时，这次按压不是语音入口；直接丢掉当前段。
+            self.in_speech = False
+            self.silence_ms = 0
+            self.buf.clear()
+            self.pre_frames.clear()
+            self.seg_start_ms = self.audio_ms
+            self._reset_segment_metrics()
 
     # ---------- 音频 ----------
 
@@ -729,14 +750,16 @@ class Session:
             frame_ms = len(frame_f) / 16
             self.pre_frames.append(frame_bytes)
 
-            if self.vad_mode == "auto":
-                quiet = self.noise_floor == 0 or rms < max(self.rms_threshold * 0.85, self.noise_floor * 1.35)
-                if quiet:
-                    self.noise_samples.append(rms)
-                    ordered = sorted(self.noise_samples)
-                    p25 = ordered[int((len(ordered) - 1) * 0.25)]
-                    self.noise_floor = p25 if self.noise_floor == 0 else self.noise_floor * 0.92 + p25 * 0.08
-                    self.rms_threshold = min(0.05, max(0.001, self.noise_floor * 2.8, self.noise_floor + 0.0025))
+            if self.push_to_talk:
+                # 主动按住期间，每一帧都属于用户明确圈定的语音。这里不再用 VAD、
+                # 环境噪声门槛或最短连续发声时长决定“值不值得识别”。
+                if not self.in_speech:
+                    self.seg_id = uuid.uuid4().hex[:8]
+                    self.seg_wall_start_ms = time.monotonic() * 1000
+                    self.in_speech = True
+                    self.seg_start_ms = max(0, self.audio_ms - frame_ms)
+                self.buf.extend(frame_bytes)
+                continue
 
             if rms >= self.rms_threshold:
                 self.last_speech_wall_ms = time.monotonic() * 1000
@@ -768,20 +791,22 @@ class Session:
                 if self.in_speech:
                     self.silence_ms += frame_ms
                     self.buf.extend(frame_bytes)
-                    if self.silence_ms >= self.silence_cut_ms:
+                    if not self.push_to_talk and self.silence_ms >= self.silence_cut_ms:
                         print(f"[VAD] force_flush due to silence timeout ({self.silence_cut_ms}ms reached, sil={self.silence_ms:.0f} audio={self.audio_ms:.0f})")
                         await self.flush_segment(final=True, reason="silence_timeout")
                         self.silence_ms = 0
 
     async def flush_segment(self, final: bool = False, reason: str = "unknown"):
         flush_wall_ms = time.monotonic() * 1000
+        manual_segment = bool(self.push_to_talk)
         pcm_all = bytes(self.buf)
         buffered_ms = int(len(pcm_all) / 2 / 16)
         active_ms = int(self.seg_active_ms)
         last_speech_to_flush_ms = round(flush_wall_ms - (self.last_speech_wall_ms or flush_wall_ms), 1)
         rms_mean = (self.seg_rms_sum / self.seg_rms_count) if self.seg_rms_count else 0.0
-        passes_min_speech = active_ms >= MIN_SPEECH_MS
-        passes_min_run = int(self.seg_max_run_ms) >= MIN_SPEECH_RUN_MS
+        # 连续录音需要挡掉碰麦克风等噪音；按住说话的边界由人给出，只要求确实收到音频。
+        passes_min_speech = buffered_ms > 0 if self.push_to_talk else active_ms >= MIN_SPEECH_MS
+        passes_min_run = buffered_ms > 0 if self.push_to_talk else int(self.seg_max_run_ms) >= MIN_SPEECH_RUN_MS
         decision = "pass" if passes_min_speech and passes_min_run else "drop"
         print(
             f"[VAD] flush_segment final={final} reason={reason} seg={self.seg_id} "
@@ -834,6 +859,7 @@ class Session:
                         "text": text,
                         "begin_time": int(self.seg_start_ms),
                         "end_time": int(self.audio_ms) if final else 0,
+                        "manual_segment": manual_segment,
                         "timing": timing,
                     }
                 }
@@ -899,9 +925,13 @@ async def handle(ws):
                     engine = (msg.get("payload") or {}).get("parameters", {}).get("engine", ENGINE)
                     session = Session(ws, header.get("task_id", "local"), engine_mgr, engine)
                     await session.handle_json(msg)
-                elif action == "finish-task" and session is not None:
+                elif action in ("finish-task", "flush-segment", "discard-segment", "set-manual-segment", "set-vad-threshold") and session is not None:
                     await session.handle_json(msg)
-                    session = None
+                    # 只有 finish-task 结束整条任务；按住说话的冲刷/丢弃/切换手动断句都复用预热连接。
+                    # 注意：这个白名单必须与 handle_json 里认的动作同步增减——不在名单里的控制消息
+                    # 会被默默丢掉，前端看起来“发了但没生效”，而且不报错。
+                    if action == "finish-task":
+                        session = None
     except websockets.exceptions.ConnectionClosed:
         pass
     finally:

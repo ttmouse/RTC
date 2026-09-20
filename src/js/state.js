@@ -47,7 +47,6 @@ export const state = {
   asrLastBeginTime: -1,
   totalDuration: 0,
   vadThreshold: 0.006,
-  vadMode: 'auto',
   silenceTimeout: 2000,
   gainMultiplier: 1,
   autoPaste: false,
@@ -59,6 +58,26 @@ export const state = {
   // 「哪些应用可以自动回车」的名单（存应用名身份，同 autoPasteApps）。空数组 = 沿用老行为：
   // 总闸开着就对所有应用回车。判定见 settings.shouldAutoEnter。
   autoEnterApps: [],
+  // 按住说话：开关只决定「快捷键是否生效」，**不再**关掉常态连续录音。
+  // 开启后按一下快捷键，只是把「这一句」的句尾交给手：按下到松开之间不听 VAD，
+  // 松开即定型；松开后常态的 VAD 自动断句立刻接回。
+  // pushToTalkHeld 只反映这一轮物理按键，防止系统按键重复事件重复启停。
+  pushToTalk: false,
+  pushToTalkKey: 'left-option',
+  pushToTalkHeld: false,
+  // 顶部菜单栏的「我正按住说话」回馈。它从物理键按下就立即生效，
+  // 不等 180ms 组合键判定，也不等 VAD 听到人声；一旦确认是组合键就撤回。
+  // 单独存它是为了不把视觉反馈与录音/断句状态耦合。
+  pushToTalkVisualActive: false,
+  // 这一句已交给手动：过了组合键判定窗口、确认是单独按住之后置 true，松开或作废时置 false。
+  // 「忽略 VAD」只看它，不看上面的模式开关——所以常态录音只在真正按住的那一小段绕过 VAD，
+  // 模式开着但没按的时候，一切仍归 VAD。
+  pushToTalkManual: false,
+  // 百炼的最终结果在松手之后才回来；用 task_id 记住“这条来自快捷键”，避免结果回来时
+  // pushToTalkManual 已恢复 false，继而误读主界面的自动粘贴开关。
+  pushToTalkPasteTaskId: '',
+  // 松开时识别任务可能还在连接；先记住“连上后立刻提交”，避免短句丢在缓冲区里。
+  pushToTalkFlushPending: false,
   sfxOn: true,             // 按钮提示音开关（sfx.js）
   noiseFilter: true,
   correctionRules: [],
@@ -91,6 +110,21 @@ export const state = {
     model: '',
   },
 };
+
+export const PUSH_TO_TALK_KEYS = Object.freeze({
+  'left-control': '左 Control',
+  'left-option': '左 ⌥',
+  'right-control': '右 Control',
+  'right-option': '右 ⌥',
+});
+
+export function normalizePushToTalkKey(value) {
+  return Object.hasOwn(PUSH_TO_TALK_KEYS, value) ? value : 'left-option';
+}
+
+export function pushToTalkKeyLabel(value) {
+  return PUSH_TO_TALK_KEYS[normalizePushToTalkKey(value)];
+}
 
 export const ASR_PRICE = 0.00033;
 
@@ -128,6 +162,20 @@ export function meterPctToDb(pct) {
 export function clampVADThreshold(v) {
   if (!Number.isFinite(v)) return VAD_THRESHOLD_MIN;
   return Math.min(VAD_THRESHOLD_MAX, Math.max(VAD_THRESHOLD_MIN, Number(v)));
+}
+
+/**
+ * 只用于从旧版「自动 / 手动」配置迁移到单一刻度。
+ * 旧自动值可能只是某次环境噪声算出的临时值，不能永久当成用户选择；
+ * 旧手动值则是用户明确调过的，必须保留。迁移落盘后旧字段会被删除。
+ */
+export function resolveVADThreshold(settings = {}) {
+  const saved = settings.vadThreshold != null ? clampVADThreshold(settings.vadThreshold) : 0.006;
+  const legacyMode = settings.vadMode === 'auto' || settings.vadMode === 'manual';
+  return {
+    threshold: settings.vadMode === 'auto' ? 0.006 : saved,
+    legacyMode,
+  };
 }
 
 // ---------- 引擎辅助 ----------

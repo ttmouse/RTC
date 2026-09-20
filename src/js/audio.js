@@ -1,6 +1,6 @@
 import { state, rmsToMeterPct, isLocalEngine, normalizeEngine } from './state.js';
 import { renderRunStatus, setRecordBtn } from './ui.js';
-import { vadSend, trackSpeech, sendPCM, finalizePending, disconnectBailian } from './asr.js';
+import { vadSend, trackSpeech, sendPCM, finalizePending, disconnectBailian, discardPushToTalkSegment } from './asr.js';
 import { flushTotalDuration } from './settings.js';
 import { playStop } from './sfx.js';
 import { feedMeter, startMeter, resetMeter } from './meter.js';
@@ -120,10 +120,18 @@ export async function startAudio() {
 
       if (state.asrEngine === 'bailian') {
         const pcm = floatToInt16(down);
-        vadSend(down, pcm);
+        if (state.pushToTalkManual) {
+          // 主动按住本身就是明确的收音授权与句子边界：不再用音量门槛拦截轻声或短词。
+          // trackSpeech 只负责菜单栏的视觉反馈，不参与是否发送音频的决定。
+          // 只看 pushToTalkManual：模式开着但没按的时段，常态录音仍走 vadSend。
+          trackSpeech(down);
+          sendPCM(pcm);
+        } else {
+          vadSend(down, pcm);
+        }
       } else if (isLocalEngine(normalizeEngine(state.asrEngine))) {
-        // 本地引擎的音频不过前端 VAD 闸门（分段由 asr_local/server.py 自己那套同样的
-        // 自适应 VAD 做，每块都送），但「现在有没有人在说话」是共用的结论——
+        // 本地引擎的音频不过前端 VAD 闸门（分段由 asr_local/server.py 按主界面刻度
+        // 对应的固定阈值做，每块都送），但「现在有没有人在说话」是共用的结论——
         // 菜单栏的「说话中」靠它，否则本地引擎下那个状态永远不会亮。
         trackSpeech(down);
         const pcm = floatToInt16(down);
@@ -242,8 +250,8 @@ export function startAudioFlowWatch(intervalMs = 1000) {
   }, intervalMs);
 }
 
-export function stopRec() {
-  playStop();   // 停录路径可能来自按钮 / 快捷键 / WS 断开，统一在这里出声
+function stopCapture(withSound = true) {
+  if (withSound) playStop();   // 停录路径可能来自按钮 / 快捷键 / WS 断开，统一在这里出声
   state.wantRecording = false;
   state.recording = false;
   state.recStartTs = 0;
@@ -256,10 +264,6 @@ export function stopRec() {
   state.speechHeardAt = 0;
   clearTimeout(state.reconnectTimer);
   releaseAudioInput();
-  finalizePending();
-  disconnectBailian();
-  state.pcmSendBuffer = [];
-  state.pcmBufferStartTime = 0;
   state.audioDuration = 0;
   state.asrLastTime = 0;
   state.audioTickAt = 0;
@@ -272,4 +276,24 @@ export function stopRec() {
   // 这里不再单独改 className，否则状态就有了两个来源。
   setRecordBtn(false);
   renderRunStatus();
+}
+
+export function stopRec() {
+  stopCapture();
+  finalizePending();
+  disconnectBailian();
+  state.pcmSendBuffer = [];
+  state.pcmBufferStartTime = 0;
+}
+
+/**
+ * 按住说话的松开路径：现在不停采集、也不拆连接，只把当前句冲刷掉。
+ * 录音继续跑（常态 VAD 自动断句），由 main.js 的 endPushToTalk 调 asr.js 的
+ * flushPushToTalkSegment 完成，所以旧的 stopPushToTalkRec 已经不再需要。
+ */
+
+/** 这次按键实际属于组合键：停采集并丢掉已收音频，不产生识别结果。 */
+export function cancelPushToTalkRec() {
+  stopCapture(false);
+  discardPushToTalkSegment();
 }

@@ -41,6 +41,124 @@ mod mac_accessibility {
     }
 }
 
+#[cfg(target_os = "macos")]
+mod mac_modifier_keys {
+    use block2::RcBlock;
+    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
+    use serde::Serialize;
+    use std::ptr::NonNull;
+    use tauri::{AppHandle, Emitter, Runtime};
+
+    #[derive(Clone, Serialize)]
+    struct ModifierKeyEvent {
+        key: &'static str,
+        state: &'static str,
+    }
+
+    fn modifier_from_event(event: &NSEvent) -> Option<(&'static str, NSEventModifierFlags)> {
+        match event.keyCode() {
+            58 => Some(("left-option", NSEventModifierFlags::Option)),
+            59 => Some(("left-control", NSEventModifierFlags::Control)),
+            61 => Some(("right-option", NSEventModifierFlags::Option)),
+            62 => Some(("right-control", NSEventModifierFlags::Control)),
+            _ => None,
+        }
+    }
+
+    fn emit_chord<R: Runtime>(app: &AppHandle<R>) {
+        let _ = app.emit(
+            "rtc:modifier-key",
+            ModifierKeyEvent {
+                key: "",
+                state: "chord",
+            },
+        );
+    }
+
+    fn has_any_modifier(flags: NSEventModifierFlags) -> bool {
+        flags.intersects(
+            NSEventModifierFlags::Shift
+                | NSEventModifierFlags::Control
+                | NSEventModifierFlags::Option
+                | NSEventModifierFlags::Command,
+        )
+    }
+
+    fn has_other_modifier(flags: NSEventModifierFlags, own: NSEventModifierFlags) -> bool {
+        let supported = NSEventModifierFlags::Shift
+            | NSEventModifierFlags::Control
+            | NSEventModifierFlags::Option
+            | NSEventModifierFlags::Command;
+        (flags & supported & !own).is_empty() == false
+    }
+
+    fn emit_event<R: Runtime>(app: &AppHandle<R>, event: &NSEvent) {
+        if event.r#type() == NSEventType::KeyDown {
+            // 普通键介入（例如 Control+C）时，取消单修饰键热键。
+            emit_chord(app);
+            return;
+        }
+
+        let flags = event.modifierFlags();
+        let Some((key, own_flag)) = modifier_from_event(event) else {
+            // 键盘工具可能把 Caps Lock 映射成 Shift+Control+Option+Command。
+            // 这种输入通常只有一个 FlagsChanged 事件，keyCode 不是四个物理修饰键之一；
+            // 只要看到一组受支持的修饰键，就按组合键处理，不能让单独 Control 抢先启动录音。
+            if has_any_modifier(flags) {
+                emit_chord(app);
+            }
+            return;
+        };
+
+        // 目标修饰键之外还有其它修饰键时，优先按系统组合键处理。
+        // 这覆盖了 Caps Lock → Shift+Control+Option+Command 这类“伪装组合键”。
+        if has_other_modifier(flags, own_flag) {
+            emit_chord(app);
+            return;
+        }
+
+        let state = if flags.contains(own_flag) { "pressed" } else { "released" };
+        let _ = app.emit("rtc:modifier-key", ModifierKeyEvent { key, state });
+    }
+
+    /// AppKit 的全局快捷键注册不接受“只有修饰键”，也分不清左右；FlagsChanged 的
+    /// keyCode 才能区分左/右 Ctrl 与 Option。全局监听收其它应用，本地监听补本应用前台。
+    pub fn install<R: Runtime>(app: &AppHandle<R>) {
+        let global_app = app.clone();
+        let global = RcBlock::new(move |raw: NonNull<NSEvent>| {
+            let event = unsafe { raw.as_ref() };
+            emit_event(&global_app, event);
+        });
+        if let Some(token) = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
+            NSEventMask::FlagsChanged | NSEventMask::KeyDown,
+            &global,
+        ) {
+            // App 生命周期内常驻；drop token 可能让系统提前释放监听器。
+            std::mem::forget(token);
+        } else {
+            eprintln!("[tauri] 修饰键全局监听注册失败");
+        }
+
+        let local_app = app.clone();
+        let local = RcBlock::new(move |raw: NonNull<NSEvent>| -> *mut NSEvent {
+            let event = unsafe { raw.as_ref() };
+            emit_event(&local_app, event);
+            raw.as_ptr()
+        });
+        let token = unsafe {
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                NSEventMask::FlagsChanged | NSEventMask::KeyDown,
+                &local,
+            )
+        };
+        if let Some(token) = token {
+            std::mem::forget(token);
+        } else {
+            eprintln!("[tauri] 修饰键本地监听注册失败");
+        }
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 mod mac_accessibility {
     pub fn is_trusted() -> bool {
@@ -1269,7 +1387,7 @@ pub fn run() {
                 }
             }
 
-            // 系统级全局热键 ⌥⌘P：切换「自动粘贴」。
+            // 系统级全局热键 ⌥⌘P：切换自动粘贴。
             // 为什么需要全局：典型场景是在别的应用里打字时临时开/关粘贴，
             // 切回本窗口会打断输入（应用内已有的 ⌘⇧V 只在窗口聚焦时有效）。
             // 注册失败（被别的进程占用等）不影响启动，只打印警告。
@@ -1279,11 +1397,11 @@ pub fn run() {
                     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
                 };
                 let toggle_paste = Shortcut::new(Some(Modifiers::ALT | Modifiers::META), Code::KeyP);
+                let toggle_paste_id = toggle_paste.id();
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
-                        .with_handler(move |app, _shortcut, event| {
-                            // 按下触发一次（松开不再触发）
-                            if event.state() == ShortcutState::Pressed {
+                        .with_handler(move |app, shortcut, event| {
+                            if shortcut.id() == toggle_paste_id && event.state() == ShortcutState::Pressed {
                                 let _ = app.emit("rtc:toggle-auto-paste", ());
                             }
                         })
@@ -1294,6 +1412,11 @@ pub fn run() {
                     Err(e) => eprintln!("[tauri] 全局热键 ⌥⌘P 注册失败: {e}"),
                 }
             }
+
+            // 左/右 Ctrl、Option 不能走上面的全局快捷键插件：它要求必须带一个普通键，
+            // 而且会把左右修饰键合并。用 macOS FlagsChanged 原生事件保留物理键身份。
+            #[cfg(target_os = "macos")]
+            mac_modifier_keys::install(app.handle());
 
             let is_dev = cfg!(debug_assertions);
 
