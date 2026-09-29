@@ -989,8 +989,14 @@ const server = http.createServer((req, res) => {
     return path.join(MEETINGS_DIR, `${id}.md`);
   }
 
+  // 场次 ID 只认这一种格式：rtc-meeting-<unix 秒>。它有两处不可信用途：拼进 .md 文件
+  // 路径（sessionDocPath），和直接当 meeting-board.json 的键。不设白名单的话，
+  // ?sessionId=..%2F..%2Ffoo 解码后能把任意路径拼进写盘调用；读取侧的 findBoardSession
+  // 一直有这道校验，写入侧此前漏了。要么不放行，要么当「没有 sessionId」处理。
+  const BOARD_SESSION_ID_RE = /^rtc-meeting-\d+$/;
+
   function writeSessionDoc(id, content) {
-    if (!id || typeof content !== 'string') return;
+    if (!id || !BOARD_SESSION_ID_RE.test(id) || typeof content !== 'string') return;
     const filePath = sessionDocPath(id);
     fs.mkdir(MEETINGS_DIR, { recursive: true }, (err) => {
       if (err) { console.warn('[board] mkdir meetings:', err.message); return; }
@@ -1282,6 +1288,11 @@ const server = http.createServer((req, res) => {
       }
       const board = readMeetingBoard();
       const id = boardUrl.searchParams.get('sessionId');
+      if (id && !BOARD_SESSION_ID_RE.test(id)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid sessionId' }));
+        return;
+      }
       if (id) {
         board.sessions = board.sessions || {};
         board.sessions[id] = { ...(board.sessions[id] || {}), definition: parsed };
@@ -1309,6 +1320,11 @@ const server = http.createServer((req, res) => {
       const board = readMeetingBoard();
       const id = boardUrl.searchParams.get('sessionId');
       const document = typeof parsed.document === 'string' ? parsed.document : '';
+      if (id && !BOARD_SESSION_ID_RE.test(id)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid sessionId' }));
+        return;
+      }
       if (id) {
         board.sessions = board.sessions || {};
         board.sessions[id] = { ...(board.sessions[id] || {}), document };
@@ -1622,6 +1638,11 @@ const server = http.createServer((req, res) => {
       const board = readMeetingBoard();
       const id = boardUrl.searchParams.get('sessionId');
       const analysis = { ...parsed, _updatedAt: parsed._updatedAt || new Date().toISOString() };
+      if (id && !BOARD_SESSION_ID_RE.test(id)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid sessionId' }));
+        return;
+      }
       if (id) {
         board.sessions = board.sessions || {};
         board.sessions[id] = { ...(board.sessions[id] || {}), analysis };
@@ -1863,7 +1884,14 @@ const server = http.createServer((req, res) => {
       done = true;
       try { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); } catch (e) {}
     };
-    req.on('data', chunk => { body += chunk; });
+    req.on('data', chunk => {
+      body += chunk;
+      // 与 readJsonBody 同一道闸：本机异常客户端不该能用无限大的 body 占内存。
+      // 实际只用到前 5000 字符，超限直接断开，不读完再截。
+      if (body.length > 1024 * 1024) {
+        req.destroy();
+      }
+    });
     req.on('end', () => {
       startedAt = Date.now();
       let text, autoEnter = false;
@@ -1898,7 +1926,8 @@ const server = http.createServer((req, res) => {
         as.on('exit', (code) => {
           if (TIMING_LOGS) console.log(`[timing-node] paste.osascript ${Date.now() - startedAt}ms code=${code}`);
           if (code === 0) {
-            console.log('[paste] 成功' + (autoEnter ? ' + 回车' : '') + ':', text.slice(0, 40));
+            // 默认只打长度，不打内容：口述文本属于敏感数据，终端日志会被留存/同步。
+            console.log('[paste] 成功' + (autoEnter ? ' + 回车' : '') + `: textLen=${text.length}`);
             respond(200, { ok: true });
           } else {
             // pbcopy 已写入剪贴板，osascript 失败不影响复制结果
@@ -1991,14 +2020,53 @@ function sanitizeBailianTask(text) {
 
 const LOCAL_ASR_URL = process.env.LOCAL_ASR_URL || 'ws://127.0.0.1:8932';
 
-const wss = new WebSocket.Server({ server });
+/**
+ * 百炼上游地址白名单：engine=bailian 时只允许连阿里云百炼的推理端点。
+ *
+ * 浏览器对 WebSocket 握手不受 CORS 约束——用户浏览器里任意网页都能对
+ * ws://127.0.0.1:8931 发起连接。connectMsg.url 是客户端可控字段，不设白名单的话
+ * 本服务就是一个指向任意 ws/wss 地址的双向中继（SSRF / 内网探测 oracle）。
+ * 前端实际使用的地址只有 dashscope.aliyuncs.com 一家（asr.js / settings.js），
+ * 收窄到这个域名的 wss 端点，其他一律拒绝。
+ */
+function isAllowedUpstreamUrl(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || ''));
+    if (u.protocol !== 'wss:') return false;
+    const host = u.hostname.toLowerCase();
+    return host === 'dashscope.aliyuncs.com' || host.endsWith('.dashscope.aliyuncs.com');
+  } catch {
+    return false;
+  }
+}
+
+// 用 noServer + 手动 upgrade：来源闸必须发生在 HTTP 升级阶段。如果等 'connection'
+// 事件再 ws.close(1008)，握手已经完成——客户端照样收到 open，闸只是个事后通知。
+// 在 upgrade 回调里销毁 socket，浏览器拿到的才是真正的握手失败。
+const wss = new WebSocket.Server({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+  // 与 HTTP 侧同一道来源闸：WS 握手是浏览器发起的普通 HTTP 请求，带 Origin 头。
+  // HTTP 路径上 isAllowedOrigin 挡住的「任意网页跨站连接」，不能从 WS 这条路绕回来。
+  // 没有 Origin 的（curl / Node 客户端 / Tauri webview 自定义协议）照 HTTP 侧的规则放行。
+  if (!isAllowedOrigin(request.headers.origin)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  const wsUrl = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
+  if (!hasValidRemoteToken(request, wsUrl.searchParams.get('token'))) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
+});
 
 wss.on('connection', (ws, request) => {
   const wsUrl = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
-  if (!hasValidRemoteToken(request, wsUrl.searchParams.get('token'))) {
-    ws.close(1008, 'remote access token required');
-    return;
-  }
   let upstream = null;
   let engine = null;
   let closed = false;
@@ -2039,6 +2107,13 @@ wss.on('connection', (ws, request) => {
       ws.send(JSON.stringify({ type: 'error', message: 'missing upstream url' }));
       return close();
     }
+    // 上游白名单：bailian 只许连百炼的 wss 端点（见 ALLOWED_UPSTREAM_RE 上方注释）。
+    // 错误信息固定文案，不回带 err.message——那会把内网探测结果喂回给发起方。
+    if (!isLocal && !isAllowedUpstreamUrl(upstreamUrl)) {
+      console.warn(`[server] rejected bailian upstream: not a dashscope endpoint`);
+      ws.send(JSON.stringify({ type: 'error', message: '不支持的引擎地址：仅允许百炼（dashscope）端点' }));
+      return close();
+    }
 
     console.log(`[server] engine=${engine} connecting to ${isLocal ? LOCAL_ASR_URL : '百炼'}`);
 
@@ -2057,7 +2132,9 @@ wss.on('connection', (ws, request) => {
 
     upstream.on('error', (err) => {
       console.log(`[server] ${engine} error:`, err.message);
-      ws.send(JSON.stringify({ type: 'error', message: `${isLocal ? '本地ASR' : '百炼'}错误: ${err.message}` }));
+      // 固定文案回传：err.message 里可能带着上游主机名/解析细节，原样回传等于
+      // 把本服务当成探测内网的 oracle（连接什么都能试，失败原因还免费告诉你）。
+      ws.send(JSON.stringify({ type: 'error', message: `${isLocal ? '本地ASR' : '百炼'}连接失败，请检查引擎服务是否在运行` }));
       close();
     });
 
@@ -2092,13 +2169,14 @@ wss.on('connection', (ws, request) => {
           if (isLocal) {
             // 本地引擎（sensevoice/qwen3）：Python 端已只发完整句，全转发
             if (textContent) {
-              console.log(`[server] ${engine} result: ${textContent.slice(0, 40)}...`);
+              // 识别结果即用户口述内容，默认只记长度（TIMING_LOGS 调试时也不落正文）
+              console.log(`[server] ${engine} result: textLen=${textContent.length}`);
               ws.send(TIMING_LOGS ? JSON.stringify(parsed) : text);
             }
           } else {
             // 百炼：所有有文本的结果都转发（中间帧用于前端临时行显示，完整句带 end_time 用于定型）
             if (textContent) {
-              console.log(`[server] bailian result: ${textContent.slice(0, 40)}...`);
+              console.log(`[server] bailian result: textLen=${textContent.length}`);
               ws.send(TIMING_LOGS ? JSON.stringify(parsed) : text);
             } else {
               console.log(`[server] skip interim (no text)`);
@@ -2145,9 +2223,10 @@ wss.on('connection', (ws, request) => {
         }
       } catch (e) {}
 
-      // 发送给上游（字符串 → 文本帧）
+      // 发送给上游（字符串 → 文本帧）。run-task 的 parameters 不含口述内容，
+      // 但为稳妥统一只打长度，不打 payload 原文。
       const outgoing = isLocal ? text : sanitizeBailianTask(text);
-      console.log(`[server] forward to ${engine}: ${outgoing.slice(0, 60)}...`);
+      console.log(`[server] forward to ${engine}: len=${outgoing.length}`);
       try {
         upstream.send(outgoing);
       } catch (e) {

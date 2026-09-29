@@ -329,16 +329,14 @@ export function refreshTimestampVisibility() {
  *
  * `activeApp` 是说话时的前台应用快照；`pasteStatus` 独立表示是否执行了自动粘贴。
  * 两者不传时，行先按普通正文创建，稍后由 asr.js 异步补上。
- * 返回这一行的元素，供调用方稍后补状态；被去重跳过时返回 null。
+ * 返回这一行的元素，供调用方稍后补状态。
+ *
+ * 这里不做「与最后一条文本相同就跳过」的去重：同一句话连说两遍（「好」「好」）
+ * 是正常输入，按文本去重会让第二条在界面上消失，而 saveEntry 照常落盘——
+ * 数据在 JSONL 里、屏幕上却没有，正是 history.js 渲染侧已经修掉过的那类毛病。
+ * 列表去重只认 eventId（见 history.js 的 rendered 集合）。
  */
 export function addLine(dateObj, text, isInterim, activeApp, pasteStatus) {
-  if (!isInterim) {
-    const lastLine = $('list').querySelector('.line:last-child');
-    if (lastLine) {
-      const lastTxt = lastLine.querySelector('.txt');
-      if (lastTxt && lastTxt.textContent === text) return null;
-    }
-  }
   const { day, el } = buildLine(dateObj, text, isInterim);
   const emp = $('list').querySelector('.empty');
   if (emp) emp.remove();
