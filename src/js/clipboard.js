@@ -13,7 +13,8 @@ export function pasteToCursor(text, autoEnter) {
       ok,
     }));
   };
-  console.log('[paste] 进入粘贴, text:', text.slice(0, 30), 'autoEnter:', autoEnter);
+  // 粘贴文本是用户口述内容，日志只记长度（对齐 asr.js 的脱敏口径）
+  console.log('[paste] 进入粘贴, textLen:', text.length, 'autoEnter:', autoEnter);
 
   // 粘贴结果只有这一处分流：Tauri 与 HTTP 两条路径共用，避免以后再加通道时
   // 漏掉音效、或各写一份重复发声（UX.FEEDBACK.001：同一动作共享同一反馈）。
@@ -106,7 +107,7 @@ export function copyToSystemClipboard(text) {
         textLen: text.length,
         ok: true,
       }));
-      console.log('[clipboard] 复制成功:', text.slice(0, 30));
+      console.log('[clipboard] 复制成功, textLen:', text.length);
     })
     .catch(e => {
       const msg = (e && e.message) ? e.message : String(e);

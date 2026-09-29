@@ -544,14 +544,21 @@ function handleASRResult(sentence, browserReceivedAt, resultEngine) {
   const segId = sentence.seg_id || null;
   const timing = sentence.timing || null;
   const context = { taskId: state.asrTaskId, segId, final: isFinal, rawText: text, text: corrected, autoPaste: state.autoPaste, engine: state.asrEngine, browserReceivedAt };
-  console.log('[ASR]', JSON.stringify(context));
+  // 识别结果是用户口述内容，默认只打长度不打正文（演示投屏 / 日志收集时跟着泄露）。
+  // rawText/text 保留在对象里，DEBUG_ASR_TEXT=1 时才整体输出。
+  if (localStorage.getItem('DEBUG_ASR_TEXT') === '1') {
+    console.log('[ASR]', JSON.stringify(context));
+  } else {
+    console.log('[ASR]', JSON.stringify({ ...context, rawText: undefined, text: undefined, textLen: (corrected || '').length }));
+  }
   if (timing) {
     const nodeSentAt = timing.node_sent_wall_ms || timing.py_flush_wall_ms || null;
+    // timing-js 是排延迟用的：正文对排障没有帮助，同样只记长度。
     console.log('[timing-js]', JSON.stringify({
       stage: 'asr_result_received',
       taskId: state.asrTaskId,
       segId,
-      text,
+      textLen: (text || '').length,
       browserReceivedAt,
       nodeSentAt,
       browserToNodeMs: nodeSentAt ? Math.round((browserReceivedAt - nodeSentAt) * 10) / 10 : null,
@@ -563,16 +570,20 @@ function handleASRResult(sentence, browserReceivedAt, resultEngine) {
 
   if (state.noiseFilter) {
     const trimmed = corrected.trim();
+    // filter 日志同样脱敏：只记长度与规则，不带 rawText/text。
+    const logContext = (rule) => console.log('[filter]', JSON.stringify({
+      ...context, rawText: undefined, text: undefined, textLen: trimmed.length, rule,
+    }));
     if (trimmed.length < 2) {
-      console.log('[filter]', JSON.stringify({ ...context, rule: 'short_text' }));
+      logContext('short_text');
       return;
     }
     if (trimmed.length < 3 && /^[a-zA-Z,.!?;:'\-\s]+$/.test(trimmed)) {
-      console.log('[filter]', JSON.stringify({ ...context, rule: 'en_noise' }));
+      logContext('en_noise');
       return;
     }
     if (trimmed.length < 8 && !/[\u4e00-\u9fff\u3400-\u4dbf]/.test(trimmed) && /^[a-zA-Z,.!?;:'\-\s]+$/.test(trimmed)) {
-      console.log('[filter]', JSON.stringify({ ...context, rule: 'en_short_word' }));
+      logContext('en_short_word');
       return;
     }
   }
