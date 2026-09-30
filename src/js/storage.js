@@ -10,7 +10,7 @@ export async function appendTranscriptEvent(text, ts, engine, activeApp, pasteSt
         text,
         ts: ts || new Date().toISOString(),
         engine: engine || null,
-        // 记录说话时的前台应用快照，与粘贴结果分开保存。
+        // 记录说话时的前台应用快照（含窗口标题，拿不到为 null），与粘贴结果分开保存。
         activeApp: activeApp || null,
         pasteStatus: pasteStatus || 'not-pasted',
       },

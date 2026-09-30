@@ -15,6 +15,8 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const WebSocket = require('ws');
+// 白板人工内容锚点的唯一正本（.cjs 保证 bun 打包时能静态 require 进 server.bundle.js）
+const boardProvenance = require('./scripts/board-provenance.cjs');
 
 // ========== HTTP 服务（前端页面） ==========
 
@@ -148,8 +150,8 @@ function localDateStamp(input) {
 const MEETING_SILENCE_SEC = 300; // 静默 5 分钟切分会议段（与 scripts/transcript.mjs 一致）
 const MEETING_OUTPUT_DIR = process.env.RTC_MEETING_OUTPUT_DIR
   || path.join(os.homedir(), 'Documents', '会议纪要');
-const PRELIMINARY_MODEL = process.env.RTC_PRELIMINARY_MODEL || 'minicpm5-meeting';
-const PRELIMINARY_OLLAMA_URL = process.env.RTC_OLLAMA_URL || process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+// 纪要草稿（/api/meeting-board/preliminary）的进行中请求表：同一场次只保留一份，
+// 按钮双击不会朝上游打两枪。草稿只在用户点按钮时触发，不随转写自动跑。
 const preliminaryRequests = new Map();
 
 const pad2 = n => String(n).padStart(2, '0');
@@ -188,6 +190,21 @@ function providerHeaders(baseUrl, sessionId) {
 function meetingSessionId(start) {
   const t = start instanceof Date ? start.getTime() : Date.parse(start);
   return 'rtc-meeting-' + (Number.isFinite(t) ? Math.floor(t / 1000) : 'x');
+}
+
+/**
+ * 白板「生成纪要草稿」用的 AI 配置：读用户在设置里配的服务商（设置 → AI 接入），
+ * 与 analyze / infer-definition 同一份 settings.ai。没配 baseUrl/model 就返回 null，
+ * 由调用方给出指路提示——草稿是旁路功能，没有配置也不能报错或写任何数据。
+ */
+function boardAiSettings() {
+  try {
+    const ai = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'))?.settings?.ai;
+    const baseUrl = typeof ai?.baseUrl === 'string' ? ai.baseUrl.trim() : '';
+    const apiKey = typeof ai?.apiKey === 'string' ? ai.apiKey.trim() : '';
+    const model = typeof ai?.model === 'string' ? ai.model.trim() : '';
+    return baseUrl && model ? { baseUrl, apiKey, model } : null;
+  } catch { return null; }
 }
 
 /**
@@ -1098,11 +1115,6 @@ const server = http.createServer((req, res) => {
   const boardPath = boardUrl.pathname;
   const defaultDefinition = { background: '', expectedOutput: '', roles: '', boundary: '' };
 
-  function preliminaryChatEndpoint(baseUrl) {
-    const base = String(baseUrl || '').replace(/\/+$/, '');
-    return /\/api\/chat$/i.test(base) ? base : `${base}/api/chat`;
-  }
-
   function preliminarySourceFingerprint(text) {
     return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
   }
@@ -1134,60 +1146,96 @@ const server = http.createServer((req, res) => {
     }).join('\n');
   }
 
-  function plausiblePreliminary(source, output) {
+  /**
+   * 纪要草稿的底线校验：非空、不是模型拒答套话、不比逐字稿还长（草稿是压缩，不是扩写）。
+   * 故意不设「保留率」下限——纪要本来就该比原文短得多；宁松勿严，
+   * 守门失败的代价只是回退展示原文（fallback），不会伤到任何真实数据。
+   */
+  function plausibleMeetingDraft(source, output) {
     const text = String(output || '').trim();
     const sourceChars = String(source || '').replace(/[\s\p{P}]/gu, '');
     const outputChars = text.replace(/[\s\p{P}]/gu, '');
-    if (!text || !sourceChars || outputChars.length > sourceChars.length * 4) return false;
-    if (/没有提供|请直接粘贴|如果您有需要|例如您可以这样提供|请把需要整理的内容发给我/u.test(text)) return false;
-    const sourceSet = new Set([...sourceChars]);
-    const retained = [...new Set([...outputChars])].filter((char) => sourceSet.has(char)).length;
-    return retained / Math.max(1, new Set([...sourceChars]).size) >= 0.45;
+    if (!text || !sourceChars) return false;
+    if (outputChars.length > sourceChars.length) return false;
+    if (/没有提供|请直接粘贴|如果您有需要|例如您可以这样提供|请把需要整理的内容发给我|我无法|作为AI|作为一个AI/u.test(text)) return false;
+    return true;
   }
 
-  async function runPreliminary整理(session, id, transcript, sourceFingerprint) {
+  async function runPreliminary整理(session, id, transcript, sourceFingerprint, ai) {
     let preliminary;
     try {
-      const upRes = await fetch(preliminaryChatEndpoint(PRELIMINARY_OLLAMA_URL), {
+      // 调用户在设置里配的 AI（OpenAI 兼容），与 analyze / infer-definition 同一套调用方式。
+      // 会话 ID 直接用场次 ID：同一场会反复起草走同一条网关路由，能吃到 prompt cache。
+      //
+      // max_tokens 放宽到 16384：思考型模型（如 GLM-5.3-Flash）会把输出上限先耗在思考上，
+      // 实测 4096 全变成 reasoning_tokens、正文为空。智谱系（bigmodel.cn / z.ai）显式关掉思考
+      // ——起草要的是快和省，不是长推理；其余服务商不加这个私有字段，避免兼容性问题。
+      let upstreamHost = '';
+      try { upstreamHost = new URL(ai.baseUrl).hostname; } catch { /* 非法地址交给 fetch 报错 */ }
+      const isZhipu = upstreamHost === 'bigmodel.cn' || upstreamHost.endsWith('.bigmodel.cn')
+        || upstreamHost === 'z.ai' || upstreamHost.endsWith('.z.ai');
+      const upRes = await fetch(chatEndpoint(ai.baseUrl), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ai.apiKey ? { Authorization: `Bearer ${ai.apiKey}` } : {}),
+          ...providerHeaders(ai.baseUrl, id),
+        },
         body: JSON.stringify({
-          model: PRELIMINARY_MODEL,
+          model: ai.model,
           messages: [
             {
               role: 'system',
-              content: '你是 RTC 会议转写初步整理器。只修正明显的语音识别错误、补充标点、断句、分段，并清理口头禅和重复表达，让原始转写更容易阅读。必须保留原意、说话顺序、语气和不确定性，尽量只做最小修改。不要总结、提炼决策、生成待办或推测负责人、日期、数字、因果关系。相对时间和不确定内容原样保留。只输出整理后的正文，不要标题、说明、Markdown 代码块或思考过程。',
+              content: '你是会议纪要起草员。根据下面的会议逐字稿，起草一份供人直接阅读和修改的会议纪要草稿。\n'
+                + '\n'
+                + '要求：\n'
+                + '1. 按讨论主题分节：每节用「## 主题」作标题，写清这个主题下讨论了什么、形成了什么结论。\n'
+                + '2. 文末单列一节「## 待办」，逐条写谁、在什么时间、要做什么；逐字稿里没说清负责人或期限的，如实写「未明确」，不要替人补。\n'
+                + '3. 只使用逐字稿里出现过的信息。不确定、有分歧、被否决的内容照实标注，不推测、不补全、不添加逐字稿里没有的结论。\n'
+                + '4. 人名、数字、日期、专有名词按逐字稿原样保留；明显的语音识别错别字可以顺手修正。\n'
+                + '5. 把口语压缩成通顺的书面语，但不要夸大、美化或加戏。\n'
+                + '6. 直接输出 Markdown 正文，不要解释，不要用代码块包裹。',
             },
-            { role: 'user', content: `以下是原始会议转写，请只做初步整理：\n${transcript}` },
+            { role: 'user', content: `以下是这场会议的逐字稿：\n${transcript}` },
           ],
           stream: false,
-          options: { temperature: 0.2 },
+          max_tokens: 16384,
+          ...(isZhipu ? { thinking: { type: 'disabled' } } : {}),
         }),
-        signal: AbortSignal.timeout(60000),
+        // 180 秒：长会议（实测 127 条转写）起草会超过 1 分钟，60 秒硬超时会让整场起草
+        // 静默失败。这是用户点按钮发起的手动调用，等得起；analyze 等自动旁路仍保持 60 秒。
+        signal: AbortSignal.timeout(180000),
       });
       const data = await upRes.json().catch(() => ({}));
       if (!upRes.ok) {
         const detail = data.error?.message || data.error || `HTTP ${upRes.status}`;
         throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 200));
       }
-      const content = data.message?.content || data.choices?.[0]?.message?.content || '';
-      if (!plausiblePreliminary(transcript, content)) throw new Error('Ollama 返回内容未通过原文保真校验');
+      const content = data.choices?.[0]?.message?.content || '';
+      // 空正文和「内容不合格」要分开说：前者多半是输出上限被思考过程吃光（finish_reason=length），
+      // 后者才是守门判定。混成一句会让排障的人往错误方向找。
+      if (!content.trim()) {
+        throw new Error(data.choices?.[0]?.finish_reason === 'length'
+          ? '模型的思考过程占满了输出上限，没有返回正文'
+          : '模型没有返回正文');
+      }
+      if (!plausibleMeetingDraft(transcript, content)) throw new Error('AI 返回的内容不像基于这份逐字稿的纪要');
       preliminary = {
         text: String(content).replace(/^```(?:markdown)?\s*|```\s*$/g, '').trim(),
         status: 'ready',
-        model: PRELIMINARY_MODEL,
+        model: ai.model,
         sourceFingerprint,
         sourceCount: session.count,
         updatedAt: new Date().toISOString(),
       };
     } catch (error) {
-      const message = error?.name === 'TimeoutError' ? 'Ollama 整理超时' : (error?.message || String(error));
+      const message = error?.name === 'TimeoutError' ? 'AI 起草超时' : (error?.message || String(error));
       console.warn(`[board] preliminary fallback (${id}): ${message}`);
       preliminary = {
         // 失败只回退展示原文；不写 document，也不修改 events。
         text: transcript,
         status: 'fallback',
-        model: PRELIMINARY_MODEL,
+        model: ai.model,
         sourceFingerprint,
         sourceCount: session.count,
         updatedAt: new Date().toISOString(),
@@ -1195,18 +1243,19 @@ const server = http.createServer((req, res) => {
       };
     }
 
-    // 重新读取最新快照后再写，避免整理期间用户保存的正文被旧快照覆盖。
+    // 重新读取最新快照后再写，避免起草期间用户保存的正文被旧快照覆盖。
     const latest = readMeetingBoard();
     latest.sessions = latest.sessions || {};
     const entry = latest.sessions[id] || {};
-    // 本地模型和外部 AI agent 写的是**同一样东西**：AI 会议内容，也就是白板正文（document）。
-    // 所以整理成功就把结果落到 document 上，白板立刻有内容可看；更聪明的 agent 之后整篇替换它。
+    // 纪要草稿和外部 AI agent 写的是**同一样东西**：AI 会议内容，也就是白板正文（document）。
+    // 所以起草成功就把结果落到 document 上，白板立刻有内容可看；更聪明的 agent 之后整篇替换它。
     //
-    // 只在「正文还归本地模型所有」时写：正文是空的，或者还等于上一次本地模型的输出。
-    // 用户手改过、或 agent 写过，就到此为止——那是别人的成果，不能被下一轮整理悄悄冲掉。
-    const previousLocalText = entry.preliminary?.status === 'ready' ? String(entry.preliminary.text || '') : '';
+    // 只在「正文还归上一版草稿所有」时写：正文是空的，或者还等于上一次草稿的输出。
+    // 用户手改过、或 agent 写过，就到此为止——那是别人的成果，不能被下一次起草悄悄冲掉。
+    // 用户显式采纳（面板上的「用草稿替换正文」按钮）走 PUT document 保存接口，不经过这里。
+    const previousDraftText = entry.preliminary?.status === 'ready' ? String(entry.preliminary.text || '') : '';
     const currentDocument = typeof entry.document === 'string' ? entry.document : '';
-    const ownsDocument = !currentDocument.trim() || (!!previousLocalText && currentDocument === previousLocalText);
+    const ownsDocument = !currentDocument.trim() || (!!previousDraftText && currentDocument === previousDraftText);
     latest.sessions[id] = { ...entry, preliminary };
     if (preliminary.status === 'ready' && ownsDocument) latest.sessions[id].document = preliminary.text;
     latest.activeSessionId = id;
@@ -1386,11 +1435,37 @@ const server = http.createServer((req, res) => {
       const board = readMeetingBoard();
       const id = boardUrl.searchParams.get('sessionId');
       const document = typeof parsed.document === 'string' ? parsed.document : '';
+      // 人工内容锚点：写入来源只有两种——外部 AI 写回（CLI 带 source=agent，--append 再带
+      // mode=append）和人在面板里保存（不带 source）。面板把外部分析垫进正文的那次落盘
+      // 也算 AI 写回（meeting-board/src/main.js 的 seedDocument 带 source=agent）。
+      // 来源只在这里判定一次，brief 的「人工锚点」和 CLI 的写回门槛都读这两个字段。
+      const isAgent = boardUrl.searchParams.get('source') === 'agent';
+      const isAppend = boardUrl.searchParams.get('mode') === 'append';
       if (id) {
         board.sessions = board.sessions || {};
-        board.sessions[id] = { ...(board.sessions[id] || {}), document };
+        const prev = board.sessions[id] || {};
+        const prov = boardProvenance.updateBoardProvenance({
+          prevDoc: typeof prev.document === 'string' ? prev.document : '',
+          prevAnchors: prev.humanAnchors,
+          nextDoc: document,
+          isAgent,
+          isAppend,
+        });
+        board.sessions[id] = { ...prev, document, humanAnchors: prov.humanAnchors };
+        if (prov.agentDocumentAt) board.sessions[id].agentDocumentAt = prov.agentDocumentAt;
         board.activeSessionId = id;
-      } else board.document = document;
+      } else {
+        const prov = boardProvenance.updateBoardProvenance({
+          prevDoc: typeof board.document === 'string' ? board.document : '',
+          prevAnchors: board.humanAnchors,
+          nextDoc: document,
+          isAgent,
+          isAppend,
+        });
+        board.document = document;
+        board.humanAnchors = prov.humanAnchors;
+        if (prov.agentDocumentAt) board.agentDocumentAt = prov.agentDocumentAt;
+      }
       writeMeetingBoard(board).then(() => {
         // 同时写入独立的 .md 文件（非阻塞）
         if (id && document) writeSessionDoc(id, document);
@@ -1405,7 +1480,9 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // POST /api/meeting-board/preliminary — Ollama 初步整理（旁路字段，不触碰原始转写和白板正文）
+  // POST /api/meeting-board/preliminary — 手动触发的纪要草稿：调用户配置的 AI（设置 → AI 接入）
+  // 起草，旁路字段，不触碰原始转写。转写新增不自动触发；每次点击都真实重跑（没有缓存短路），
+  // AI 消耗完全由用户的点击控制。未配置 AI 时零副作用地指路。
   if (req.method === 'POST' && boardPath === '/api/meeting-board/preliminary') {
     const id = boardUrl.searchParams.get('sessionId');
     const session = findBoardSession(id);
@@ -1414,24 +1491,24 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ ok: false, error: '找不到会议场次' }));
       return;
     }
-    const transcript = session.texts.join('\n');
+    const ai = boardAiSettings();
+    if (!ai) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, status: 'unconfigured', error: '未配置 AI 服务商（设置 → AI 接入）' }));
+      return;
+    }
+    // 带 [HH:MM] 时间行：起草「待办期限」需要时间信息，也和逐字稿标签的展示格式一致。
+    const transcript = formatTranscriptLines(session);
     const sourceFingerprint = preliminarySourceFingerprint(transcript);
     const board = readMeetingBoard();
     const saved = board.sessions?.[id]?.preliminary;
-    const force = boardUrl.searchParams.get('force') === '1';
-    if (!force && saved?.sourceFingerprint === sourceFingerprint &&
-        (saved.status !== 'ready' || plausiblePreliminary(transcript, saved.text))) {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, status: 'cached', preliminary: saved }));
-      return;
-    }
     const active = preliminaryRequests.get(id);
     if (active) {
       res.writeHead(202, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, status: 'pending', preliminary: saved || null }));
       return;
     }
-    const task = runPreliminary整理(session, id, transcript, sourceFingerprint);
+    const task = runPreliminary整理(session, id, transcript, sourceFingerprint, ai);
     preliminaryRequests.set(id, task);
     task.then(() => preliminaryRequests.delete(id), () => preliminaryRequests.delete(id));
     res.writeHead(202, { 'Content-Type': 'application/json' });
@@ -1769,17 +1846,39 @@ const server = http.createServer((req, res) => {
         ts: ts.toISOString(),
         engine: incoming.engine || null,
         // activeApp 是说话时的前台应用快照，和 pasteStatus 分开，避免把
-        // 「当时在哪个应用说话」误读成「文字已粘贴到哪个应用」。
+        // 「当时在哪个应用说话」误读成「文字已粘贴到哪个应用」。windowTitle
+        // 是焦点窗口标题（DOU-10）：尽力而为的旁路字段，拿不到就是 null，
+        // 微信这类非标准 AX 应用不阻塞主流程。
         activeApp: incoming.activeApp && typeof incoming.activeApp === 'object'
           ? {
               name: typeof incoming.activeApp.name === 'string' ? incoming.activeApp.name.trim().slice(0, 64) : null,
               bundle: typeof incoming.activeApp.bundle === 'string' ? incoming.activeApp.bundle.trim().slice(0, 128) : null,
               id: typeof incoming.activeApp.id === 'string' ? incoming.activeApp.id.trim().slice(0, 128) : null,
+              windowTitle: typeof incoming.activeApp.windowTitle === 'string' && incoming.activeApp.windowTitle.trim()
+                ? incoming.activeApp.windowTitle.trim().slice(0, 128)
+                : null,
             }
           : null,
-        pasteStatus: ['pasted', 'not-pasted'].includes(incoming.pasteStatus)
+        // 「是否发送」是独立于粘贴的第三态（DOU-10 验收）：pasted 后跟了回车
+        // 记 pasted-sent；粘了但目标在 shouldAutoEnter 名单外、或回车未发是
+        // pasted-not-sent；旧事件只有 pasted / not-pasted，读取端按 pasted-not-sent
+        // 兼容展示（当时没记录，不知道有没有回车，不能虚报）。
+        pasteStatus: ['pasted', 'pasted-not-sent', 'not-pasted'].includes(incoming.pasteStatus)
           ? incoming.pasteStatus
           : 'not-pasted',
+        // 会话维度扩展点（DOU-12）：现在只存 app + windowTitle 快照，
+        // thread / contact / project 等字段留到采集侧成熟后逐步填。
+        conversation: incoming.conversation && typeof incoming.conversation === 'object'
+          ? {
+              app: typeof incoming.conversation.app === 'string' ? incoming.conversation.app.trim().slice(0, 64) : null,
+              windowTitle: typeof incoming.conversation.windowTitle === 'string' && incoming.conversation.windowTitle.trim()
+                ? incoming.conversation.windowTitle.trim().slice(0, 128)
+                : null,
+              thread: typeof incoming.conversation.thread === 'string' && incoming.conversation.thread.trim()
+                ? incoming.conversation.thread.trim().slice(0, 128)
+                : null,
+            }
+          : null,
         // 兼容旧事件：旧字段仍保留，读取端可继续显示旧记录的去向。
         targetApp: typeof incoming.targetApp === 'string' && incoming.targetApp.trim()
           ? incoming.targetApp.trim().slice(0, 64)
@@ -1806,6 +1905,25 @@ const server = http.createServer((req, res) => {
     const fromParam = url.searchParams.get('from');
     const toParam = url.searchParams.get('to');
     const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+    // 按前台应用 / 窗口筛选（DOU-12）：app 匹配 activeApp 的 name/bundle/id（子串、
+    // 大小写不敏感），window 匹配 activeApp.windowTitle（子串）。旧事件没有这些
+    // 字段，一徨当「未匹配」处理，不报错。
+    const appFilter = (url.searchParams.get('app') || '').trim().toLowerCase();
+    const windowFilter = (url.searchParams.get('window') || '').trim().toLowerCase();
+    const matchesEventApp = event => {
+      if (!appFilter && !windowFilter) return true;
+      const app = event.activeApp || {};
+      if (appFilter) {
+        const hit = [app.name, app.bundle, app.id]
+          .some(v => typeof v === 'string' && v.toLowerCase().includes(appFilter));
+        if (!hit) return false;
+      }
+      if (windowFilter) {
+        const title = typeof app.windowTitle === 'string' ? app.windowTitle.toLowerCase() : '';
+        if (!title.includes(windowFilter)) return false;
+      }
+      return true;
+    };
 
     const parseEvents = data => data
       .split('\n')
@@ -1886,15 +2004,21 @@ const server = http.createServer((req, res) => {
           if (!fileErr) allEvents.push(...parseEvents(data));
           pending -= 1;
           if (pending === 0) {
+            let filtered = allEvents;
             if (q) {
-              sendEvents(allEvents.filter(event =>
-                String(event.text || '').toLowerCase().includes(q)), SEARCH_LIMIT);
+              filtered = filtered.filter(event =>
+                String(event.text || '').toLowerCase().includes(q));
+            }
+            filtered = filtered.filter(matchesEventApp);
+            if (q) {
+              sendEvents(filtered, SEARCH_LIMIT);
               return;
             }
-            sendEvents(allEvents.filter(event => {
+            filtered = filtered.filter(event => {
               const ts = Date.parse(event.ts);
               return ts >= from && ts <= to;
-            }));
+            });
+            sendEvents(filtered);
           }
         });
       }

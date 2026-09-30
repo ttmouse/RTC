@@ -27,8 +27,6 @@ const VAD_SILENCE_BLOCKS = 10;
 const VAD_ONSET_BLOCKS = 3;
 const VAD_PAD_BLOCKS = 3;
 const VAD_HEARTBEAT_BLOCKS = 54;
-const SILENCE_FRAMES = 16;
-const SILENCE_THRESH = 300;
 // 上行不通时的音频缓冲上限。单个 chunk 是 4096 字节 PCM16@16k ≈ 128ms；
 // 只保留最近 10 秒，恢复连接后补发，超出部分丢弃并明确告知用户。
 const PCM_BUFFER_MAX_MS = 10000;
@@ -315,25 +313,6 @@ export function vadSend(down, pcm) {
   sendPCM(pcm);
 }
 
-function checkSilence(pcm) {
-  let sum = 0;
-  const n = Math.min(pcm.length, 2000);
-  for (let i = 0; i < n; i++) {
-    const v = pcm[i];
-    sum += v * v;
-  }
-  const rms = Math.sqrt(sum / n);
-  if (rms < SILENCE_THRESH) {
-    state.silenceChunks++;
-    if (state.silenceChunks >= SILENCE_FRAMES) {
-      state.silenceChunks = 0;
-      finalizePending();
-    }
-  } else {
-    state.silenceChunks = 0;
-  }
-}
-
 export function sendPCM(pcm) {
   if (!state.asrWs || state.asrWs.readyState !== WebSocket.OPEN || !state.asrReady) {
     // 上行不通时先缓冲。注意这里是**滑窗丢弃**而不是直接 return：
@@ -366,7 +345,15 @@ export function sendPCM(pcm) {
 
   flushBufferedPCM(state.asrWs);
 
-  if (state.asrEngine === 'bailian') checkSilence(pcm);
+  // 这里曾有一道「按音量提前定稿」的兜底：百炼模式下 Int16 域 RMS < 300 连续 16 块
+  // （音频回调 4096 样本 @48k ≈ 85ms/块，合计约 1.37 秒）就把当前待定行 finalize。
+  // 症状是「一句话被拆成多条」：2026-09-20 23:35 用户实测一句话在列表里留下 4 条
+  // 越来越长的记录（前 3 条无标点、末条才带句号），相邻两条的间隔精确等于 1.365 秒。
+  // 原因是百炼的中间帧是**累积文本**，它还在补同一句，而前端已经按音量把半句定稿了。
+  // 不再兜底的理由：句尾本来就由百炼自己的 VAD 定（sentence_end；实测句末到最终结果
+  // 只差 0.1~0.2 秒），而 300 写死在代码里，与主界面刻度（唯一实际生效的识别阈值，
+  // 见 D-009）不是同一个值，用户怎么拖刻度都改不动它。按住说话期间更不该抢存
+  // （ui-interaction-spec 的快捷键小节：按下到松开不应用音量阈值、静音断句）。
   state.asrWs.send(pcm.buffer);
   const chunkSec = 4096 / 16000;
   state.audioDuration += chunkSec;
@@ -386,7 +373,6 @@ function flushBufferedPCM(ws) {
   state.pcmSendBuffer = [];
   state.pcmBufferStartTime = 0;
   for (const b of buf) {
-    if (state.asrEngine === 'bailian') checkSilence(b);
     ws.send(b.buffer);
   }
 }
@@ -608,7 +594,10 @@ function applyPaste(text, paste, lineOverride = null) {
         .then(status => {
           const pasted = status === 'ok';
           setLinePasteState(lines, pasted);
-          return pasted ? 'pasted' : 'not-pasted';
+          if (!pasted) return 'not-pasted';
+          // 「是否发送」第三态（DOU-10）：粘贴成功后是否跟了回车按 shouldAutoEnter
+          // 判定，不检测回车是否真的送达目标（不可靠）。回车只是指令已发。
+          return shouldAutoEnter(d.app) ? 'pasted-sent' : 'pasted-not-sent';
         })
         .catch(() => {
           setLinePasteState(lines, false);

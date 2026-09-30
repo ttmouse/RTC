@@ -356,7 +356,9 @@ export function addLine(dateObj, text, isInterim, activeApp, pasteStatus) {
   refreshTimestampVisibility();
   scrollListToBottom();
   if (activeApp !== undefined) setLineTarget(el, specFromActiveApp(activeApp));
-  if (pasteStatus !== undefined) setLinePasteState(el, pasteStatus === 'pasted');
+  // pasteStatus 三态（DOU-10）：pasted-sent / pasted-not-sent 都算「粘了」；
+  // 旧事件只有 pasted / not-pasted，startsWith 兼容。
+  if (pasteStatus !== undefined) setLinePasteState(el, typeof pasteStatus === 'string' && pasteStatus.startsWith('pasted'));
   return el;
 }
 
@@ -431,7 +433,7 @@ export function prependEntries(entries) {
     const { day, el } = buildLine(new Date(tsOf(entry)), entry.text, false);
     // 没有 activeApp 的旧事件不补造前台应用，改用未识别图标保留左侧位置。
     setLineTarget(el, specFromActiveApp(entry.activeApp));
-    setLinePasteState(el, entry.pasteStatus === 'pasted');
+    setLinePasteState(el, typeof entry.pasteStatus === 'string' && entry.pasteStatus.startsWith('pasted'));
     if (day !== prevDay) {
       prevDay = day;
       if (i !== skipSepAt) frag.appendChild(buildDaySep(day));

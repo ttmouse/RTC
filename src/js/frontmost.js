@@ -6,8 +6,10 @@
  * 这句话一起入库（记录里能看出「这句是发到微信的」）。自动粘贴发生时本窗口在
  * 后台，所以前台就是收到文字的那个软件。
  *
- * 返回 `{ name, bundle, id }`：`name` 是 macOS 显示名（"微信"），`bundle` 是 `.app`
- * 包名（"WeChat"），`id` 是 bundle id。**三个都要**——设置页的名单存的是包名
+ * 返回 `{ name, bundle, id, windowTitle }`：`name` 是 macOS 显示名（"微信"），`bundle` 是 `.app`
+ * 包名（"WeChat"），`id` 是 bundle id，`windowTitle` 是焦点窗口标题（尽力而为，
+ * 拿不到就是 null——微信这类非标准 AX 应用常见，验收 DOU-10 明确不阻塞主流程）。
+ * **名字三个都要**——设置页的名单存的是包名
  * （系统应用列表给的），这里给的是显示名，两个名字经常不一样，判定必须按身份匹配
  * （见 settings.appInList 里记的那次事故：名单里存着 WeChat，前台回的是微信）。
  *
@@ -28,9 +30,11 @@ export async function getFrontmostApp() {
     // 这里兼容成同一个形状，并如实说明少了什么——否则用户看到的是「明明加了微信却不粘」，
     // 而真正的原因（后端没重启，拿不到包名）一个字都没露出来。
     if (typeof info === 'string') {
-      console.warn('[frontmost] 后端返回的是旧格式（只有显示名）：改过 Rust 后需要整体重启 dev 才会带上包名 / bundle id');
-      return { name: info, bundle: null, id: null };
+      console.warn('[frontmost] 后端返回的是旧格式（只有显示名）：改过 Rust 后需要整体重启 dev 才会带上包名 / bundle id / 窗口标题');
+      return { name: info, bundle: null, id: null, windowTitle: null };
     }
+    // 旧版后端没有 windowTitle 字段，补 null 保持形状一致。
+    if (!('windowTitle' in info)) info.windowTitle = null;
     return info;
   } catch (e) {
     console.error('[frontmost] 取前台应用失败:', e);
