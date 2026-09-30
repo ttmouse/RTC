@@ -80,12 +80,21 @@ export function floatToInt16(f) {
 export async function startAudio() {
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!state.audioCtx) state.audioCtx = new AC();
+  // 先给看护循环一个新鲜的 tick 再进 await：调用方在 startAudio 之前就已把 recording 置 true，
+  // 而 audioTickAt 此刻是 undefined（本场第一录，NaN 比较会漏过看护的「还新鲜」判断）
+  // 或上一场的旧时刻——不补这一下，看护会在下面的等待窗口里判「3 秒没有回调」，
+  // 触发 rebuildAudioInput 把刚建好的 audioCtx 拆成 null。
+  // 症状：点开始录音偶发「启动录音失败: null is not an object …onstatechange…」。
+  state.audioTickAt = Date.now();
   // 不是 running（suspended / WebKit 的 interrupted）就必须拉回来：唤醒后哑掉的音频图
   // 表现是「回调一次都不来」，界面看不出任何异常（见本文件顶部的说明）。
   const ctxState = await ensureAudioRunning(state.audioCtx);
   if (ctxState !== 'running') {
     throw new Error(`音频设备没有就绪（${ctxState}）——睡眠唤醒后常见，请再点一次录音`);
   }
+  // 等待期间管道可能已被并发拆掉（用户按了停录，或看护触发了重建）。没有这个守卫，
+  // 下一行就是一个难懂的 null 报错；有它则是一句能照着做的提示。
+  if (!state.audioCtx) throw new Error('音频管道在启动时被重建，请再点一次录音');
   // 录音过程中被系统打断（睡眠、别的应用抢音频会话）时自己拉回来，不必等看护循环发现
   state.audioCtx.onstatechange = () => {
     const ctx = state.audioCtx;
