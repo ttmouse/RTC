@@ -155,22 +155,33 @@ function showAppMenu(spec, event, line) {
   });
 }
 
-function loadIcon(name) {
-  if (iconCache.has(name)) return Promise.resolve(iconCache.get(name));
+/**
+ * 取图标。`identity` 是同一个应用的三种身份（显示名 / 包名 / bundle id），都带给系统：
+ * 显示名画不出图标时（应用已退出、或同名不同 App），包名和 bundle id 还能定位到
+ * 硬盘上那个应用——图标一直在，不该因为「它现在没开」就退回文字。
+ * 缓存按整套身份记：同名不同 App 不会互相顶掉。
+ */
+function loadIcon(identity) {
+  const key = [identity.name, identity.bundle, identity.id].filter(Boolean).join(' ');
+  if (iconCache.has(key)) return Promise.resolve(iconCache.get(key));
   const invoke = tauriInvoke();
   if (!invoke) {
     // 网页版没有系统级能力：记住「问过了、没有」，别重复问
-    iconCache.set(name, null);
+    iconCache.set(key, null);
     return Promise.resolve(null);
   }
-  return invoke('app_icon', { name })
+  return invoke('app_icon', {
+    name: identity.name,
+    bundle: identity.bundle || null,
+    id: identity.id || null,
+  })
     .then(url => {
-      iconCache.set(name, url || null);
+      iconCache.set(key, url || null);
       return url || null;
     })
     .catch(e => {
       console.error('[pastebadge] 取应用图标失败:', e);
-      iconCache.set(name, null);
+      iconCache.set(key, null);
       return null;
     });
 }
@@ -258,7 +269,9 @@ export function setLineTarget(lineEl, spec) {
   nameEl.className = 'pasteBadgeName';
   nameEl.textContent = spec.name;
   badge.appendChild(nameEl);
-  loadIcon(spec.name).then(url => {
+  // 记录里存的是显示名（"微信"），包名 / bundle id 才是能定位到「硬盘上哪个应用」的身份
+  const target = spec.target && typeof spec.target === 'object' ? spec.target : {};
+  loadIcon({ name: spec.name, bundle: target.bundle || null, id: target.id || null }).then(url => {
     if (!url || !badge.isConnected) return;
     const img = document.createElement('img');
     img.alt = '';

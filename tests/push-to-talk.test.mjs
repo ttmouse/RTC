@@ -90,8 +90,14 @@ check('本地服务实现主动丢弃控制消息', /action == "discard-segment"
 check('WebSocket 入口把冲刷/丢弃/切换手动断句/阈值更新消息交给当前识别会话', /action in \("finish-task", "flush-segment", "discard-segment", "set-manual-segment", "set-vad-threshold"\)[\s\S]{0,180}session\.handle_json\(msg\)/.test(python));
 check('只有 finish-task 会销毁当前识别会话', /if action == "finish-task":[\s\S]{0,80}session = None/.test(python));
 check('按住期间的停顿不会触发静音自动提交', /not self\.push_to_talk and self\.silence_ms >= self\.silence_cut_ms/.test(python));
-check('本地按住期间绕过 VAD，收到的每一帧都直接进缓冲', /if self\.push_to_talk:[\s\S]{0,600}self\.buf\.extend\(frame_bytes\)[\s\S]{0,30}continue/.test(python));
-check('本地按住松手不再检查最小音量或最短发声', /passes_min_speech = buffered_ms > 0 if self\.push_to_talk/.test(python));
+check('本地按住期间不做切句过滤，每一帧都直接进缓冲', /if self\.push_to_talk:[\s\S]{0,900}self\.buf\.extend\(frame_bytes\)[\s\S]{0,30}continue/.test(python));
+// 每帧都进缓冲 ≠ 每段都上屏：按住不开口时那片静音会被 SenseVoice 幻觉成 "Okay." / "The."
+// 之类的英文（2026-09-20 实测），所以按住期间仍要统计人声证据，松手时据此丢弃空按。
+check('本地按住期间仍统计人声证据（空按靠它拦住）', /if self\.push_to_talk:[\s\S]{0,900}self\.seg_active_ms \+= frame_ms/.test(python));
+check('本地按住松手不要求最短发声时长，但要求整段有人声证据',
+  /voice_evidence = active_ms >= MIN_VOICE_EVIDENCE_MS/.test(python)
+  && /passes_min_speech = buffered_ms > 0 and voice_evidence/.test(python));
+check('本地按住空按时整段丢弃并说清原因', /空按：整段无人声证据/.test(python));
 check('云端按住期间不走 vadSend 门槛而直接发送 PCM', /if \(state\.pushToTalkManual\)[\s\S]{0,300}sendPCM\(pcm\)[\s\S]{0,80}else[\s\S]{0,80}vadSend\(down, pcm\)/.test(audio));
 check('按住说话保留用户主动说出的短文本', asr.includes('state.noiseFilter && !pushToTalkResult'));
 check('按住说话时阈值刻度隐藏且不可拖动', settings.includes("classList.toggle('threshold-disabled', state.pushToTalkManual)") && main.includes('if (state.pushToTalkManual) return'));

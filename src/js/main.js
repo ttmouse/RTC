@@ -105,7 +105,6 @@ async function toggleRecording() {
     playStart();
     state.pendingLine = null;
     state.finalizedText = '';
-    state.silenceChunks = 0;
     state.vadState = 'silent';
     state.vadSilenceCount = 0;
     state.vadHeartbeat = 0;
@@ -579,7 +578,7 @@ $('list').addEventListener('click', e => {
   if (!text) return;
   navigator.clipboard.writeText(text).then(() => {
     line.style.transition = 'background .15s';
-    line.style.background = 'rgba(191,58,30,.08)';
+    line.style.background = 'var(--seal-light)';
     setTimeout(() => { line.style.background = ''; }, 400);
   }).catch(() => {});
 });
@@ -936,7 +935,11 @@ window.__TAURI__?.event?.listen('rtc:modifier-key', handleModifierKey);
   startAudioFlowWatch();
   await renderHistory(true);
   if (state.pushToTalk) preparePushToTalk();
-  else $('btn').click();
+  // 2026-09-28 用户定：启动后一律自动进入录音模式。按住说话只是叠在常态录音上的
+  // 句尾接管（见 beginPushToTalk），不冲突；过去「开了按住说话就不自动开录」
+  // 的分支会让用户每次启动都要手动点一下，与他的使用规矩相反（症状：启动后停在待命，
+  // 要多一次点击才开始录）。
+  $('btn').click();
   // 启动 6 秒后静默检查更新；发现新版本时显示顶部横幅提醒
   setTimeout(() => checkForUpdates(false), 6000);
 })().catch(e => {

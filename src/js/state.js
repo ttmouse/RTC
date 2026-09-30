@@ -94,7 +94,6 @@ export const state = {
   // 判定只认 vadState（见 asr.js 的 updateSpeechState）。
   speechHeardAt: 0,
   vadBuf: [],
-  silenceChunks: 0,
   pcmSendBuffer: [],
   pcmBufferStartTime: 0,
   // 上行拥塞提示只在一次拥塞里弹一次，恢复后复位（见 asr.js sendPCM）

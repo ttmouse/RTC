@@ -27,15 +27,33 @@ mkdir -p "$OUT"
 
 echo "[sidecar] 目标三元组: $TRIPLE"
 
-# ── 1) node-server：把 server.js 连同 node_modules 依赖编译成单文件 ──
+# ── 1) node-server：bun 运行时本体 + 单文件 JS（**不要**用 bun --compile）──
+#
+# 为什么不用 `bun build --compile`（2026-09-20 实测）：它的产物只有 ld 的
+# linker 签名、没有 CMS blob，macOS 26+ 的 AMFI 在加载时直接
+#   AMFI: has no CMS blob?  →  Unrecoverable CT signature issue  →  SIGKILL
+# 于是打包后的 App 后端（8931）永远起不来，界面只能显示「服务未连接」、历史记录空白。
+# 且该产物 codesign 也救不回来：`--force --sign -` 报 "main executable failed strict
+# validation"，`--remove-signature` 报 "internal error in Code Signing subsystem"。
+#
+# 改成「官方 bun 二进制（有 Apple 公证的 Team 签名，能跑） + 一个 bundle 出来的 JS」：
+# 依赖（ws）在 JS 里已经打平，体积与原来 --compile 产物相同（~63MB）。
+# 运行时由 src-tauri/src/lib.rs 的 start_node_server 把 JS 路径作为参数传进来。
+# 配套：tauri.conf.json 的 bundle.resources 必须带上 server.bundle.js。
 NODE_OUT="$OUT/node-server-$TRIPLE"
+BUNDLE_OUT="$OUT/server.bundle.js"
 if ! command -v bun >/dev/null 2>&1; then
   echo "[sidecar] 缺少 bun（https://bun.sh），无法构建 node-server" >&2
   exit 1
 fi
-echo "[sidecar] 构建 node-server → $(basename "$NODE_OUT")"
-bun build --compile --minify --target=bun "$ROOT/server.js" --outfile "$NODE_OUT"
+echo "[sidecar] 构建 server.bundle.js → $(basename "$BUNDLE_OUT")"
+bun build --target=bun "$ROOT/server.js" --outfile "$BUNDLE_OUT"
+
+echo "[sidecar] 拷贝 bun 运行时 → $(basename "$NODE_OUT")"
+cp "$(command -v bun)" "$NODE_OUT"
 chmod +x "$NODE_OUT"
+# 去掉下载/拷贝带来的扩展属性，避免装进 .app 后被 Gatekeeper 拿 quarantine 说事
+xattr -c "$NODE_OUT" 2>/dev/null || true
 
 # ── 2) asr-server：把 asr_local/server.py 打成独立可执行文件 ──
 ASR_OUT="$OUT/asr-server-$TRIPLE"
@@ -73,6 +91,12 @@ pyinstaller \
   --workpath "$ROOT/src-tauri/target/pyinstaller" \
   --specpath "$ROOT/src-tauri/target/pyinstaller" \
   "$ROOT/asr_local/server.py"
+
+# 自检：node-server 的签名必须是有效的（无效签名 = 打包后一启动就被系统打死）。
+if ! codesign -v "$NODE_OUT" 2>/dev/null; then
+  echo "[sidecar] 警告：$(basename "$NODE_OUT") 代码签名无效，打包后的 App 可能起不来后端" >&2
+  codesign -v "$NODE_OUT" >&2 || true
+fi
 
 echo "[sidecar] 完成："
 ls -lh "$OUT" | sed 's/^/  /'

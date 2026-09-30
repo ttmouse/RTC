@@ -229,6 +229,11 @@ SILENCE_CUT_MS = int(os.environ.get("ASR_SILENCE_MS", "2000"))
 MAX_SEGMENT_MS = int(os.environ.get("ASR_MAX_SEGMENT_MS", "30000"))
 MIN_SPEECH_MS = int(os.environ.get("ASR_MIN_SPEECH_MS", "300"))
 MIN_SPEECH_RUN_MS = int(os.environ.get("ASR_MIN_SPEECH_RUN_MS", "200"))
+# 按住说话时判「这段到底有没有人声」的最小证据（默认 2 帧 = 64ms）。
+# 主动按住不做断句判断（边界由人给出，也不要求最短发声时长），但整段里超过阈值的
+# 音频累计不到这个时长，就判为空按：用户只是按了键、没开口。那片静音交给 SenseVoice
+# 会被幻觉成 "Okay." / "The." 之类的英文并直接上屏（实测 2026-09-20 连续出现）。
+MIN_VOICE_EVIDENCE_MS = int(os.environ.get("ASR_MIN_VOICE_EVIDENCE_MS", "64"))
 RMS_THRESHOLD = 0.006              # 能量 VAD 阈值（前端可调）
 PRE_ROLL_MS = 260
 PAD_MS = 200
@@ -751,9 +756,18 @@ class Session:
             self.pre_frames.append(frame_bytes)
 
             if self.push_to_talk:
-                # 主动按住期间，每一帧都属于用户明确圈定的语音。这里不再用 VAD、
-                # 环境噪声门槛或最短连续发声时长决定“值不值得识别”。
+                # 主动按住期间不做断句判断：这一段的边界由人给出，不再用 VAD 静音阈值
+                # 或最短连续发声时长去切句。但**人声证据仍然要统计**——松手时整段几乎
+                # 没有一帧达到阈值，就说明用户只是按了一下、根本没开口；那片静音交给
+                # SenseVoice 会被幻觉成 "Okay." / "The." 之类的英文并直接上屏。
+                if rms >= self.rms_threshold:
+                    self.seg_active_frames += 1
+                    self.seg_active_ms += frame_ms
+                    self.seg_rms_sum += rms
+                    self.seg_rms_count += 1
+                    self.seg_rms_max = max(self.seg_rms_max, rms)
                 if not self.in_speech:
+                    self._reset_segment_metrics()  # 上一段的人声证据不能带到这一段
                     self.seg_id = uuid.uuid4().hex[:8]
                     self.seg_wall_start_ms = time.monotonic() * 1000
                     self.in_speech = True
@@ -804,9 +818,17 @@ class Session:
         active_ms = int(self.seg_active_ms)
         last_speech_to_flush_ms = round(flush_wall_ms - (self.last_speech_wall_ms or flush_wall_ms), 1)
         rms_mean = (self.seg_rms_sum / self.seg_rms_count) if self.seg_rms_count else 0.0
-        # 连续录音需要挡掉碰麦克风等噪音；按住说话的边界由人给出，只要求确实收到音频。
-        passes_min_speech = buffered_ms > 0 if self.push_to_talk else active_ms >= MIN_SPEECH_MS
-        passes_min_run = buffered_ms > 0 if self.push_to_talk else int(self.seg_max_run_ms) >= MIN_SPEECH_RUN_MS
+        # 连续录音需要挡掉碰麦克风等噪音；按住说话的边界由人给出，不要求最短发声时长，
+        # 但要求整段确实有人声：用户按了键却没开口时，整段音频过不了人声证据这道闸，
+        # 直接丢弃不去识别——静音输入会被模型幻觉成英文单词并上屏。
+        if self.push_to_talk:
+            voice_evidence = active_ms >= MIN_VOICE_EVIDENCE_MS
+            passes_min_speech = buffered_ms > 0 and voice_evidence
+            passes_min_run = passes_min_speech
+        else:
+            voice_evidence = True
+            passes_min_speech = active_ms >= MIN_SPEECH_MS
+            passes_min_run = int(self.seg_max_run_ms) >= MIN_SPEECH_RUN_MS
         decision = "pass" if passes_min_speech and passes_min_run else "drop"
         print(
             f"[VAD] flush_segment final={final} reason={reason} seg={self.seg_id} "
@@ -818,6 +840,11 @@ class Session:
         if reason != "finish_task":
             print(f"[VAD] >>> 换行原因: {reason}")
         if not (passes_min_speech and passes_min_run):
+            if self.push_to_talk and buffered_ms > 0 and not voice_evidence:
+                print(
+                    f"[VAD] 空按：整段无人声证据（voice_ms={active_ms} < {MIN_VOICE_EVIDENCE_MS}ms，"
+                    f"thr={self.rms_threshold} rms_max={self.seg_rms_max:.5f}），丢弃不上屏"
+                )
             if final:
                 self.in_speech = False
                 self.silence_ms = 0
