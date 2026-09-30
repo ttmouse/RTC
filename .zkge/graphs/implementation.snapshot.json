@@ -1,0 +1,144 @@
+{
+  "schema": "zkge.implementation-graph/v1",
+  "generated_at": "2026-09-23T05:54:48Z",
+  "tool": {
+    "id": "code-review-graph",
+    "version": "code-review-graph 2.3.7",
+    "db_path": ".code-review-graph/graph.db",
+    "db_sha256": "594829e74604e5f987eaeeb6a26700dac0635c455bf7a8ba12ca9e179e75c52b"
+  },
+  "build": {
+    "commit": "3623308f70cc9054b567f8f68634e0e5ff127b37",
+    "branch": "feature/push-to-talk",
+    "last_updated": "2026-09-23T13:39:38",
+    "current_sha": "3623308f70cc9054b567f8f68634e0e5ff127b37",
+    "stale_vs_worktree": false
+  },
+  "counts": {
+    "nodes": 1679,
+    "edges": 15369,
+    "files": 118
+  },
+  "languages": [
+    "bash",
+    "javascript",
+    "python",
+    "rust",
+    "tsx",
+    "typescript"
+  ],
+  "edge_kinds": {
+    "CALLS": 13082,
+    "CONTAINS": 1623,
+    "IMPORTS_FROM": 499,
+    "REFERENCES": 140,
+    "TESTED_BY": 23,
+    "IMPLEMENTS": 1,
+    "INHERITS": 1
+  },
+  "confidence_tiers": {
+    "EXTRACTED": 15369
+  },
+  "low_confidence_edges": 0,
+  "calibration": {
+    "principle": "尺子先校准自己：探针结果决定本快照能否用于门禁（技能第 0 步）",
+    "probes": [
+      {
+        "name": "positive_callers",
+        "query": "callers_of(join)",
+        "expect": ">=1",
+        "actual": 258,
+        "result": "PASS",
+        "note": "正向探针：已知被调用的符号必须查得到调用方"
+      },
+      {
+        "name": "negative_control",
+        "query": "callers_of(zkge_probe_nonexistent_a0d5df1f78e3)",
+        "expect": "==0",
+        "actual": 0,
+        "result": "PASS",
+        "note": "负向探针：不存在的符号必须返回 0，否则说明查询在乱匹配"
+      }
+    ],
+    "verdict": "PASS",
+    "known_blind_spots": [
+      {
+        "verifier": "tests_for / TESTED_BY",
+        "language": "javascript",
+        "test_file_count": 20,
+        "test_files_with_edges": 1,
+        "tested_by_edges": 1,
+        "impact": "该语言 1/20 个测试文件产出 TESTED_BY 边——tests_for 基本查不到，「工具没查到」会被误读成「真的没测试」",
+        "workaround": "改用 IMPORTS_FROM 从测试文件反查其导入的实现文件（已随本快照导出）"
+      }
+    ],
+    "test_edge_coverage_by_language": {
+      "javascript": {
+        "test_files": 20,
+        "with_edges": 1,
+        "ratio": 0.05,
+        "edges": 1
+      }
+    }
+  },
+  "coverage": {
+    "method": "IMPORTS_FROM 反查（TESTED_BY 对部分语言失明，见 known_blind_spots）",
+    "test_file_count": 20,
+    "test_to_implementation": {
+      "meeting-board/tests/external-refresh.test.mjs": [
+        "meeting-board/src/lib/externalRefresh.js"
+      ],
+      "meeting-board/tests/markdown-block-patch.test.mjs": [
+        "meeting-board/src/markdownBlockPatch.js"
+      ],
+      "meeting-board/tests/preliminary-panel.test.mjs": [
+        "meeting-board/src/lib/preliminaryPanel.js"
+      ],
+      "meeting-board/tests/session-search.test.mjs": [
+        "meeting-board/src/lib/sessionSearch.js"
+      ],
+      "tests/app-rule-lists.test.mjs": [
+        "src/js/settings.js",
+        "src/js/state.js"
+      ],
+      "tests/audio-recovery.test.mjs": [
+        "src/js/audio.js",
+        "src/js/lifecycle.js",
+        "src/js/state.js",
+        "src/js/ui.js"
+      ],
+      "tests/main-status.test.mjs": [
+        "src/js/state.js",
+        "src/js/ui.js"
+      ],
+      "tests/model-recovery.test.mjs": [
+        "src/js/model.js"
+      ],
+      "tests/push-to-talk.test.mjs": [
+        "src/js/asr.js",
+        "src/js/state.js"
+      ],
+      "tests/sfx-sequence.test.mjs": [
+        "src/js/sfx.js",
+        "src/js/state.js"
+      ],
+      "tests/time-grouping.test.mjs": [
+        "src/js/timeGrouping.js"
+      ],
+      "tests/tray-speaking.test.mjs": [
+        "src/js/asr.js",
+        "src/js/state.js",
+        "src/js/tray.js",
+        "src/js/ui.js"
+      ],
+      "tests/tray-status.test.mjs": [
+        "src/js/state.js",
+        "src/js/tray.js",
+        "src/js/ui.js"
+      ],
+      "tests/vad.test.mjs": [
+        "src/js/state.js"
+      ]
+    }
+  }
+}

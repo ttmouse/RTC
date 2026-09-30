@@ -1,62 +1,63 @@
-# RTC 文档索引
+# RTC 文档中心
 
-> 给「下一个读代码的人 / 下一个 Agent」的入口。改代码前先读 `product-rules/`，
-> 它记录了哪些设计是**刻意为之、不能顺手改**的。
->
-> 产品同学只读一份：[product-direction/innovation-backlog-2026-09-14.md](product-direction/innovation-backlog-2026-09-14.md) —— 用产品语言写，技术线索都在文末附录。
+RTC 的产品定位是**本地优先的持续语音记录与输入工具**：同一份麦克风语音既可以进入当前应用，也会沉淀为本地逐字稿，供会议分场、回看和后续整理。完整边界见 [ADR-001](decisions/ADR-001-product-positioning.md)。
 
-## product-rules/ — 产品与界面规则（改代码前必读）
+这里不是资料仓库，而是 RTC 的知识入口。先按任务找对层级，再决定哪些内容能约束实现。
 
-| 文件 | 内容 | 什么时候读 |
-|------|------|-----------|
-| [product-rules/core-product-principles.md](product-rules/core-product-principles.md) | 产品原则：RTC 坚持什么、为什么，共 9 条。每条带「破坏了用户会看到什么」 | 决定加什么功能、加在哪一层之前 |
-| [product-rules/ui-interaction-spec.md](product-rules/ui-interaction-spec.md) | 界面体验规范：纸墨外观、状态诚实、列表不抢滚动、设置页结构等 9 条 | 动界面之前 |
-| [product-rules/ux-issue-log.md](product-rules/ux-issue-log.md) | **体验问题合集**：已经实际发生过、或已被实测证实的体验毛病，一条一个编号（`UX-1`…），修完改状态不删 | 排查界面问题、怀疑「这是不是老毛病」时 |
+## 先认清权威性
 
-两份规范都是**人话正文 + 文末工程附录**的结构：产品同学只读正文，实现细节在附录里。
+| 层级 | 回答的问题 | 权威性 |
+|---|---|---|
+| [产品规则](product-rules/README.md) | 产品必须怎样表现 | 现行规则，除非明确标为提案或已废弃 |
+| [设计规则](design-rules/README.md) | 界面必须长什么样、视觉冲突怎么裁决 | 现行规则；数值以代码为准 |
+| [系统架构](architecture/README.md) | 系统边界、数据流和不变量是什么 | 现状基线；改变时必须同步更新 |
+| [决策记录](decisions/README.md) | 为什么选这条路、放弃了什么 | 已接受且未被取代的决定有效 |
+| [运行手册](runbooks/README.md) | 怎样重复执行或恢复一个操作 | 操作层事实，需能实际复现 |
+| [验证证据](evidence/README.md) | 某次变更实际检查了什么 | 历史证明，不是永久规则 |
+| [产品方向](product-direction/README.md) | 还在研究、排期或待裁决什么 | 默认非权威；以目录中的状态为准 |
+| `project-ledger/records/` | 决定、证据和当前状态如何追溯 | 索引层，不复制上述正文 |
 
-界面类的毛病要能被**量出来**，别靠眼看。`npm run check:ux` 会把页面真跑起来量几何
-（内容被裁掉够不着 / 点不动 / 对比度 / 横向溢出…），退出码非 0 就是有发现。
-新加检查项时必须先证明它**会变红**——一盏不会变红的灯没有意义。
+当规则、代码与运行结果不一致时，冲突本身就是问题。不要用“代码现在这样”自动推翻规则，也不要用旧文档否认已经验证的新行为；查清后同步修正权威来源。
 
-界面之外的「跑起来才暴露」的毛病也同理：`npm run check:audio` 用真浏览器把录音管道跑一遍
-（麦克风用振荡器代替、ASR 用本地假引擎），验证断了会自愈、救不回来会如实报——见
-`product-rules/ux-issue-log.md` 的 UX-14。它需要 Playwright（和 check:ux 一样不在仓库依赖里）。
+## 按任务走最短路线
 
-交互类的同样不能只靠读代码：`npm run check:search` 把顶栏这一排入口的行为跑一遍（搜索入口：
-默认不占版面 / 点开聚焦 / Esc 一步一跳 / 带着词收起就连词一起清 / 聚焦用偏灰墨色；六个图标的
-悬停都是浅纸底加墨色图标），`--break=visible|hidden|red|hoverred|esc` 用来自证这盏灯真会变红。
+| 任务 | 必读 |
+|---|---|
+| 判断是否该做一个功能 | [产品原则](product-rules/core-product-principles.md) → [产品方向状态表](product-direction/README.md) |
+| 改主界面、设置页、状态或反馈 | [界面体验规范](product-rules/ui-interaction-spec.md) → [体验问题合集](product-rules/ux-issue-log.md) |
+| 改样式、图标、动效或新窗口外观 | [视觉正本](design-rules/visual-language.md) → [设计原则](design-rules/design-principles.md)；动手前看 [治理合同](design-rules/governance.md) |
+| 改会议白板 | 上述两份界面文档 → [产品方向状态表](product-direction/README.md) 中两份“已接受”白板决定 |
+| 改 Tauri、Node、ASR、端口或本地数据 | [系统架构](architecture/README.md) |
+| 改语音指令配置 | [语音指令生成指南](voice-command-agent-guide.md) |
+| 作出难以逆转或跨模块的选择 | [决策记录](decisions/README.md)，新建 ADR |
+| 记录测试、人工验收或发布结果 | [验证证据](evidence/README.md) |
+| 执行发布、排障或恢复 | [运行手册](runbooks/README.md) |
 
-## product-direction/ — 产品方向
+仓库根 [README](../README.md) 负责安装、运行方式、配置和用户可见功能；本目录负责约束、理由、操作与证据。两者不要复制整段内容。
 
-| 文件 | 内容 |
-|------|------|
-| [product-direction/ai-meeting-notes-research.md](product-direction/ai-meeting-notes-research.md) | AI 会议纪要行业研究（Markdown 版，可被 Agent 直接引用）：四大方向、Granola 拆解、记忆层现状、横向对比、选型建议 |
-| [product-direction/innovation-backlog-2026-09-14.md](product-direction/innovation-backlog-2026-09-14.md) | 基于当前代码 + 上文的创新清单：5 条 P1 + 4 条 P2，每条带证据与建议 |
-| [product-direction/meeting-board-external-ai-first.md](product-direction/meeting-board-external-ai-first.md) | 会议白板的分工与边界：应用只做记录/保存/加载/展示，理解会议交给外部 AI；**改白板代码前必读** |
-| [product-direction/granola-human-in-loop-decision-2026-09-18.md](product-direction/granola-human-in-loop-decision-2026-09-18.md) | 参考 Granola 的结论：人的三种输入（会前定义 / 会中手记 / 会后编辑）各起什么作用 |
-| [product-direction/meeting-board-review-2026-09-19.md](product-direction/meeting-board-review-2026-09-19.md) | **会议白板的判断台账**：每一条结论停在哪一档（接收 / 待裁决 / 否定 / 缺信息）、依据是什么、还缺什么事实。产品方向靠它排优先级 |
-| [product-direction/mobile-transcription-ios.md](product-direction/mobile-transcription-ios.md) | 手机逐字稿工具：iOS 个人使用、SenseVoice、本地优先、连续签名约束与 MVP 验收标准 |
+## 维护闭环
 
-原始研究文件（二进制，Agent 读不了，以 `.md` 版为准）：
-`AI会议纪要产品方向分析报告.docx` / `AI会议纪要产品方向分析报告（预览版）.pdf`
+1. 先确定内容属于规则、架构、决策、手册、证据还是研究。
+2. 在对应目录更新正文；重大取舍使用 [ADR 模板](templates/adr.md)。
+3. 行为变化时更新规则或架构，不能只留一条聊天记录或提交说明。
+4. 用 [证据模板](templates/evidence.md) 记录实际运行结果和盲区；未运行就写“未运行”。
+5. 运行 `npm run check:docs`，检查本地链接和未被入口索引的 Markdown。
+6. 如果决定进入或退出现行状态，同步更新目录状态表和相关 `project-ledger` 记录。
 
-## 代码之外还有两个入口
+定时优化审查（ZCode 自动维护）沉淀在 [优化审查记录](optimization-review.md)：带代码依据的优化点与修复标注，属于待办线索，不构成规则。
 
-- `README.md`（仓库根）：安装、三种运行方式、配置项、换行逻辑、目录结构
-- `scripts/rtc.mjs`：CLI 开放入口，**软件边界的产品化表达**（外部 Agent 通过它读记录 / 改配置 / 调 LLM / 执行动作）
+## 当前已知治理债务
 
-## project-ledger/ — 决策的知识目录（Project-Ledger）
+- `design-rules/` 里还带着四行待裁决项（白板是否为独立外观、次要文字要不要守住 4.5:1、
+  字号与圆角要不要收敛成 token、菜单栏橙底白柱的对比度）；它们需要产品判断，
+  不裁决就不算完成，见 [设计治理合同](design-rules/governance.md) 第 4 节。
 
-`project-ledger/records/` 存的是**可追溯的决策记录**（record-v1：id / status / sources /
-关系 / key），入口是仓库根的 `.project-knowledge.json`。它**不重复**上面那些文档的正文：
-规则本身仍在 `product-rules/`，这里只额外记下「当时怎么判断、选了哪条、被什么验证过」，
-并给出 id 和来源，让「这件事当初为什么这么定、后来有没有被推翻」是可查的而不是靠翻对话。
+- `product-direction/` 里已有两份实际承担决定作用的旧文件。为避免大规模搬迁造成断链，当前保留原路径，由状态表声明其权威性；以后有实质变更时再用 ADR 接续，不做纯整理式搬家。
+- `docs/AI会议纪要产品方向分析报告.docx` 和预览 PDF 是研究附件；可检索、可引用的版本是 `product-direction/ai-meeting-notes-research.md`。
+- `docs/voice-command-agent-guide.md` 目前同时是能力参考和操作指南。现阶段保留稳定路径；内容明显扩张时再拆，不提前制造迁移成本。
 
-```bash
-python3 ~/.agents/skills/Project-Ledger/scripts/knowledge.py context . --task "改主界面搜索入口" --scope src/js
-python3 ~/.agents/skills/Project-Ledger/scripts/knowledge.py review .
-```
+## 模板
 
-与 `product-rules/` 的分工：**规则是给人读的、要长期遵守的；记录是给人和 Agent 查的、
-带来源与验证状态的**。两张表不互相复制，改了一边记得看另一边要不要跟。
+- [规则模板](templates/rule.md)
+- [ADR 模板](templates/adr.md)
+- [证据模板](templates/evidence.md)

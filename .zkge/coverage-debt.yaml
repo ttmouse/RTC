@@ -1,10 +1,12 @@
 # ============================================================
 # 覆盖缺口登记（A4 布局要求）
-# 项目：RTC 实时语音转文字 ｜ 由 architecture/traceability.yaml 的 23 条 gap 自动汇总
+# 项目：RTC 实时语音转文字 ｜ 由 architecture/traceability.yaml 自动汇总
 #
-# 本文件回答「还差什么才能说验证过」。三类缺口分开记：
-#   claim_gaps     —— 某条能力问题缺实现定位或缺测试落点
-#   verifier_gaps  —— 尺子本身没校准，其结论不得进门禁
+# 本文件回答「还差什么才能说验证过」。四类缺口分开记：
+#   claim_gaps        —— 某条能力问题缺实现定位或缺测试落点
+#   completeness_gaps —— 有检查在验真实产品行为，但能力问题清单里根本没有这一条
+#                        （清单不完备是方法的根本限制；发现即登记，人工裁决是否补成 claim）
+#   verifier_gaps     —— 尺子本身没校准，其结论不得进门禁
 #   known_blind_spots —— 尺子能跑但天生看不见的区域（不修，只登记）
 # ============================================================
 schema: zkge.coverage-debt/v1
@@ -33,8 +35,8 @@ claim_gaps:
     reason: "无测试——冲突提示当前无实现"
   - claim_id: CLAIM.BOARD.005
     questions: [S-214]
-    missing: "实现位置＋测试落点"
-    reason: "无测试——连续两次外部写入未覆盖"
+    missing: "实现位置"
+    reason: "测试已挂上，但实现落点未定位——需先查清外部连续写入的留底/替换记录在哪"
   - claim_id: CLAIM.CMD.002
     questions: [C-017]
     missing: "实现位置＋测试落点"
@@ -104,16 +106,60 @@ claim_gaps:
     missing: "实现位置＋测试落点"
     reason: "无测试——更新后授权失效需真实系统授权变更"
 
+# 检查在跑、也全绿，但清单里没有对应能力问题——不是「没问题」，是「问题没被写下来」。
+# 共 10 条，全部待人工裁决；未擅自新增 claim（38 条已冻结）。
+completeness_gaps:
+  - check: tests/time-grouping.test.mjs
+    covers: "聊天记录的时间分组规则（微信式居中时间条，五分钟阈值）"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: tests/push-to-talk.test.mjs
+    covers: "按住说话与常态 VAD 录音共存（叠加而非二选一）：按住只接管这一句句尾，松开立刻回到自动断句"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: tests/manual-hallucination.test.mjs
+    covers: "按住说话空按不得上屏：整段人声证据不足时丢弃，不让 SenseVoice 把静音幻觉成 Okay. / The."
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: tests/sfx-sequence.test.mjs
+    covers: "音效时序：按住说话结束音 → 该句粘贴不重复响 → 下一句连续听写粘贴必须响"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: tests/tray-speaking.test.mjs
+    covers: "菜单栏「说话中」由 VAD 结论驱动，且本地引擎路径也必须更新（否则默认引擎下永远不亮）"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: tests/tray-status.test.mjs
+    covers: "菜单栏两通道分工：字形说「在不在录」、颜色说「有没有在说话」"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: tests/search-toggle.browser.mjs
+    covers: "搜索入口改图标后的行为：默认不展开、点开光标落进输入框、Esc 一步一跳、带词收起要清词、与设置页联动"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: tests/audio-pipeline.browser.mjs
+    covers: "真浏览器里的录音管道：会话被打断能否自愈、救不回来是否如实报、取不到麦克风是否报得具体（当前因缺浏览器二进制跑不起来）"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: meeting-board/tests/editor-scroll.test.mjs
+    covers: "白板锁一屏高后每档内容必须有可达滚动路径（2026-09-17 scrollHeight 15854 / clientHeight 770 被裁事故的回归）"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+  - check: scripts/check-ux.mjs
+    covers: "无头界面巡检：内容被裁够不着、控件被盖住、视口外、可点区过小、横向溢出、大块空白（需先 vite build）"
+    missing: "能力问题清单里没有对应条目"
+    disposition: "待人工裁决：补成新 claim，或判定不必验"
+
 verifier_gaps:
   - verifier: check_audio
-    state: "未校准（依赖 Playwright，该依赖不在仓库依赖中）"
-    effect: "依赖它的 claim 不得判定 PASS；补跑通自检前该手段不计入证据"
+    state: "未校准（本机实测 2026-09-23）——Playwright 本体与 chromium-1200 都在，只缺 chromium_headless_shell-1200；脚本实测退出码 1（脚本自述应为 2，属实现缺陷）"
+    effect: "依赖它的 claim 不得判定 PASS；修法一行：npx playwright install chromium-headless-shell"
   - verifier: check_ux
-    state: "未校准（依赖 Playwright；且验的是 dist/meeting-board，必须先 vite build）"
-    effect: "拿旧构建会得出假结论（本会话已验证过一次）"
+    state: "未校准（本机实测 2026-09-23）——同样缺 chromium_headless_shell-1200（退出码正确为 2）；且它验的是 dist/meeting-board，必须先 vite build"
+    effect: "拿旧构建会得出假结论（本会话已实测过一次）；修法同上"
   - verifier: code_review_graph
-    state: "未校准（RTC 尚未建图）"
-    effect: "38/38 条 claim 的「测试覆盖反查 / 爆炸半径 / 死代码」全部悬空——这是当前最大的单点缺口"
+    state: "部分校准（2026-09-23 建图）——正向探针 258 个调用方、负向探针返回 0；但 tests_for/TESTED_BY 对 javascript 失明（20 个测试文件只有 1 个产出边，1/20）"
+    effect: "tests_for 不得用于门禁；替代口径 = IMPORTS_FROM 反查（见 graphs/implementation.snapshot.json）；图会过期，建图坐标须与当前 HEAD 一致才可用"
 
 known_blind_spots:
   - verifier: static_check
@@ -125,6 +171,6 @@ known_blind_spots:
   - verifier: runtime_manual
     blind: "无法穷举，只验证代表性场景，且结论不可重放"
   - verifier: code_review_graph
-    blind: "对反射/动态代码存在静态抽取盲区；tests_for 边缺失会返回 0 条，不得当成「真的没测试」"
+    blind: "对反射/动态代码存在静态抽取盲区；tests_for/TESTED_BY 对 javascript 近全失明（实测 1/20 个测试文件产出边），返回 0 条不得当成「真的没测试」；Rust 文件内的 #[cfg(test)] 测试不计入独立测试文件"
   - verifier: property_test
     blind: "技能未提供、项目未自建；依赖它的 claim 在补齐前不得判定 PASS"

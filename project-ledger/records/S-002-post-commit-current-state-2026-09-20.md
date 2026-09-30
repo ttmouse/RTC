@@ -8,7 +8,6 @@
   "summary": "feature/push-to-talk 已将当前集成改动拆成核心功能、音效和 Project-Ledger 三个本地提交；尚未推送，桌面端人工验收与 dist 构建仍待完成",
   "scope": ["feature/push-to-talk", "src", "src-tauri", "asr_local", "tests", "project-ledger"],
   "sources": [
-    "git log --oneline d50a99a..HEAD",
     "package.json",
     "tests/push-to-talk.test.mjs",
     "tests/sfx-sequence.test.mjs",
@@ -25,6 +24,8 @@
 ```
 
 ## 当前提交
+
+提交范围以 `git log --oneline d50a99a..HEAD` 为准（命令记录，不作为文件来源）：
 
 - `8096ad8 feat: unify VAD threshold and add push-to-talk`
 - `826cda6 feat: use bundled speech feedback sounds`

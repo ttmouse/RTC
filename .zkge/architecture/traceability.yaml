@@ -10,10 +10,12 @@
 # 【生成时发现的两处源数据瑕疵，已如实记在对应条目里】
 #   1. score-card 的 code_loc 字段在不同用例里含义不一致：L0-* 放的是实现文件，
 #      L1-*/L2-* 放的是测试文件。本文件一律改用 component 字段作 implementation_ref。
-#   2. tests/time-grouping.test.mjs、meeting-board/tests/{transcript,preliminary,
-#      preliminary-panel,markdown-block-patch}.test.mjs、scripts/check-ux.mjs
-#      这 6 个检查真实存在且当前全绿，但 score-card 的能力问题映射里从未引用它们
-#      —— 属于「测了但没进能力问题账本」，见文末 orphan_checks。
+#   2. 有一批检查真实存在且当前全绿，但 score-card 的能力问题映射里从未引用它们
+#      —— 属于「测了但没进能力问题账本」。逐文件比对后实际是 16 个（先前记成 6 个，
+#      漏看了 meeting-board/ 与 scripts/ 下的文件；又一度记成 15 个，是少数了一次）。
+#      文末 orphan_checks 逐条给了处置：5 个本轮挂进了对应 claim，10 个发现是
+#      **能力问题清单漏了**（已进 coverage-debt.yaml 的 completeness_gaps），
+#      1 个验的是交付体系自身而非产品行为。
 #
 # status: traced = 实现与测试两跳都落到了真实存在的文件；gap = 至少一跳缺失。
 # evidence_ref 一律为空：38 条 claim 的 status 全是 NOT_STARTED，还没有任何一次运行产出证据。
@@ -91,7 +93,7 @@ edges:
   - claim_id: CLAIM.BOARD.001
     questions: [S-209, C-020]
     implementation_ref: "src/lib/*（write-document 通道）"
-    test_ref: "meeting-board/tests/ai-content-write.test.mjs"
+    test_ref: "meeting-board/tests/ai-content-write.test.mjs、meeting-board/tests/preliminary.test.mjs（整理不得覆盖用户正文）、meeting-board/tests/transcript.test.mjs（整条链路不得覆盖白板正文）"
     runtime_ref: "不变量/属性检查"
     evidence_ref: ""
     status: traced
@@ -120,15 +122,15 @@ edges:
   - claim_id: CLAIM.BOARD.005
     questions: [S-214]
     implementation_ref: "（未定位到实现）"
-    test_ref: "（无落点）"
+    test_ref: "meeting-board/tests/preliminary.test.mjs（同一份转写的并发触发只请求一次、新增内容才触发新请求）"
     runtime_ref: "不变量/属性检查"
     evidence_ref: ""
     status: gap
-    gap_reason: "无测试——连续两次外部写入未覆盖"
+    gap_reason: "测试已挂上（preliminary.test.mjs），但实现落点仍缺——外部连续两次写入的留底/替换记录尚未定位到代码"
   - claim_id: CLAIM.BOARD.006
     questions: [C-024]
     implementation_ref: "externalRefresh"
-    test_ref: "meeting-board/tests/external-refresh.test.mjs"
+    test_ref: "meeting-board/tests/external-refresh.test.mjs、meeting-board/tests/transcript.test.mjs（读原文不得影响白板正文）、meeting-board/tests/preliminary-panel.test.mjs（正文优先级不得颠倒）、meeting-board/tests/markdown-block-patch.test.mjs（分块保真保存）"
     runtime_ref: "不变量/属性检查"
     evidence_ref: ""
     status: traced
@@ -243,7 +245,7 @@ edges:
   - claim_id: CLAIM.PKG.001
     questions: [S-230, S-245, C-040]
     implementation_ref: "scripts/check-static.mjs"
-    test_ref: "scripts/check-static.mjs"
+    test_ref: "scripts/check-static.mjs、scripts/check-sidecar-freshness.mjs（产物 mtime 不得早于源文件）"
     runtime_ref: "桌面端真实运行（npm run dev，Tauri/WKWebView）"
     evidence_ref: ""
     status: traced
@@ -309,18 +311,79 @@ edges:
     status: gap
     gap_reason: "无测试——更新后授权失效需真实系统授权变更"
 
-# ── 真实存在、当前全绿、但尚未挂进任何能力问题的检查 ──────────────────────
-# 这些不是「没测」，是「测了但账本上没记」——补挂即可，不需要新写代码。
+# ── 检查盘点：真实存在且当前全绿，但此前一个都没进能力问题账本 ──────────────
+# 【怎么得出的】不是数出来的清单，是对照着算的：把磁盘上所有 tests/*.mjs、
+#   meeting-board/tests/*.mjs、scripts/check-*.mjs 逐个拿到 traceability 的 test_ref
+#   与 verification-plan 的 plan[].verification_methods 里去找落点，两边都没有的才算孤儿。
+#   两个口径都处理了 npm 脚本别名（npm run check:audio → tests/audio-pipeline.browser.mjs），
+#   否则「被 npm 脚本引用」会被误判成孤儿。
+#
+# 【结论变了】先前记的是 6 个，实际是 15 个——原因是当时只看了根 tests/ 的一小部分文件，
+#   漏了 meeting-board 的 5 个与 scripts/ 的 3 个。少数的那个数字是错的。
+#
+# 【15 个分成三类，处置不同】
+#   attached  = 找得到对应能力问题，已挂进上面的 edges（本轮新挂 4 条 claim / 6 个测试文件）
+#   gap       = 找不到对应能力问题，但确实在验真实产品行为 → 是**能力问题清单漏了**，
+#               已登记到 coverage-debt.yaml 的 completeness_gaps（10 条），等人工裁决是否补成新 claim。
+#               （不擅自补 claim：38 条已冻结，新增承诺须人审——L2 候选 ≠ 结论）
+#   tooling   = 验的不是产品行为，是交付体系自身（文档结构 / 构建产物新鲜度）
 orphan_checks:
-  - file: tests/time-grouping.test.mjs
-    covers: "聊天记录的时间分组规则（微信式居中时间条）"
-  - file: meeting-board/tests/transcript.test.mjs
-    covers: "白板逐字稿原文：AI 之前可读、随转写更新、不影响 AI 链路与用户正文"
+  # ── 本轮已挂进能力问题的（不再算孤儿，列在此处是为了留下处置痕迹）──────
   - file: meeting-board/tests/preliminary.test.mjs
-    covers: "白板初步整理：旁路保存、并发去重、增量触发、失败回退与用户正文保护"
+    disposition: attached
+    attached_to: [CLAIM.BOARD.001, CLAIM.BOARD.005]
+    covers: "白板初步整理：旁路保存、用户正文保护、同一份转写并发只触发一次、新增内容才再触发、失败回退"
+  - file: meeting-board/tests/transcript.test.mjs
+    disposition: attached
+    attached_to: [CLAIM.BOARD.001, CLAIM.BOARD.006]
+    covers: "白板逐字稿原文：AI 出结果前就可读、随转写更新、读原文不影响白板正文、整条链路都不覆盖正文"
   - file: meeting-board/tests/preliminary-panel.test.mjs
-    covers: "初步整理面板的模板与状态回写"
+    disposition: attached
+    attached_to: [CLAIM.BOARD.006]
+    covers: "正文优先级不得颠倒（更聪明的模型写的整篇 > 外部分析版 > 本地模型版）、不给空面板、原文不冒充 AI 结论"
   - file: meeting-board/tests/markdown-block-patch.test.mjs
-    covers: "编辑器块级补丁（上游 Milkdown 补丁）"
+    disposition: attached
+    attached_to: [CLAIM.BOARD.006]
+    covers: "分块保真保存：没改则字节一致、只改一段其余块保真、front matter 只出现一次"
+  - file: scripts/check-sidecar-freshness.mjs
+    disposition: attached
+    attached_to: [CLAIM.PKG.001]
+    covers: "打包产物 mtime 不得早于源文件（2026-09-20 打包版 asr-server 落后于源码事故的闸门）"
+
+  # ── 找不到对应能力问题：清单漏了，已进 coverage-debt 等人工裁决 ──────────
+  - file: tests/time-grouping.test.mjs
+    disposition: gap
+    covers: "聊天记录的时间分组规则（微信式居中时间条，五分钟阈值）"
+  - file: tests/push-to-talk.test.mjs
+    disposition: gap
+    covers: "按住说话与常态 VAD 录音共存（叠加而非二选一）：按住只接管这一句句尾，松开立刻回到自动断句"
+  - file: tests/manual-hallucination.test.mjs
+    disposition: gap
+    covers: "按住说话空按不得上屏：整段人声证据不足时丢弃，不让 SenseVoice 把静音幻觉成 Okay. / The."
+  - file: tests/sfx-sequence.test.mjs
+    disposition: gap
+    covers: "音效时序：按住说话结束音 → 该句粘贴不重复响 → 下一句连续听写粘贴必须响"
+  - file: tests/tray-speaking.test.mjs
+    disposition: gap
+    covers: "菜单栏「说话中」由 VAD 结论驱动，且本地引擎路径也必须更新（否则默认引擎下永远不亮）"
+  - file: tests/tray-status.test.mjs
+    disposition: gap
+    covers: "菜单栏两通道分工：字形说「在不在录」、颜色说「有没有在说话」"
+  - file: tests/search-toggle.browser.mjs
+    disposition: gap
+    covers: "搜索入口改图标后的行为：默认不展开、点开光标落进输入框、Esc 一步一跳、带词收起要清词、与设置页联动"
+  - file: tests/audio-pipeline.browser.mjs
+    disposition: gap
+    covers: "真浏览器里的录音管道：会话被打断能否自愈、救不回来是否如实报、取不到麦克风是否报得具体（当前因缺浏览器二进制跑不起来）"
+  - file: meeting-board/tests/editor-scroll.test.mjs
+    disposition: gap
+    covers: "白板锁一屏高后每档内容必须有可达滚动路径（2026-09-17 scrollHeight 15854 / clientHeight 770 被裁事故的回归）"
   - file: scripts/check-ux.mjs
-    covers: "无头界面检查（需先 vite build，否则验的是旧构建）"
+    disposition: gap
+    covers: "无头界面巡检：内容被裁够不着、控件被盖住、视口外、可点区过小、横向溢出、大块空白（需先 vite build）"
+
+  # ── 验的是交付体系自身，不是产品行为 ────────────────────────────────────
+  - file: scripts/check-docs.mjs
+    disposition: tooling
+    covers: "docs/README.md 入口完整性：每个文档都被索引到、没有指向不存在文件的死链"
+    note: "它守的是知识入口，不是 App 行为，因此不该有对应能力问题；保留在 tooling.check 模块下。"

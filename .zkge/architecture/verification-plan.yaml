@@ -32,22 +32,23 @@ verifiers:
     self_test_result: 通过（npm test）
     known_blind_spots:
       - 这些测试是模块级/纯函数级，不覆盖真实音频链路与真实文件写入
-      - meeting-board 测试不随 npm test 一起跑，需单独执行
+      - 根 npm test 不含 meeting-board 的 8 个测试，须在 meeting-board/ 下另跑一次 npm test
 
   - id: check_audio
     version: "tests/audio-pipeline.browser.mjs"
     owner: douba
-    self_test_result: 未校准（依赖 Playwright，该依赖不在仓库依赖中——先跑通再启用门禁）
+    self_test_result: "未校准（本机实测 2026-09-23 跑不通）——Playwright 本体在（全局 1.58.1），但缺 headless 浏览器二进制：~/Library/Caches/ms-playwright/chromium_headless_shell-1200 不存在（缓存里只有完整版 chromium-1200）。实测报错 browserType.launch: Executable doesn't exist，退出码 1。修法一行：npx playwright install chromium-headless-shell。装好前本验证器不得用于门禁。"
     known_blind_spots:
       - 浏览器音频路径与 WKWebView 不同，无法复现 AudioContext.state = 'interrupted'
+      - "脚本自述「装不上时退出码 2（=没跑成，不是通过）」，但浏览器缺失这条路径实际是未捕获异常、退出码 1——缺件与跑失败在退出码上分不开"
 
   - id: check_ux
     version: "scripts/check-ux.mjs"
     owner: douba
-    self_test_result: 未校准（依赖 Playwright；且验的是 dist/meeting-board，必须先 vite build）
+    self_test_result: "未校准（本机实测 2026-09-23 跑不通）——与 check_audio 同一个卡点：缺 chromium_headless_shell-1200。该脚本正确地以退出码 2 表示「没跑成」，未被误判为通过。修法一行：npx playwright install chromium-headless-shell。装好前本验证器不得用于门禁。"
     known_blind_spots:
       - 只做结构/存在性检查，UX 语义内容（UX-2/5/6/7/8）机器判定不了
-      - 拿旧构建会得出假结论
+      - 拿旧构建会得出假结论（验的是 dist/meeting-board，必须先 vite build）
 
   - id: runtime_manual
     version: "桌面端人工实测（npm run dev）"
@@ -58,12 +59,14 @@ verifiers:
       - 结论不可重放
 
   - id: code_review_graph
-    version: "code-review-graph CLI @ ~/.local/bin"
+    version: "code-review-graph 2.3.7 @ ~/.local/bin（图建于 3623308 / feature/push-to-talk）"
     owner: douba
-    self_test_result: 未校准（RTC 尚未建图）
+    self_test_result: "部分校准——正向探针通过（callers_of 最高入度符号得 258 个调用方）、负向探针通过（不存在的符号返回 0，能区分「没查到」与「真的没有」）；但 tests_for 对 JavaScript 失明：20 个 JS 测试文件只有 1 个产出 TESTED_BY 边（1/20），故 tests_for 不得用于门禁。替代口径 = IMPORTS_FROM 反查测试文件导入的实现文件，已随 graphs/implementation.snapshot.json 导出（14 个测试文件 → 实现文件）。"
     known_blind_spots:
       - 对反射/动态代码存在静态抽取盲区
-      - tests_for 边缺失会返回 0 条，不得当成「真的没测试」
+      - "tests_for / TESTED_BY 对 JavaScript 基本失明（1/20）——查询返回 0 不得当成「真的没测试」，改用 IMPORTS_FROM 反查"
+      - "Rust 的 in-file 测试（#[cfg(test)]）不构成独立测试文件，TESTED_BY 的 file_path 落在实现文件上，按文件口径统计会低估"
+      - "图是快照：工作区推进后 built_at_commit 会落后于 current_sha，须重建后再用于门禁"
 
   - id: property_test
     version: "【缺】未自建"
@@ -79,7 +82,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/model-recovery.test.mjs（已存在）
       - stage: ⑤
@@ -94,7 +97,7 @@ plan:
     oracle_type: integration
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/model-recovery.test.mjs（已存在）
       - stage: ⑤
@@ -109,7 +112,7 @@ plan:
     oracle_type: property
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 【缺】属性测试框架（技能未提供，项目未自建）——R2 冻结前必须补齐，否则本 claim 不得判定 PASS
       - stage: ⑤
@@ -124,7 +127,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -137,7 +140,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑤
@@ -152,7 +155,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: npm run check:audio（音频看护，需 Playwright）
       - stage: ⑤
@@ -167,7 +170,7 @@ plan:
     oracle_type: integration
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/main-status.test.mjs（已存在）
       - stage: ⑤
@@ -182,7 +185,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/vad.test.mjs（已存在）
       - stage: ⑤
@@ -197,7 +200,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -212,9 +215,9 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
-        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+        tool: meeting-board/tests/preliminary.test.mjs（整理不得覆盖用户白板正文、失败回退也不得覆盖）+ meeting-board/tests/transcript.test.mjs（整条链路不得覆盖白板正文）——已挂，见 traceability
         note: 另可复用 meeting-board/tests/ai-content-write.test.mjs（已存在）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
@@ -228,7 +231,7 @@ plan:
     oracle_type: integration
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -243,7 +246,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -256,7 +259,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -271,9 +274,9 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
-        tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
+        tool: meeting-board/tests/preliminary.test.mjs（同一份转写的并发触发只请求一次 Ollama、新增转写才触发新请求）——已挂，见 traceability
       - stage: ⑦
         tool: code_review_graph detect_changes + get_impact_radius（爆炸半径比对）
     required_assurance_level: A2
@@ -284,7 +287,13 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
+      - stage: ⑤
+        tool: meeting-board/tests/transcript.test.mjs（读原文不影响白板正文）——已挂，见 traceability
+      - stage: ⑤
+        tool: meeting-board/tests/preliminary-panel.test.mjs（正文优先级不得颠倒）——已挂，见 traceability
+      - stage: ⑤
+        tool: meeting-board/tests/markdown-block-patch.test.mjs（分块保真保存）——已挂，见 traceability
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -297,7 +306,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
         note: 另可复用 tests/app-rule-lists.test.mjs（已存在）
@@ -313,7 +322,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -328,7 +337,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -343,7 +352,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -358,7 +367,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -373,7 +382,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -388,7 +397,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -403,7 +412,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑦
@@ -416,7 +425,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -431,7 +440,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑤
@@ -446,7 +455,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -459,7 +468,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/audio-recovery.test.mjs（已存在）
       - stage: ⑤
@@ -474,7 +483,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/audio-recovery.test.mjs（已存在）
       - stage: ⑤
@@ -489,7 +498,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -502,9 +511,11 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: scripts/check-undefined.mjs（tsc --checkJs）+ scripts/check-static.mjs
+      - stage: ⑤
+        tool: scripts/check-sidecar-freshness.mjs（产物 mtime 不得早于源文件）——已挂，见 traceability
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -517,7 +528,7 @@ plan:
     oracle_type: integration
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
       - stage: ⑤
@@ -532,7 +543,7 @@ plan:
     oracle_type: invariant
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 【缺】属性测试框架（技能未提供，项目未自建）——R2 冻结前必须补齐，否则本 claim 不得判定 PASS
       - stage: ⑤
@@ -547,7 +558,7 @@ plan:
     oracle_type: integration
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: tests/*.test.mjs 或 meeting-board/tests/*.test.mjs（域内单测，已存在部分）
         note: 另可复用 meeting-board/tests/transcript.test.mjs（已存在）
@@ -563,7 +574,7 @@ plan:
     oracle_type: integration
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -576,7 +587,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -589,7 +600,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -602,7 +613,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦
@@ -615,7 +626,7 @@ plan:
     oracle_type: runtime
     verification_methods:
       - stage: ④
-        tool: code_review_graph（build_or_update_graph + impact radius；RTC 尚未建图，先建）
+        tool: code_review_graph（图已建：3623308/feature/push-to-talk，快照见 graphs/implementation.snapshot.json）
       - stage: ⑤
         tool: 桌面端人工实测（npm run dev，Tauri/WKWebView）——headless 浏览器复现不出
       - stage: ⑦

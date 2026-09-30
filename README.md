@@ -2,7 +2,18 @@
 
 # RTC
 
-实时语音转文字工具，支持**本地 SenseVoice 引擎**（完全离线）和**阿里云百炼 ASR**。可作为网页运行，也可打包为 macOS 桌面应用（Tauri）。
+RTC 是一个**本地优先的持续语音记录与输入工具**。它不只把当前这句话输入光标所在的应用，还会把你在不同应用中说过的话和会议中的语音持续转成按时间保存的逐字稿，便于回看、搜索和继续整理。
+
+它目前主要有两种用法：
+
+- **语音输入**：按住说完一句，或使用连续听写，内容自动进入当前应用。
+- **持续记录与会议逐字稿**：开始录音后，麦克风收到的语音会持续沉淀为本地逐字稿；即使某句话没有发往任何应用，它也会留在记录中，后续可按会议分场、查找并整理成可编辑的会议内容。
+
+两种用法共用同一份本地记录：**“输入到哪里”是当下动作，“你说过什么”是可持续积累的资产。**
+
+> 当前边界：RTC 记录的是这台 Mac 的麦克风输入，不直接采集其他应用的系统音频。在线会议中，对方的声音只有被麦克风收到时才能进入逐字稿。
+
+语音识别支持**本地 SenseVoice 引擎**（完全离线）和**阿里云百炼 ASR**。产品以 macOS 桌面应用（Tauri）为主，网页版用于辅助开发和调试。
 
 ## 功能
 
@@ -219,15 +230,23 @@ dist/                 # 构建产物（不入库）
 
 ## 打包桌面版（sidecar 二进制）
 
-`src-tauri/binaries/` 下的两个 sidecar（`node-server` / `asr-server`）**不入库**（单个数十 MB 到数百 MB），
-但 `tauri.conf.json` 的 `bundle.externalBin` 依赖它们，缺了就无法打包：
+`src-tauri/binaries/` 下的 sidecar（`node-server` / `asr-server` 与 `server.bundle.js`）**不入库**（单个数十 MB 到数百 MB），
+但 `tauri.conf.json` 的 `bundle.externalBin` 和 `bundle.resources` 依赖它们，缺了就无法打包：
 
 ```bash
-npm run build:sidecar   # 需要 bun（编译 server.js）+ pyinstaller（打包 asr_local/server.py）
+npm run build:sidecar   # 需要 bun（打 server.bundle.js + 拷 bun 运行时）+ pyinstaller（打 asr_local/server.py）
 ```
 
 **改了 `server.js` 或 `asr_local/server.py` 后必须重新执行这一步**，否则打进 App 的仍是旧后端
-（曾出现「仓库里的 server.js 已经加了 /api/status，但 App 里那个二进制还是老的、接口返回 404」）。
+（曾出现「仓库里的 server.js 已经加了 /api/status，但 App 里那个二进制还是老的、接口返回 404」；
+也曾出现「本地识别服务停留在 5 天前，按住说话在打包版里被判成静音自动切句」）。
+
+`npm run build`（打包的必经之路）会先跑 `scripts/check-sidecar-freshness.mjs`：
+产物比源文件旧就直接失败并提示重建，不等到装完才发现行为不对。
+
+后端 sidecar 的构成值得记住：**`node-server` 是 bun 官方运行时本体，后端代码是资源目录里的 `server.bundle.js`**。
+不要换回 `bun build --compile` 的单文件——它的产物在 macOS 26+ 上加载即被系统 SIGKILL（没有 CMS 签名），
+打包后的 App 会表现为「窗口能开，但历史记录一片空白」。细节见 [验证证据](docs/evidence/2026-09-20-packaged-app-sidecar.md)。
 
 ## 许可
 
@@ -247,7 +266,8 @@ RTC 的设计原则是**数据对外部 AI Agent 完全开放**，不做内置 A
     2026-09-16.jsonl      # 每天一个文件
     2026-09-17.jsonl
     ...
-  meeting-board.json       # 会议白板文档
+  meeting-board.json       # 会议白板文档（每场多 humanAnchors / agentDocumentAt，
+                           #  标记正文中哪些行是用户手写的、AI 最近何时写回）
   config.json              # 配置
   commands.json            # 语音指令映射
 ```
@@ -315,6 +335,13 @@ rtc board write-document /tmp/body.md        # 正文（Markdown）
 
 `write-document` 是整篇替换；要保留已有正文就加 `--append`（新内容接在后面）。
 
+**人工内容锚点**：白板正文区分「用户手写的」和「AI 写回的」（服务端按写入来源记账，
+字段是每场的 `humanAnchors` / `agentDocumentAt`）。`rtc board brief` 会把人工行标成
+「人工锚点」交给外部 AI，并附上契约：围绕它找证据、原样保留、与逐字稿矛盾时指出而非
+代改。`write-document` 整篇替换若会丢掉这些行会被 CLI 拦下（`--force` 才放行，语义是
+用户明确要求全部重写）。细节见
+[ADR-003](docs/decisions/ADR-003-board-human-anchor-contract.md)。
+
 **Agent 侧的一站式说明书**：`~/.agents/skills/rtc-meeting-board/SKILL.md`
 （Cindy / Claude Code 都会自动加载）。
 
@@ -329,7 +356,7 @@ rtc board write-document /tmp/body.md        # 正文（Markdown）
 | `rtc board show [场次ID] [--json]` | 该场已保存的定义 / 分析 / 正文 |
 | `rtc board write-analysis <JSON> [场次ID]` | 写入外部分析结果（结构化，机器可读） |
 | `rtc board write-definition <JSON> [场次ID]` | 写入会前定义 |
-| `rtc board write-document <Markdown> [场次ID] [--append]` | 写入白板正文（整篇替换；`--append` 保留原文接在后面） |
+| `rtc board write-document <Markdown> [场次ID] [--append] [--force]` | 写入白板正文（整篇替换；`--append` 保留原文接在后面；会丢掉人工内容时被拦，用户明确要求重写才 `--force`） |
 
 读的部分直接读本地文件（应用没开也能用）；写回走本地服务，由服务端串行合并，
 场次切分规则（静默 5 分钟）与面板完全一致。
