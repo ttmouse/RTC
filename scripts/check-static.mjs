@@ -212,4 +212,37 @@ for (const file of [...new Set(cssFiles)].sort()) {
 
 fs.rmSync(syntaxTmpDir, { recursive: true, force: true });
 
+// ── 7) CSS 自定义属性：引用了却没定义 ──
+// 真实案例（本仓库，2026-10-01 发现）：`--seal-light` 从未在 `:root` 定义过，
+// 但 `.sbtn.danger:hover` 与 `src/js/main.js` 都写成了 `var(--seal-light, rgba(191,58,30,.08))`——
+// 兜底值让它照样渲染，于是「同一个色值在两处各写一遍」这件事藏了很久，静态灯全绿。
+// 只查自己管自己 token 的入口样式表；主题目录下的分片（crepe/omia）跨文件引用是常态，不查。
+// JS 内联设置的属性（如 stats.js 的 `--day-count`）从 JS/HTML 里自动收集，不硬编码白名单。
+{
+  const OWN_SCOPE = ['src/css/style.css', 'meeting-board/src/style.css'];
+  const providedByJs = new Set();
+  const scanProvided = (p) => {
+    if (!fs.existsSync(p)) return;
+    const text = fs.readFileSync(p, 'utf8');
+    for (const m of text.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)) providedByJs.add(m[1]);
+  };
+  for (const f of jsFiles) scanProvided(path.join(jsDir, f));
+  scanProvided(path.join(root, 'src/index.html'));
+
+  for (const file of OWN_SCOPE) {
+    const cssPath = path.join(root, file);
+    if (!fs.existsSync(cssPath)) continue;
+    const css = fs.readFileSync(cssPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const defined = new Set([...css.matchAll(/(^|[;{\s])(--[a-zA-Z0-9_-]+)\s*:/g)].map(m => m[2]));
+    const missing = new Set();
+    for (const m of css.matchAll(/var\(\s*(--[a-zA-Z0-9_-]+)/g)) {
+      if (!defined.has(m[1]) && !providedByJs.has(m[1])) missing.add(m[1]);
+    }
+    if (missing.size) {
+      fail(`${file}: ${missing.size} 个自定义属性引用了却没定义 —— ${[...missing].join('、')}\n`
+        + '      （值靠兜底活着时不会报错，但“同一个色值写两遍”就藏住了；' + '定义进 :root，或让 JS 真正设置它）');
+    }
+  }
+}
+
 console.log(`static checks passed (${jsFiles.length} frontend modules, ${BACKEND_JS.length} backend scripts, ${PY_FILES.length} python files, ${JSON_FILES.length} json files, ${[...new Set(cssFiles)].length} stylesheets)`);

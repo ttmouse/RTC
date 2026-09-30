@@ -281,10 +281,11 @@
 > **视觉规则的正本**在 [`docs/design-rules/`](../design-rules/README.md)（token、原则、治理）；
 > 本附录保留的是**实现层**约束（滚动阈值、电平尺层级、性能硬约束等），不重复设计规则。
 
-**颜色与字体** — 全部定义在 `src/css/style.css:1-6` 的 `:root`，**不要在组件里写死颜色**：
-`--paper #f3ede2` / `--paper-2 #ece4d4` / `--ink #1a1611` / `--ink-soft #524b3e` / `--ink-faint #8f8572` /
-`--rule #d4cbb6` / `--seal #bf3a1e`（唯一强调色）/ `--seal-deep #8f2a14` / `--radius 4px`。
-字号阶梯：正文 `15px/1.7`（`.txt`）、时间戳 `10px`、分组标题 `11-12px`、页面标题 `15-16px`。数字时刻用 `font-variant-numeric: tabular-nums`。
+**颜色、字阶、间距、圆角、层级** — 全部定义在 `src/css/style.css` 的 `:root`（2026-10-01 起字号/间距/圆角/层级也有 token 了），**不要在组件里写死颜色或数值**。
+色板：`--paper/--paper-2/--ink/--ink-soft/--ink-faint/--rule/--seal`（唯一强调色）/`--seal-deep/--seal-light/--ink-hover/--ok`。
+字阶 8 档 `--fs-micro…--fs-hero`（10/11/12/13/15/16/22/30px）；间距 13 档 `--sp-1…--sp-13`（2/4/6/8/10/12/14/16/20/24/32/40/48px）；圆角 `--radius-sm/--radius/--radius-md/--radius-lg/--radius-full`；层级 `--z-main…--z-modal`。
+对应的职责与取舍写在 [`docs/design-rules/DESIGN.md`](../design-rules/DESIGN.md) §2/§3/§4/§5-A。
+正文本体 `15px/1.7`（`.txt`）。数字时刻用 `font-variant-numeric: tabular-nums`。
 
 **滚动阈值** — `ui.js`：贴底判定 `BOTTOM_SLACK = 40`、「回到最新」浮出 `JUMP_SLACK = 120`、顶部翻页 `TOP_SLACK = 120`。
 顶部前插必须记录插入前后的 `scrollHeight` 差值并补偿 `scrollTop`（`setListTopHint` / `prependEntries` 的注释解释了为什么不能按提示条自身高度补、为什么贴底时不补偿）。滚动监听必须 `{ passive: true }`，翻页判断用 rAF 合并。
