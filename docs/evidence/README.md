@@ -17,6 +17,8 @@
 - [2026-09-20-manual-voice-evidence.md](2026-09-20-manual-voice-evidence.md)：按住说话「空按」不再把静音送进模型上屏（含检查变红证据与真实底噪盲区）。
 - [2026-09-20-bailian-sentence-splitting.md](2026-09-20-bailian-sentence-splitting.md)：百炼下一句话被拆成多条记录的根因（前端写死的音量兑底）、对照实验与守门检查（真机复验未做）。
 - [2026-09-29-board-human-content-anchor.md](2026-09-29-board-human-content-anchor.md)：白板人工内容锚点（ADR-003）的单元测试、隔离实跑全链路与桌面端盲区。
+- [2026-09-30-record-row-app-icon.md](2026-09-30-record-row-app-icon.md)：记录行应用图标去投影、按 2× 出图（含新检查的变红证据与桌面端未验收声明）。
+- [2026-10-01-design-token-unification.md](2026-10-01-design-token-unification.md)：字阶/间距/圆角/层级全部落成 token，死引用 `--seal-light` 补定义，更新条黄系并入纸墨（自动检查全绿，真机目检未做）。
 
 记录时必须区分 `pass`、`fail`、`not run`，并写明命令、环境、观察结果和盲区。静态检查通过不等于桌面端行为通过；浏览器测试也不能替代 Tauri/WKWebView 的真实交互验证。
 
