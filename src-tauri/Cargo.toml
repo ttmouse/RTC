@@ -1,6 +1,6 @@
 [package]
 name = "rtc-transcriber"
-version = "1.0.35"
+version = "1.0.36"
 description = "实时语音转文字"
 authors = ["rtc-transcriber contributors"]
 edition = "2021"
@@ -30,12 +30,18 @@ objc2 = { version = "0.6", features = ["alloc"] }
 # NSImage / NSBitmapImageRep：把前台应用的图标编成 PNG（底标那个小图标）。
 # 这两个类和 NSData / NSDictionary 都在 objc2-app-kit 自己的 feature 里标好了。
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWorkspace", "NSRunningApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSEvent", "NSView", "NSStatusItem", "NSStatusBarButton", "NSColor", "block2", "objc2-quartz-core", "objc2-core-graphics", "libc"] }
+# CGEventTap 句柄的包装类型（CFRetained / CFMachPort）。已在依赖树里（objc2-app-kit、
+# objc2-core-graphics 的传递依赖），这里提成直接依赖；CFMachPort 模块由
+# objc2-core-graphics 的 CGEvent feature 打开。
+objc2-core-foundation = { version = "0.3", default-features = false }
 block2 = "0.6"
 # 菜单栏图标的背景块（「正在说话」那块橙色底）靠 NSStatusItem 自己的按钮图层画：
 # 高度由系统定，所以和系统点击时那块高亮底**天然一样高**。两个 crate 本来就在依赖树里
 # （tauri 的传递依赖），这里只是把它们提到直接依赖并把 CALayer / CGColor 打开。
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["CALayer", "objc2-core-graphics", "objc2-core-foundation"] }
-objc2-core-graphics = { version = "0.3", default-features = false }
+# CGEventTap：按住说话的组合键兜底监听（见 lib.rs mac_modifier_keys::install_key_tap）。
+# 这两个 feature 只是把 tauri 依赖树里已有的模块打开，不引入新的第三方代码。
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGEvent", "CGEventTypes"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSString", "NSData", "NSDictionary"] }
 # 图标转 data URL 用（已在依赖树里，0.21 是 tauri 自己用的版本，没有新增下载）
 base64 = "0.21"

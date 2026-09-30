@@ -29,10 +29,23 @@ export async function getAppVersion() {
   return null;
 }
 
-/** 首屏落一次版本信息（唯一显示处是设置页「软件更新」里的状态行） */
+/**
+ * 首屏落一次版本信息，显示在设置页「软件更新」里专属的「当前版本」一行。
+ * **不能**再写回 #updateStatus：那行是更新流程的状态（检查中/下载中/失败都会整句覆盖），
+ * 版本号混在里面，一次「检查更新失败」就让用户再也看不到自己跑的是哪个版本——
+ * 而那恰恰是他判断「升级成功没有」的唯一依据。
+ */
 export async function updateVersionInfo() {
   const version = await getAppVersion();
-  if (version) setUpdateStatus(`当前版本 v${version}`);
+  // 两个展示位：主界面标题旁的徽标（升级验收主入口，拿不到就先空着，不挂「未知」），和
+  // 设置页软件更新里的「当前版本」一行（可以写得啰嗦些）。
+  const badge = $('appVersionBadge');
+  if (badge) badge.textContent = version ? `v${version}` : '';
+  const row = $('appVersion');
+  if (row) row.textContent = version ? `v${version}` : '未知（服务未连接，稍后会自动重试）';
+  // 启动瞬间 sidecar 可能还没起来（桌面窗口和本地服务抢跑）：取不到就隔 10 秒重试，
+  // 直到拿到为止——版本号是升级验证的锚点，不能停留在「未知」。
+  if (!version) setTimeout(() => { void updateVersionInfo(); }, 10000);
 }
 
 function setUpdateStatus(text) {

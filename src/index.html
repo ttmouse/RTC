@@ -8,7 +8,7 @@
 </head>
 <body>
 <header>
-  <h1>实时逐字稿</h1>
+  <h1>实时逐字稿<span id="appVersionBadge" class="app-version" title="当前版本"></span></h1>
   <div class="header-actions">
     <!-- 搜索入口：翻旧记录是低频动作，所以顶栏只留一个图标，点开才展开 #queryBar。
          它和右侧几个入口共用同一组盒模型（见 style.css 的顶栏图标共用规则）。 -->
@@ -391,6 +391,10 @@
 
     <div class="s-group">
       <div class="sg-title">软件更新</div>
+      <div class="s-field">
+        <div class="fl">当前版本</div>
+        <div class="ts" id="appVersion">读取中…</div>
+      </div>
       <div class="s-field">
         <div class="toggle-row">
           <div class="ti">

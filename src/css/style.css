@@ -23,6 +23,10 @@
   header{ position:relative; z-index:30; background:transparent; color:var(--ink);
          padding:12px 20px; display:flex; justify-content:space-between; align-items:center; }
   header h1{ font-size:16px; font-weight:700; letter-spacing:.12em; display:flex; align-items:center; gap:10px; }
+  /* 版本徽标（主界面唯一的常驻版本展示，升级验收就看它）：
+     跟 #status 同一套字阶与墨色，小到不抢注意力，但每次打开都在标题旁边。 */
+  .app-version{ font-family:var(--mono); font-size:10px; font-weight:500; color:var(--ink-soft);
+                letter-spacing:.08em; font-variant-numeric:tabular-nums; }
   /* 运行状态区：放在 footer 电平尺左侧，靠近下方操作区，也不和最新历史记录混在一起。
      纸色底上的文字使用 --ink-soft；点仍是三态：空闲灰点 / 录音印章红（带一圈光晕）/ 异常深红。 */
   #status{ font-size:11px; display:flex; align-items:center; gap:6px; color:var(--ink-soft);
