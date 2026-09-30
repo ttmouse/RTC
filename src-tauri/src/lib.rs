@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -44,9 +45,21 @@ mod mac_accessibility {
 #[cfg(target_os = "macos")]
 mod mac_modifier_keys {
     use block2::RcBlock;
+    use core_foundation::base::TCFType;
+    use core_foundation::mach_port::CFMachPort as CfMachPort;
+    use core_foundation::runloop::{CFRunLoop, CFRunLoopSource, kCFRunLoopCommonModes};
     use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
+    use objc2_core_foundation::{CFMachPort as ObjcCfMachPort, CFRetained};
+    use objc2_core_graphics::{
+        CGEvent, CGEventField, CGEventFlags, CGEventMask, CGEventTapLocation, CGEventTapOptions,
+        CGEventTapPlacement, CGEventTapProxy, CGEventType,
+    };
     use serde::Serialize;
+    use std::collections::HashMap;
+    use std::ffi::c_void;
     use std::ptr::NonNull;
+    use std::sync::{LazyLock, Mutex, OnceLock};
+    use std::time::{Duration, Instant};
     use tauri::{AppHandle, Emitter, Runtime};
 
     #[derive(Clone, Serialize)]
@@ -66,13 +79,7 @@ mod mac_modifier_keys {
     }
 
     fn emit_chord<R: Runtime>(app: &AppHandle<R>) {
-        let _ = app.emit(
-            "rtc:modifier-key",
-            ModifierKeyEvent {
-                key: "",
-                state: "chord",
-            },
-        );
+        emit_key(app, "", "chord");
     }
 
     fn has_any_modifier(flags: NSEventModifierFlags) -> bool {
@@ -121,9 +128,193 @@ mod mac_modifier_keys {
         let _ = app.emit("rtc:modifier-key", ModifierKeyEvent { key, state });
     }
 
+    /// tap 句柄：超时被系统禁用时回调里要靠它重新打开。
+    /// CFMachPort 是 CoreFoundation 文档标注的线程安全类型（CGEventTapEnable 只是
+    /// 一次原子开关），但 objc2 包装不会自动实现 Send/Sync；这里替它补上，
+    /// 仅用于跨线程存取这一个句柄。
+    struct TapPortHandle(CFRetained<ObjcCfMachPort>);
+    unsafe impl Send for TapPortHandle {}
+    unsafe impl Sync for TapPortHandle {}
+    static KEY_TAP_PORT: OnceLock<TapPortHandle> = OnceLock::new();
+
+    /// 当前物理按住的普通键（keyCode → 按下时刻）。
+    ///
+    /// 症状：先按空格、再按 Option（开启动器时键序随机），Option 的按下事件到达时
+    /// 空格还在手里，但之后**再无任何按键事件**——旧的「按住期间见到别的键就取消」
+    /// 判据永远等不到它，按住说话照常启动。现在改为：修饰键按下那一刻，查「还有
+    /// 普通键没松」就知道这是组合键，立刻按 chord 处理。
+    /// 记录带时间戳：超过保鲜期的记录当泄漏作废（漏接 keyUp 时保底）——宁可漏判
+    /// 一次组合键，也不能让按住说话从此失灵。
+    static HELD_KEYS: LazyLock<Mutex<HashMap<i64, Instant>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    const HELD_KEY_TTL: Duration = Duration::from_secs(3);
+
+    /// 调试开关：RTC_KEYTAP_LOG=1 时每个 tap 事件都打到 stderr
+    /// （从终端直接跑 App 二进制才看得到，打包后用 `open` 启动没有控制台）。
+    static KEYTAP_DEBUG: OnceLock<bool> = OnceLock::new();
+    fn keytap_debug() -> bool {
+        *KEYTAP_DEBUG
+            .get_or_init(|| std::env::var("RTC_KEYTAP_LOG").map(|v| v == "1").unwrap_or(false))
+    }
+
+    fn has_modifier_flag(flags: CGEventFlags) -> bool {
+        flags.intersects(
+            CGEventFlags::MaskAlternate
+                | CGEventFlags::MaskControl
+                | CGEventFlags::MaskShift
+                | CGEventFlags::MaskCommand,
+        )
+    }
+
+    fn hold_key(key_code: i64) {
+        if let Ok(mut held) = HELD_KEYS.lock() {
+            held.insert(key_code, Instant::now());
+        }
+    }
+
+    fn release_key(key_code: i64) {
+        if let Ok(mut held) = HELD_KEYS.lock() {
+            held.remove(&key_code);
+        }
+    }
+
+    /// 现在是否还有普通键没松（顺带清掉超过保鲜期的泄漏记录）。
+    fn any_key_held() -> bool {
+        let Ok(mut held) = HELD_KEYS.lock() else { return false };
+        held.retain(|_, at| at.elapsed() < HELD_KEY_TTL);
+        !held.is_empty()
+    }
+
+    fn emit_key<R: Runtime>(app: &AppHandle<R>, key: &'static str, state: &'static str) {
+        // tap 回调跑在后台线程；WKWebView 的 JS eval 只能在主线程执行（wry 不代为
+        // 派发），后台线程直接 emit 会**静默丢失**——症状就是「按了快捷键界面毫无反应」。
+        // 必须 hop 回主线程再发；事件循环 proxy 是 FIFO，事件顺序不乱。
+        let sender = app.clone();
+        let app_for_emit = sender.clone();
+        let _ = sender.run_on_main_thread(move || {
+            let _ = app_for_emit.emit("rtc:modifier-key", ModifierKeyEvent { key, state });
+        });
+    }
+
+    /// HID 级 CGEventTap（只听不改）：修饰键热键判定的**唯一**事件源。
+    ///
+    /// 症状（两个，同一根因的两面）：
+    /// 1. 按住说话设为左 Option 后，按 Option+空格（Raycast/Alfred 这类启动器的默认
+    ///    热键）会误开录音——空格 keyDown 被启动器在组合键分发阶段消费，NSEvent
+    ///    全局监听挂在更晚的 annotated session 节点，看不到它，chord 永远不来；
+    /// 2. 键序反过来（先空格后 Option）同样误开——之后没有新按键事件，旧判据等不到。
+    ///
+    /// 所以这个 tap 同时听 keyDown/keyUp/FlagsChanged，把 pressed/released/chord 的
+    /// 判定全部收进来（单源、有序；NSEvent 监听只在 tap 建不起来时作退路）：
+    /// - FlagsChanged：判定修饰键按下/松开；按下那一刻若有别的修饰键、或有普通键
+    ///   还没松（含刚被启动器消费掉的），一律发 chord；
+    /// - keyDown：带修饰键 → chord（组合键里的普通键）；不带 → 只记录「这个键按着」；
+    /// - keyUp：解除记录。
+    ///
+    /// 前端拿到的仍是同一组 pressed/released/chord 事件，走已有的取消/触发路径。
+    unsafe extern "C-unwind" fn key_tap_callback<R: Runtime>(
+        _proxy: CGEventTapProxy,
+        kind: CGEventType,
+        event: NonNull<CGEvent>,
+        user_info: *mut c_void,
+    ) -> *mut CGEvent {
+        match kind {
+            CGEventType::TapDisabledByTimeout => {
+                // 系统会在回调过慢时禁用 tap；不重新打开的话，兜底会悄悄失效。
+                if let Some(handle) = KEY_TAP_PORT.get() {
+                    CGEvent::tap_enable(&handle.0, true);
+                }
+            }
+            CGEventType::KeyDown | CGEventType::KeyUp => {
+                let ev = unsafe { event.as_ref() };
+                let flags = CGEvent::flags(Some(ev));
+                let code =
+                    CGEvent::integer_value_field(Some(ev), CGEventField::KeyboardEventKeycode);
+                if keytap_debug() {
+                    eprintln!("[keytap] {kind:?} code={code} flags={flags:?}");
+                }
+                if kind == CGEventType::KeyDown {
+                    hold_key(code);
+                    // 组合键里的普通键（⌥Tab、Option+空格…）：取消按住说话。
+                    // 普通打字（无修饰键）不产生任何 IPC。
+                    if has_modifier_flag(flags) {
+                        let app = &*(user_info as *const AppHandle<R>);
+                        emit_chord(app);
+                    }
+                } else {
+                    release_key(code);
+                }
+            }
+            CGEventType::FlagsChanged => {
+                let ev = unsafe { event.as_ref() };
+                let flags = CGEvent::flags(Some(ev));
+                let code =
+                    CGEvent::integer_value_field(Some(ev), CGEventField::KeyboardEventKeycode);
+                if keytap_debug() {
+                    eprintln!("[keytap] FlagsChanged code={code} flags={flags:?}");
+                }
+                let app = &*(user_info as *const AppHandle<R>);
+                handle_flags_changed::<R>(code, flags, app);
+            }
+            _ => {}
+        }
+        // ListenOnly：不改事件流，原样放行。
+        event.as_ptr()
+    }
+
+    /// 修饰键 FlagsChanged 判定（与旧 NSEvent 路径同一套规则，见 emit_event）。
+    fn handle_flags_changed<R: Runtime>(
+        key_code: i64,
+        flags: CGEventFlags,
+        app: &AppHandle<R>,
+    ) {
+        // 物理键身份：58=左Option 59=左Ctrl 61=右Option 62=右Ctrl
+        let own: Option<(&'static str, CGEventFlags)> = match key_code {
+            58 => Some(("left-option", CGEventFlags::MaskAlternate)),
+            59 => Some(("left-control", CGEventFlags::MaskControl)),
+            61 => Some(("right-option", CGEventFlags::MaskAlternate)),
+            62 => Some(("right-control", CGEventFlags::MaskControl)),
+            _ => None,
+        };
+        let Some((key, own_flag)) = own else {
+            // 键盘工具可能把 Caps Lock 映射成 Shift+Control+Option+Command：这种
+            // FlagsChanged 的 keyCode 不在四个物理修饰键里，见到修饰键就当 chord。
+            if has_modifier_flag(flags) {
+                emit_chord(app);
+            }
+            return;
+        };
+        if !flags.contains(own_flag) {
+            emit_key(app, key, "released");
+            return;
+        }
+        // 修饰键按下：目标键之外还有别的修饰键（⌥⌘ 这类系统组合键），或有普通键
+        // 还按着（键序：先空格后 Option）→ 都不是「单独按住」。
+        let supported = CGEventFlags::MaskShift
+            | CGEventFlags::MaskControl
+            | CGEventFlags::MaskAlternate
+            | CGEventFlags::MaskCommand;
+        let other_modifier_held = !((flags & supported) - own_flag).is_empty();
+        let key_held = any_key_held();
+        if keytap_debug() {
+            eprintln!("[keytap] {key} pressed → other_modifier={other_modifier_held} key_held={key_held}");
+        }
+        if other_modifier_held || key_held {
+            emit_chord(app);
+        } else {
+            emit_key(app, key, "pressed");
+        }
+    }
+
     /// AppKit 的全局快捷键注册不接受“只有修饰键”，也分不清左右；FlagsChanged 的
-    /// keyCode 才能区分左/右 Ctrl 与 Option。全局监听收其它应用，本地监听补本应用前台。
+    /// keyCode 才能区分左/右 Ctrl 与 Option。事件源优先级：HID tap（单源、能看到
+    /// 被消费的组合键、能防键序）> NSEvent 监听（tap 建不起来时的退路）。
     pub fn install<R: Runtime>(app: &AppHandle<R>) {
+        if install_key_tap(app) {
+            return;
+        }
+        // 退路：tap 建不起来（缺辅助功能/输入监控权限）时用 NSEvent 监听。
+        // 功能等价，但看不到被启动器消费的组合键，也防不住键序。
         let global_app = app.clone();
         let global = RcBlock::new(move |raw: NonNull<NSEvent>| {
             let event = unsafe { raw.as_ref() };
@@ -157,6 +348,66 @@ mod mac_modifier_keys {
             eprintln!("[tauri] 修饰键本地监听注册失败");
         }
     }
+
+    /// 创建修饰键判定的唯一事件源：kCGHIDEventTap、队首、只听不改，跑在自己的线程。
+    /// 返回 false = 没建成（缺权限等），调用方退回 NSEvent 监听。
+    fn install_key_tap<R: Runtime>(app: &AppHandle<R>) -> bool {
+        let mask: CGEventMask = (1u64 << CGEventType::KeyDown.0 as u64)
+            | (1u64 << CGEventType::KeyUp.0 as u64)
+            | (1u64 << CGEventType::FlagsChanged.0 as u64);
+        // user_info 跨线程指向这个 Box<AppHandle>；AppHandle 是 Send+Sync，
+        // 且 tap 与 App 同生命周期（永不回收，与全局监听同样的“常驻”约定）。
+        let user_info = Box::into_raw(Box::new(app.clone())) as *mut c_void;
+        let port = unsafe {
+            CGEvent::tap_create(
+                CGEventTapLocation::HIDEventTap,
+                CGEventTapPlacement::HeadInsertEventTap,
+                CGEventTapOptions::ListenOnly,
+                mask,
+                Some(key_tap_callback::<R>),
+                user_info,
+            )
+        };
+        let Some(port) = port else {
+            eprintln!("[tauri] HID event tap 注册失败（辅助功能/输入监控权限？），修饰键判定退回 NSEvent 监听");
+            return false;
+        };
+        let _ = KEY_TAP_PORT.set(TapPortHandle(port.clone()));
+
+        // tap 需要 run loop 驱动；不能占主线程，把句柄（Send/Sync 包装）挪到自己的
+        // 线程上建 run loop source 并驱动。CFMachPort 本身线程安全。
+        let handle = TapPortHandle(KEY_TAP_PORT.get().unwrap().0.clone());
+        let spawned = std::thread::Builder::new()
+            .name("rtc-key-tap".into())
+            .spawn(move || run_key_tap(&handle));
+        if spawned.is_err() {
+            eprintln!("[tauri] HID event tap 线程启动失败，修饰键判定退回 NSEvent 监听");
+            return false;
+        }
+        println!("[tauri] HID event tap 已注册：修饰键热键判定走单源（keyDown/keyUp/FlagsChanged）");
+        true
+    }
+
+    /// 在 tap 线程里建 run loop source 并驱动（CFMachPort / CFRunLoopSource 不跨线程移动）。
+    fn run_key_tap(handle: &TapPortHandle) {
+        // 借一个 core-foundation 包装来建 source：wrap_under_get_rule 自行 retain/释放，
+        // 不动句柄的所有权。两者是同一个 CoreFoundation 对象，只是两套 Rust 包装类型。
+        let cf_borrow =
+            unsafe { CfMachPort::wrap_under_get_rule(CFRetained::as_ptr(&handle.0).as_ptr() as *mut _) };
+        let source: CFRunLoopSource = match cf_borrow.create_runloop_source(0) {
+            Ok(s) => s,
+            Err(()) => {
+                eprintln!("[tauri] HID event tap 的 run loop source 创建失败");
+                return;
+            }
+        };
+        let rl = CFRunLoop::get_current();
+        // kCFRunLoopCommonModes 是 extern static；kCFRunLoopDefaultMode 同属 common modes，
+        // 这里明确用哪个都行，选 common modes 让 source 在所有常见模式下都活。
+        let mode = unsafe { kCFRunLoopCommonModes };
+        rl.add_source(&source, mode);
+        CFRunLoop::run_current();
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -172,6 +423,12 @@ mod mac_accessibility {
 struct AppState {
     node_server: Mutex<Option<Child>>,
     asr_server: Mutex<Option<Child>>,
+    /// 退出流程已经开始。
+    ///
+    /// 看护线程（spawn_node_watchdog）看到它就不再重启后端：否则用户按 ⌘Q 之后，
+    /// 刚被 cleanup_all_servers 杀掉的服务会在几秒内被看护又拉起来——App 退出了，
+    /// 8931 却还占着端口，下次启动只能靠 kill -9 抢回来。
+    shutting_down: AtomicBool,
     /// 本机 ASR（模型）服务最近的日志行（stderr 环形缓冲）。
     ///
     /// 打包后的 .app 从访达启动时没有 stderr：python 侧的崩溃原因（缺依赖、端口被占、
@@ -509,11 +766,13 @@ fn frontmost_app() -> Option<mac_frontmost::FrontmostApp> {
 
 /// 某个应用图标的 PNG data URL（记录行上「这句去哪了」的徽标用）。
 ///
-/// `name` 三种身份都收：.app 包名（设置页名单里存的）、显示名（事件记录里存的）、
-/// bundle id。理由与缩图细节见 mac_frontmost.rs；前端按名字缓存，一个应用一个会话只问一次。
+/// `name` / `bundle` / `id` 三种身份都收：显示名（事件记录里存的）、.app 包名（设置页
+/// 名单里存的）、bundle id。**应用没开着也能取到图标**——先看正在运行的应用，找不到
+/// 就去已安装的应用里按身份定位。理由与缩图细节见 mac_frontmost.rs；前端按身份缓存，
+/// 一个应用一个会话只问一次。
 #[tauri::command]
-fn app_icon(name: String) -> Option<String> {
-    mac_frontmost::icon_png_data_url(&name)
+fn app_icon(name: String, bundle: Option<String>, id: Option<String>) -> Option<String> {
+    mac_frontmost::icon_png_data_url(&name, bundle.as_deref(), id.as_deref())
 }
 
 /// 激活指定应用。
@@ -1005,32 +1264,160 @@ fn kill_previous_processes(port: u16) {
     }
 }
 
+/// 后端服务（server.js）监听的端口，与 server.js 的默认 PORT 一致。
+const NODE_PORT: u16 = 8931;
+
+/// 看护线程探测间隔。
+const NODE_WATCHDOG_INTERVAL_SECS: u64 = 3;
+
+/// 看护线程启动后的静默期。
+///
+/// 给 setup 里的「启动 + 最多 45 秒就绪等待」留出时间，否则看护会在 sidecar 还没
+/// 绑上端口时抢着再起一个，两个进程对着 8931 打架（后起的那个 EADDRINUSE 直接退出）。
+const NODE_WATCHDOG_GRACE_SECS: u64 = 60;
+
+/// sidecar 磁盘日志的单文件上限，超过先轮转一份 .1（保留最近两份）。
+const SIDECAR_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
+/// 现在时刻的字符串（用于日志分隔行）。不引日期库：这一次 /bin/date 在启动时调用。
+fn now_stamp() -> String {
+    Command::new("/bin/date")
+        .arg("+%Y-%m-%d %H:%M:%S")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// 打开（或续写）某个 sidecar 的磁盘日志，并写下本次启动的分隔行。
+///
+/// 为什么需要它（2026-09-30 实测）：打包后的 .app 从访达启动时没有 stderr，
+/// sidecar 崩溃的原因（端口被占、未捕获异常、OOM）只会走 eprintln!，用户和我们都
+/// 拿不到。那天后端在 21:55 无声退出：系统里没有 crash report、没有信号记录、
+/// 连一句遗言都没有——只能靠代码和时间线反推死因。日志落在数据目录的 logs/ 下，
+/// 和 config.json 同级；文件最后一行的写入时间（mtime）就是它最后一次开口的时刻。
+fn open_sidecar_log(handle: &tauri::AppHandle, name: &str) -> Option<std::fs::File> {
+    let dir = rtc_support_dir(handle)?.join("logs");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("{name}.log"));
+    if std::fs::metadata(&path)
+        .map(|m| m.len() > SIDECAR_LOG_MAX_BYTES)
+        .unwrap_or(false)
+    {
+        let _ = std::fs::rename(&path, dir.join(format!("{name}.log.1")));
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+    use std::io::Write;
+    let _ = writeln!(file, "==== {name} 启动于 {} ====", now_stamp());
+    Some(file)
+}
+
+/// 后端服务的看护。
+///
+/// 为什么需要它（2026-09-30 实测症状）：Tauri 只在 setup 里把 node sidecar 拉起一次，
+/// 之后没有任何看护。sidecar 在 21:55 无声退出后，界面只剩「无法连接到本地代理服务
+/// ws://127.0.0.1:8931」，自动重连全部被拒；本地 ASR 那边至少有「重启模型服务」，
+/// 后端连个按钮都没有，用户唯一的出路是退出重开 App。
+///
+/// 判据用「端口通不通」而不是「子进程还在不在」：这样无论是自杀、被误杀、还是被
+/// 外部清进程，只要 8931 没了就补上；dev 模式下用户自己在终端跑的服务只要端口一直
+/// 开着就不会被动（不抢别人的进程）。
+fn spawn_node_watchdog(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(NODE_WATCHDOG_GRACE_SECS));
+        let mut failures: u32 = 0;
+        loop {
+            let shutting_down = app
+                .try_state::<AppState>()
+                .map(|s| s.shutting_down.load(Ordering::SeqCst))
+                .unwrap_or(false);
+            if shutting_down {
+                return;
+            }
+            if port_open(NODE_PORT) {
+                failures = 0;
+                std::thread::sleep(Duration::from_secs(NODE_WATCHDOG_INTERVAL_SECS));
+                continue;
+            }
+            eprintln!("[tauri] 看护: {NODE_PORT} 没有监听，尝试重启后端服务");
+            match start_node_server(&app) {
+                Some(child) => {
+                    let pid = child.id();
+                    if let Some(state) = app.try_state::<AppState>() {
+                        // 句柄只留最后一份：旧的可能早就退出了，留着会让退出流程白等
+                        *state.node_server.lock().unwrap() = Some(child);
+                    }
+                    // 等端口真的绑上再判定成败，否则会对着「刚起、还没 bind」误记失败
+                    if wait_for_tcp("127.0.0.1", NODE_PORT, 30) {
+                        println!("[tauri] 看护: 后端服务已恢复 (PID: {pid})");
+                        failures = 0;
+                    } else {
+                        failures += 1;
+                        eprintln!("[tauri] 看护: 后端服务拉起后 30 秒内仍未就绪 (PID: {pid})");
+                    }
+                }
+                None => {
+                    failures += 1;
+                    eprintln!("[tauri] 看护: 找不到可用的后端启动方式");
+                }
+            }
+            // 退避：连续失败时拉长间隔（3s→6s→12s→…→30s），避免端口被外部永久占用时
+            // 每 3 秒无脑重试一次。
+            let backoff = (NODE_WATCHDOG_INTERVAL_SECS * (1u64 << failures.min(4))).min(30);
+            std::thread::sleep(Duration::from_secs(backoff));
+        }
+    });
+}
+
 /// 启动 Node.js 服务（server.js）
 fn start_node_server(app_handle: &tauri::AppHandle) -> Option<Child> {
     let project_dir = resolve_project_dir(app_handle);
 
-    // 优先启动捆绑的 Node sidecar（bun 编译的单文件，无需系统安装 Node.js）
+    // 优先启动捆绑的 Node sidecar。
+    //
+    // sidecar 本身是 **bun 运行时本体**，后端代码是资源目录里的 server.bundle.js，
+    // 由这里当参数传进去。为什么不是 `bun --compile` 的单文件：那种产物只有 linker 签名、
+    // 没有 CMS blob，macOS 26+ 的 AMFI 加载即 SIGKILL——打包版后端永远起不来，
+    // 界面只能显示「服务未连接」、历史记录空白（详见 scripts/build-sidecar.sh 的注释）。
     if let Some(p) = find_sidecar(&project_dir, "node-server") {
-        println!("[tauri] 启动捆绑 Node 服务 (sidecar): {:?}", p);
-        match Command::new(&p)
-            .current_dir(&project_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(mut child) => {
-                if let Some(stderr) = child.stderr.take() {
-                    std::thread::spawn(move || {
-                        use std::io::BufRead;
-                        for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
-                            eprintln!("[node-sidecar] {}", line);
-                        }
-                    });
+        let bundle = project_dir.join("server.bundle.js");
+        if !bundle.is_file() {
+            eprintln!(
+                "[tauri] sidecar 缺少配套的 server.bundle.js（{:?}），改走系统 node",
+                bundle
+            );
+        } else {
+            println!("[tauri] 启动捆绑 Node 服务 (sidecar): {:?} + {:?}", p, bundle);
+            match Command::new(&p)
+                .arg(&bundle)
+                .current_dir(&project_dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Ok(mut child) => {
+                    if let Some(stderr) = child.stderr.take() {
+                        let mut log = open_sidecar_log(app_handle, "node-sidecar");
+                        std::thread::spawn(move || {
+                            use std::io::{BufRead, Write};
+                            for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                                eprintln!("[node-sidecar] {}", line);
+                                if let Some(f) = log.as_mut() {
+                                    let _ = writeln!(f, "{line}");
+                                }
+                            }
+                        });
+                    }
+                    println!("[tauri] Node sidecar 已启动 (PID: {})", child.id());
+                    return Some(child);
                 }
-                println!("[tauri] Node sidecar 已启动 (PID: {})", child.id());
-                return Some(child);
+                Err(e) => eprintln!("[tauri] 启动 Node sidecar 失败: {}，回退系统 node", e),
             }
-            Err(e) => eprintln!("[tauri] 启动 Node sidecar 失败: {}，回退系统 node", e),
         }
     }
 
@@ -1100,10 +1487,14 @@ fn start_asr_server(app_handle: &tauri::AppHandle) -> Option<Child> {
             Ok(mut child) => {
                 if let Some(stderr) = child.stderr.take() {
                     let handle = app_handle.clone();
+                    let mut log = open_sidecar_log(&handle, "asr-sidecar");
                     std::thread::spawn(move || {
-                        use std::io::BufRead;
+                        use std::io::{BufRead, Write};
                         for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
                             eprintln!("[asr-sidecar] {}", line);
+                            if let Some(f) = log.as_mut() {
+                                let _ = writeln!(f, "{line}");
+                            }
                             push_asr_log(&handle, line);
                         }
                     });
@@ -1338,6 +1729,7 @@ pub fn run() {
         .manage(AppState {
             node_server: Mutex::new(None),
             asr_server: Mutex::new(None),
+            shutting_down: AtomicBool::new(false),
             asr_log: Mutex::new(VecDeque::new()),
         })
         .invoke_handler(tauri::generate_handler![
@@ -1490,14 +1882,27 @@ pub fn run() {
                 }
             }
 
+            // 启动后端看护：setup 里的启动只做一次，之后 8931 没了就没人管了。
+            // 放在最后启动，让静默期盖过上面的就绪等待。
+            spawn_node_watchdog(handle.clone());
+
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let label = window.label().to_string();
                 persist_window_state(window.app_handle(), &label);
-                cleanup_server(&window, "node");
-                cleanup_server(&window, "asr");
+                // 这里**不能**停后端服务。
+                //
+                // 症状（2026-09-30 实测）：会议白板是独立窗口（label = meeting-board，
+                // 由 src/js/main.js 用 new WebviewWindow 打开）。旧实现在任何窗口的
+                // CloseRequested 里都无条件 cleanup 掉全局的 node/asr sidecar，于是
+                // 「看完白板顺手关掉那个小窗口」= 8931 后端整个消失，主界面立刻只剩
+                // 「无法连接到本地代理服务 ws://127.0.0.1:8931」，而且后端没有看护，
+                // 用户唯一的出路是退出重开 App。
+                //
+                // 真正的退出由 RunEvent::ExitRequested / Exit 走 cleanup_all_servers，
+                // 那条路径在任何窗口布局下都覆盖得到。
             }
         })
         .build(tauri::generate_context!())
@@ -1517,21 +1922,6 @@ pub fn run() {
     });
 }
 
-fn cleanup_server(window: &tauri::Window, which: &str) {
-    let child = {
-        let state = window.state::<AppState>();
-        let mut guard = match which {
-            "node" => state.node_server.lock().unwrap(),
-            _ => state.asr_server.lock().unwrap(),
-        };
-        guard.take()
-    };
-    if let Some(mut c) = child {
-        let _ = c.kill();
-        let _ = c.wait();
-    }
-}
-
 /// 退出时杀掉两个 sidecar。
 ///
 /// 原来只有 `CloseRequested`（红叉 / ⌘W）会走到 `cleanup_server`；macOS 的 ⌘Q、
@@ -1540,6 +1930,8 @@ fn cleanup_server(window: &tauri::Window, which: &str) {
 /// node-server 和 434MB 的 asr-server 变成孤儿进程，8931/8932/8933 三个端口一直被占着，
 /// 下次启动只能靠 `kill -9` 抢回来。这里按 `AppState` 取句柄，两条退出路径都能用。
 fn cleanup_all_servers(state: &AppState) {
+    // 先立牌子，再杀进程：看护线程每几秒醒一次，晚一步它就会把刚杀掉的服务又拉起来。
+    state.shutting_down.store(true, Ordering::SeqCst);
     for slot in [&state.node_server, &state.asr_server] {
         let child = slot.lock().map(|mut guard| guard.take()).ok().flatten();
         if let Some(mut c) = child {
