@@ -22,24 +22,24 @@ async function jsonRequest(url, options = {}) {
 
 const dataDir = await mkdtemp(join(tmpdir(), 'rtc-transcript-'));
 let rtc;
-let ollama;
-// 让 Ollama 永远不返回：这样整场测试都处在「AI 还没出结果」的状态，
+let llm;
+// 让上游 AI 永远不返回：这样整场测试都处在「AI 还没出结果」的状态，
 // 也就是这个功能真正要解决的场景。
-let releaseOllama;
+let releaseLlm;
 
 try {
-  ollama = createHttpServer(async (req, res) => {
-    if (req.url !== '/api/chat') {
+  llm = createHttpServer(async (req, res) => {
+    if (req.url !== '/v1/chat/completions') {
       res.writeHead(404);
       res.end();
       return;
     }
-    await new Promise((resolve) => { releaseOllama = resolve; });
+    await new Promise((resolve) => { releaseLlm = resolve; });
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    // 必须像一份真的整理稿：服务端有「原文保真校验」，凭空生成的内容会被判失败并回退原文。
-    res.end(JSON.stringify({ message: { content: '第一句原话。第二句原话。第三句原话。' } }));
+    // 必须像一份真的草稿：服务端有「底线校验」，凭空生成的内容会被判失败并回退原文。
+    res.end(JSON.stringify({ choices: [{ message: { content: '第一句原话。第二句原话。第三句原话。' } }] }));
   });
-  const ollamaPort = await listen(ollama);
+  const llmPort = await listen(llm);
 
   const start = new Date(Date.now() - 3000);
   const date = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
@@ -58,6 +58,9 @@ try {
   await writeFile(join(dataDir, 'meeting-board.json'), JSON.stringify({
     sessions: { [sessionId]: { document: originalDocument } },
   }), 'utf8');
+  await writeFile(join(dataDir, 'config.json'), JSON.stringify({
+    settings: { ai: { baseUrl: `http://127.0.0.1:${llmPort}/v1`, apiKey: 'test-key', model: 'test-model' } },
+  }), 'utf8');
 
   const port = 19931 + Math.floor(Math.random() * 1000);
   rtc = spawn(process.execPath, [join(root, 'server.js')], {
@@ -66,8 +69,6 @@ try {
       ...process.env,
       PORT: String(port),
       RTC_DATA_DIR: dataDir,
-      RTC_OLLAMA_URL: `http://127.0.0.1:${ollamaPort}`,
-      RTC_PRELIMINARY_MODEL: 'minicpm5-meeting',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -93,7 +94,7 @@ try {
   board = (await jsonRequest(definition)).data;
   assert.ok(board.transcript.includes('第三句原话。'), '新增的转写要出现在原文里');
 
-  // 3) 触发整理但让 Ollama 挂着：这正是用户盯着空面板等 AI 的时刻。
+  // 3) 触发起草但让上游挂着：这正是用户盯着空面板等 AI 的时刻。
   await jsonRequest(`${base}/api/meeting-board/preliminary?sessionId=${sessionId}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
   });
@@ -101,15 +102,15 @@ try {
   assert.equal(board.preliminary, null, 'AI 还在跑');
   assert.ok(board.transcript.includes('第三句原话。'), 'AI 挂起期间原文照样可读');
 
-  // 4) AI 出结果之后，原文仍在（面板靠它做「这次整理基于什么」的对照）。
-  // 服务端是异步发起 Ollama 请求的，等到它真的挂在 mock 上再放行。
-  for (let i = 0; i < 100 && !releaseOllama; i += 1) await wait(20);
-  assert.equal(typeof releaseOllama, 'function', '整理请求应该已经打到 mock Ollama');
-  releaseOllama();
+  // 4) AI 出结果之后，原文仍在（面板靠它做「这次起草基于什么」的对照）。
+  // 服务端是异步发起上游请求的，等到它真的挂在 mock 上再放行。
+  for (let i = 0; i < 100 && !releaseLlm; i += 1) await wait(20);
+  assert.equal(typeof releaseLlm, 'function', '起草请求应该已经打到 mock 上游');
+  releaseLlm();
   await wait(300);
   board = (await jsonRequest(definition)).data;
   assert.equal(board.preliminary?.text, '第一句原话。第二句原话。第三句原话。');
-  assert.equal(board.preliminary?.status, 'ready', '整理稿不该被保真校验判失败');
+  assert.equal(board.preliminary?.status, 'ready', '草稿不该被底线校验判失败');
   assert.ok(board.transcript.includes('第三句原话。'), 'AI 出结果后原文不应消失');
   assert.equal(board.document, originalDocument, '整条链路都不能覆盖白板正文');
 
@@ -121,6 +122,6 @@ try {
   console.log('  ✓ 白板逐字稿原文：AI 之前可读、随转写更新、不影响 AI 链路与用户正文');
 } finally {
   if (rtc) rtc.kill('SIGTERM');
-  if (ollama) await new Promise((resolve) => ollama.close(resolve));
+  if (llm) await new Promise((resolve) => llm.close(resolve));
   await rm(dataDir, { recursive: true, force: true });
 }

@@ -112,6 +112,8 @@
 **MB-04 后台正在整理时，白板要说「正在整理」**
 - 依据：`ux-issue-log.md` UX-8（服务端已区分处理中，前端没认）；违反产品原则 3。
 - 边界：只改状态来源，不动整理逻辑。
+- 注记（2026-09-30）：整理已改为仅手动触发（ADR-004），「正在起草纪要…」只在点过按钮后出现，
+  不再是转写驱动的常驻状态；本条「处理中要有诚实状态」的结论不变。
 
 **MB-05 空着的时候不要露出编辑器的骨架**
 - 依据：`ux-issue-log.md` UX-5（实测到了「无标题」和「目录 0」的元素与尺寸）。
@@ -142,6 +144,13 @@
 - `ux-issue-log.md` UX-9，原评级就是"低"。
 - 要决定的：值不值得为它改一次（改成变灰而不是消失，或者干脆把只读提示换个位置）。
 
+**MB-15 「会议」这个叫法要不要改**
+> **已裁决（2026-09-20，用户）**：**暂不改名**。用户明确表示暂时也没想到更好的名称；界面、文档与命令继续用「会议」，但「会议」只是这一层的习惯叫法，不代表它的用途只有生成会议纪要。将来真要改，先回到这里读理由。
+- 现象：切出来的单位其实是「一段连续语音」，但产品、文档、界面里统一叫「会议」（会议白板、会议场次、`meeting-board.json`、`rtc board`）。用途本来不止会议纪要——同一段记录也可以拿去分析别的内容（见 ADR-002）。
+- 要决定的：**叫法改不改。** 改，就要定新词（片段 / 场次 / 记录段）并列出界面与文档的改动面；不改，就在规则里写清「会议」是这一层的习惯叫法，不代表用途只有会议。**不能既说它不只用于会议、又让它到处叫会议。**
+- 我的倾向：先不改界面与命令名（改动面大、收益不明显），只在规则里把用途与叫法分开写；等真的出现第二个用途拿它做分析时再改。但这是产品决定。
+- 依据：[ADR-002](../decisions/ADR-002-segment-cut-by-time-app-as-context.md)。
+
 ### C 档 ｜ 否定（前提站不住，或刻意为之）
 
 **MB-21 【否定】「白板的第一身份是投屏工具，所以可读性是最高优先」**
@@ -157,6 +166,7 @@
 - 本次真正的产出是**判断层**（本文），不是现象层。
 
 **MB-24 【否定】「把 Project-Ledger 整套接进 RTC」**
+> **已被推翻（2026-09-20）**：同一天的提交 `2eb077f`「docs: 接入 Project-Ledger 决策记录」已按 record-v1 接入，09-20 `d50a99a` 把目录移到仓库根 `project-ledger/`，现在由 `docs/README.md` 作为单入口、`project-ledger/` 只做追溯层。当初担心的「两套并行入口」没有发生，所以本条否定不再有效；原判断保留留痕。
 - 理由：它会在 RTC 现有入口（`docs/README.md` 索引 + `ux-issue-log.md` 的状态约定）之外**再建一套并行入口和索引**，命中团队规则里"新增命名与结构先对齐已有规范、不另起一套"。
 - 处置：**取它的记录格式，不取它的目录。** 本文的四档 + 元数据词汇就是从它借来的；
   将来 RTC 真需要 `context` / `trace` / `review` 这些能力时，本文的条目可以逐条转成 record-v1，成本很低。
@@ -221,6 +231,6 @@
 - **MB-05 空态骨架**：上游空文档的占位元素是 `.omia-page-title-placeholder` 与大纲入口；注意空态与"有内容态"的 `visibility` 约束不同，别一刀切。
 - **MB-06 演示态**：`meeting-board/src/style.css` 里 `.board-pane pre{ font-size:13px }` 是写死的；全局搜不到任何 zoom / fullscreen。窗口开在 `src/js/main.js` 的 `meetingBoardBtn.onclick`（900×650）；宽屏阈值 `WIDE_MEDIA` 在 `meeting-board/src/main.js` 与 `style.css` 各有一份，改的时候要同步。
 - **MB-11 对比度**：白板 `.preliminary-note` 是 `#6f6860`；主界面 `--ink-faint` 是 `#8f8572`。量具是 `npm run check:ux`（需要 Playwright，不在仓库依赖里）。
-- **MB-13 配色**：白板是独立 HTML 入口，不加载主界面的 `:root` 调色板；黄色强调色用在 `fallback` 态（`.preliminary-panel[data-state="fallback"]`）。
+- **MB-13 配色**：白板是独立 HTML 入口，不加载主界面的 `:root` 调色板；黄色强调色用在 `fallback` 态（`.preliminary-panel[data-state="fallback"]`）。2026-09-30 起 fallback 语义从「本地模型失败」改为「AI 起草失败」（ADR-004），强调色本身保留。
 - **MB-32 / MB-33 测量口径**：白板数据在应用数据目录的 `meeting-board.json`（`definition` / `document` / `analysis`）；逐字稿事件在 `events/YYYY-MM-DD.jsonl`。对 `document` 做版本与时间分布统计即可；MB-33 需要同时取到 `analysis`（AI 写回那版）与最终 `document`（`rtc board show <场次ID> --json` 一次就能拿到）。
 - **新增的两条规则**：`PRD.PROJECTION.001`（投给一屋子人看的界面，可读性是功能项不是审美项）、`PRD.ATTRIBUTION.001`（人与 AI 写在同一份产物里时，AI 补的内容必须能被认出来）。两条都在试用期，用不上就 `ec rules log <ID> --result fail` 把它压下去。

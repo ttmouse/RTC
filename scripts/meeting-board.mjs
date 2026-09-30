@@ -16,7 +16,7 @@
  *   node scripts/meeting-board.mjs show [场次ID] [--json]            该场已保存的定义 / 分析 / 正文
  *   node scripts/meeting-board.mjs write-analysis <JSON文件> [场次ID]
  *   node scripts/meeting-board.mjs write-definition <JSON文件> [场次ID]
- *   node scripts/meeting-board.mjs write-document <Markdown文件> [场次ID]
+ *   node scripts/meeting-board.mjs write-document <Markdown文件> [场次ID] [--append] [--force]
  *
  * 场次 ID 省略时默认取「最近一场」，不必手工复制。
  * 环境变量: RTC_DATA_DIR 数据目录 · RTC_URL / RTC_PORT 服务地址（默认 http://127.0.0.1:8931）
@@ -25,6 +25,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+// 人工内容锚点的唯一正本在 board-provenance.cjs（server.js 写侧共用）；这里只用读侧判定。
+import { boardProvenance, droppedHumanLines } from './board-provenance.cjs';
 
 const DATA_ROOT = process.env.RTC_DATA_DIR || join(
   homedir(),
@@ -120,7 +122,13 @@ function boardOf(id) {
   const saved = id && board.sessions && board.sessions[id];
   if (saved) return saved;
   if (!id || id === board.activeSessionId) {
-    return { definition: board.definition, analysis: board.analysis, document: board.document };
+    return {
+      definition: board.definition,
+      analysis: board.analysis,
+      document: board.document,
+      humanAnchors: board.humanAnchors,
+      agentDocumentAt: board.agentDocumentAt,
+    };
   }
   return {};
 }
@@ -232,17 +240,33 @@ function printBrief(session) {
   const saved = boardOf(session.id);
   const def = saved.definition || {};
   const existingDoc = typeof saved.document === 'string' ? saved.document.trim() : '';
+  const prov = existingDoc ? boardProvenance(saved) : null;
   console.log(`# 会议白板 · 待分析材料\n`);
   console.log(`## 场次\n- 场次 ID：${session.id}`);
   console.log(`- 时间：${fmtDateTime(session.start)} — ${fmtTime(session.end)}（${fmtDuration(session.end - session.start)}）`);
   console.log(`- 记录条数：${session.count}`);
   console.log(`- 已有分析：${saved.analysis ? `有（${saved.analysis._updatedAt || '时间未知'}），本次写入会覆盖它` : '无'}`);
-  console.log(`- 白板正文：${existingDoc ? `${existingDoc.length} 字。write-document 是**整篇替换**，要留着就把它带进新正文，或写回时加 --append` : '空，分析结果会自动生成一版正文'}`);
+  const docNote = !existingDoc
+    ? '空，分析结果会自动生成一版正文'
+    : prov.allHuman
+      ? `${existingDoc.length} 字，全部是用户手写的内容`
+      : prov.humanLines.length
+        ? `${existingDoc.length} 字，其中 ${prov.humanLines.length} 行是用户手写/改过的`
+        : `${existingDoc.length} 字，全部是 AI 上次写回的`;
+  console.log(`- 白板正文：${docNote}。write-document 是**整篇替换**：漏带的人工内容会被 CLI 拦下（--force 才放行），要合并就把它带进新正文，或用 --append`);
   console.log(`\n## 会前定义\n${formatDefinition(def)}`);
   console.log(`\n## 逐字稿\n\n${transcriptText(session)}\n`);
   if (existingDoc) {
     // 把现有正文一并交出来，外部 AI 才有机会合并而不是默默抹掉用户写过的东西。
-    console.log(`## 已有正文（写回时要么带上它，要么用 --append）\n\n${existingDoc}\n`);
+    // 来源判定读 board-provenance.cjs 的锚点，别在这里重算。
+    if (prov.allHuman) {
+      console.log(`## 已有正文（AI 生成之前用户手写的——每一行都是人工内容，是本次分析的锚点）\n\n${existingDoc}\n`);
+    } else if (prov.humanLines.length) {
+      console.log(`## 已有正文（其余部分是 AI 上次写回的）\n\n${existingDoc}\n`);
+      console.log(`## 人工锚点（用户手写/改动过的行）\n\n${prov.humanLines.map((line) => `> ${line}`).join('\n')}\n`);
+    } else {
+      console.log(`## 已有正文（目前没有人工内容，全部是 AI 上次写回的，可按新证据重写）\n\n${existingDoc}\n`);
+    }
   }
   console.log(`## 写回方式（照做即可，白板 2 秒内自己刷新）
 
@@ -260,11 +284,19 @@ function printBrief(session) {
 
 2. 正文（Markdown，这就是用户在面板里看到的）写成 .md 文件。
 
+### 对待人工锚点的规矩（人工锚点 = 用户亲手写的判断，违反会丢用户写的话）
+
+- 人工锚点行是用户的现场判断，优先级高于你自己的推断：围绕它们去逐字稿里找证据、引用回指，而不是重新猜重点。
+- 这些行必须**原样**出现在你写回的正文里：不改写、不润色、不并进你的行文。write-document 是整篇替换，漏带哪行就丢哪行。
+- 人工锚点与逐字稿矛盾时：保留原句，在紧邻处指出矛盾并给逐字稿出处（[HH:MM]），判断留给用户，不要替用户改。
+- 只有用户明确要求全部重写时才可加 --force，并在回复里说明丢掉了哪些行。
+
 写回（场次 ID 省略就是最近一场，这里带上更稳）：
 
     rtc board write-analysis <结果.json> ${session.id}
-    rtc board write-document <正文.md>  ${session.id}            # 整篇替换，会抵掉已有正文
+    rtc board write-document <正文.md>  ${session.id}            # 整篇替换，会丢掉没带上的人工内容（被拦）
     rtc board write-document <正文.md>  ${session.id} --append   # 保留已有正文，接在后面
+    rtc board write-document <正文.md>  ${session.id} --force    # 用户明确要求重写时才用
 
 注：只有该场正文还是空的时候，应用才会拿 analysis 自动生成一版正文；正文一旦有内容，
 就只靠 write-document 更新。要改会前定义用 write-definition。`);
@@ -332,7 +364,19 @@ function printUpdateIncremental(session) {
   console.log(`## 场次\n- 场次 ID：${session.id}`);
   console.log(`- 新增 ${newEvents.length} 条记录（${firstNew} — ${lastNew}）`);
   console.log(`- 自上次更新以来新增的转写记录\n`);
-  console.log(`## 已有正文\n\n${existingDoc || '（空）'}\n`);
+  if (existingDoc) {
+    const prov = boardProvenance(saved);
+    if (prov.allHuman) {
+      console.log(`## 已有正文（AI 生成之前用户手写的——每一行都是人工内容）\n\n${existingDoc}\n`);
+    } else if (prov.humanLines.length) {
+      console.log(`## 已有正文（其余部分是 AI 上次写回的）\n\n${existingDoc}\n`);
+      console.log(`## 人工锚点（用户手写/改动过的行）\n\n${prov.humanLines.map((line) => `> ${line}`).join('\n')}\n`);
+    } else {
+      console.log(`## 已有正文（目前没有人工内容，全部是 AI 上次写回的）\n\n${existingDoc}\n`);
+    }
+  } else {
+    console.log(`## 已有正文\n\n（空）\n`);
+  }
   console.log(`## 新增逐字稿\n\n${newTranscript}\n`);
   console.log(`## 写回方式
 
@@ -342,6 +386,7 @@ function printUpdateIncremental(session) {
 - 如果出现了新话题 → 新增一个段落
 - 如果新内容修正了之前的结论 → 调整已有段落
 - 不要重新从头写，保留已有正文的结构和内容
+- 「人工锚点」标出的行是用户亲手写的，必须原样保留：不改写、不润色；与新增内容矛盾时保留原句并指出矛盾
 
 ### 1. 结构化结果（analysis.json）
 
@@ -392,7 +437,7 @@ const ENDPOINTS = {
   'write-document': { path: '/api/meeting-board/document', kind: 'markdown', label: '白板正文' },
 };
 
-async function writeBack(command, file, sessionArg, date, append) {
+async function writeBack(command, file, sessionArg, date, append, force) {
   const spec = ENDPOINTS[command];
   if (!file) fail(`用法: node scripts/meeting-board.mjs ${command} <文件> [场次ID]`);
   if (!existsSync(file)) fail(`找不到文件：${file}`);
@@ -412,17 +457,34 @@ async function writeBack(command, file, sessionArg, date, append) {
   // 写回一律落到具体场次：不带场次 ID 的写入会落到没有场次概念的顶层数据上，
   // 面板打开的是场次视图，会看不出变化。
   const session = resolveSession(sessionArg, date);
-  const endpoint = `${spec.path}?sessionId=${encodeURIComponent(session.id)}`;
+  let endpoint = `${spec.path}?sessionId=${encodeURIComponent(session.id)}`;
+  // CLI 写回的正文都是外部 AI 生成的内容，服务端靠 source=agent 记录人工内容锚点；
+  // --append 的合并在这里拼好后整体下发，服务端按 mode=append 保留原有锚点。
+  if (command === 'write-document') {
+    endpoint += `&source=agent${append ? '&mode=append' : ''}`;
+  }
 
   if (command === 'write-document') {
-    // write-document 是整篇替换，而面板上的正文可能是用户自己写的。
-    // 不拦，但一定要说清楚 —— 「我写的东西怎么没了」是查不回来的。
-    const current = boardOf(session.id).document;
-    const existing = typeof current === 'string' ? current.trim() : '';
+    // write-document 是整篇替换，而面板上的正文可能是用户自己写的。人工内容被悄悄冲掉
+    // 查不回来，所以这里按锚点拦一道：丢人工行就拒绝，--force 才放行。判定读
+    // board-provenance.cjs 的 droppedHumanLines，别在这里重算。
+    const current = boardOf(session.id);
+    const existing = typeof current.document === 'string' ? current.document.trim() : '';
+    const incoming = String(body.document || '');
     if (append) {
-      body = { document: existing ? `${existing}\n\n${String(body.document).trim()}\n` : body.document };
+      body = { document: existing ? `${existing}\n\n${incoming.trim()}\n` : incoming };
     } else if (existing) {
-      console.error(`[board] 提醒：原有正文 ${existing.length} 字被整篇替换（想保留加 --append）`);
+      const lost = droppedHumanLines(current, incoming);
+      if (lost.length && !force) {
+        console.error(`[board] 这次整篇替换会丢掉 ${lost.length} 行用户手写的内容（人工锚点）：`);
+        lost.slice(0, 5).forEach((line) => console.error(`  · ${line.slice(0, 80)}`));
+        fail('把这些行原样带进新正文再写回，或用 --append 保留全部原文；用户明确要求重写时加 --force');
+      }
+      if (lost.length) {
+        console.error('[board] --force：上面列出的人工内容行将被丢弃');
+      } else {
+        console.error(`[board] 提醒：原有正文 ${existing.length} 字被整篇替换（人工内容已原样带入，想保留全部原文加 --append）`);
+      }
     }
   }
 
@@ -498,8 +560,9 @@ function printHelp() {
   show [场次ID] [--json]            该场已保存的定义 / 分析 / 正文
   write-analysis <JSON文件> [场次ID]     写入外部分析结果
   write-definition <JSON文件> [场次ID]   写入会前定义
-  write-document <Markdown文件> [场次ID] [--append]
-                                      写入白板正文（整篇替换；--append 则保留原文接在后面）
+  write-document <Markdown文件> [场次ID] [--append] [--force]
+                                      写入白板正文（整篇替换；--append 则保留原文接在后面；
+                                      会丢掉人工内容时被拦，用户明确要求重写才用 --force）
 
 「把最新一场会议的记录写进白板」的做法（外部 AI 只用记这一句）：
   rtc board update                         # 读材料 → 分析 → 回写，一步到位
@@ -517,6 +580,7 @@ async function main() {
   let date = '';
   let json = false;
   let append = false;
+  let force = false;
   let incremental = false;
   let interval = 0;
 
@@ -528,6 +592,8 @@ async function main() {
       json = true;
     } else if (a === '--append') {
       append = true;
+    } else if (a === '--force') {
+      force = true;
     } else if (a === '--incremental') {
       incremental = true;
     } else if (a === '--interval') {
@@ -627,7 +693,7 @@ async function main() {
       await writeBack(command, positionals[0], positionals[1], date, false);
       break;
     case 'write-document':
-      await writeBack(command, positionals[0], positionals[1], date, append);
+      await writeBack(command, positionals[0], positionals[1], date, append, force);
       break;
     default:
       fail(`未知命令: ${command}（不带参数运行可看用法）`);

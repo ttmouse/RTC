@@ -5,7 +5,7 @@
 //   1. **默认不给空面板**——AI 那档有内容就看它，没有就落到逐字稿，绝不让人对着空白等模型。
 //   2. **原文不能冒充 AI 结论**——fallback 档里 preliminary.text 存的是原文，
 //      它是「有 AI 记录」但不是「有 AI 稿」，混起来就是把原话盖上 AI 的戳。
-//   3. **正文的优先级不能颠倒**——更聪明的模型写过的整篇 > 外部分析生成的那版 > 本地模型那版。
+//   3. **正文的优先级不能颠倒**——更聪明的模型写过的整篇 > 外部分析生成的那版 > 纪要草稿那版。
 //   4. **有内容就只给内容**——不给「可直接编辑」「本地模型 · <模型名>」「未整理」这类自我说明；
 //      说明只在没内容的时候出现（在内容区底部，不在标签栏）。
 import { readFileSync } from 'node:fs';
@@ -23,43 +23,43 @@ const check = (name, ok, detail = '') => {
 
 const RAW = '[10:00] 先做这个吧。\n[10:01] 好。';
 const LOCAL_TEXT = '先做这个吧，好。';
-const LOCAL = { text: LOCAL_TEXT, status: 'ready', model: 'minicpm5-meeting' };
-const FALLBACK = { text: RAW, status: 'fallback', error: 'Ollama 返回内容未通过原文保真校验' };
+const LOCAL = { text: LOCAL_TEXT, status: 'ready', model: 'test-model' };
+const FALLBACK = { text: RAW, status: 'fallback', error: 'AI 返回的内容不像基于这份逐字稿的纪要' };
 const DOC = '# 会议记录\n\n## 当前话题\n\n先做这个。';
 const ANALYSIS = '# 会议记录\n\n## 行动项\n\n- 做这个';
 
 const ctxOf = (extra = {}) => makeContext({ transcript: RAW, preliminary: LOCAL, ...extra });
 
-// --- 本地模型那一版：fallback 存的原文不算数 ---
+// --- 纪要草稿那一版：fallback 存的原文不算数 ---
 
-check('本地模型那一版取 preliminary.text', resolveLocalText(LOCAL) === LOCAL_TEXT);
-check('fallback 下本地模型没有产出（那是原文不是稿）', resolveLocalText(FALLBACK) === '');
-check('没有本地记录时是空的', resolveLocalText(null) === '');
+check('纪要草稿那一版取 preliminary.text', resolveLocalText(LOCAL) === LOCAL_TEXT);
+check('fallback 下草稿没有产出（那是原文不是稿）', resolveLocalText(FALLBACK) === '');
+check('没有草稿记录时是空的', resolveLocalText(null) === '');
 check('只有空白的整理结果也算没有', resolveLocalText({ text: '   ', status: 'ready' }) === '');
 check('localFailed 认得出 fallback', localFailed(FALLBACK) === true && localFailed(LOCAL) === false);
 
 check('逐字稿档的正文就是 transcript', resolveRawText(RAW) === RAW);
 check('没有 transcript 时逐字稿是空的（不会拿 fallback 的原文冒充）', resolveRawText('') === '');
 
-// --- AI 那一档的正文来源：正文 > 分析 > 本地模型 ---
+// --- AI 那一档的正文来源：正文 > 分析 > 纪要草稿 ---
 
 check('有白板正文时用正文', resolveAiContent({ document: DOC, preliminary: LOCAL }).kind === 'document');
-check('有白板正文时忽略本地模型那版', resolveAiContent({ document: DOC, preliminary: LOCAL }).text === DOC);
+check('有白板正文时忽略草稿那版', resolveAiContent({ document: DOC, preliminary: LOCAL }).text === DOC);
 check('没有正文时用外部分析生成的那版', resolveAiContent({ analysisText: ANALYSIS, preliminary: LOCAL }).kind === 'analysis');
-check('分析那版优先于本地模型', resolveAiContent({ analysisText: ANALYSIS, preliminary: LOCAL }).text === ANALYSIS);
-check('只有本地模型时用它垫一版', resolveAiContent({ preliminary: LOCAL }).kind === 'local');
-check('只有本地模型时正文就是它', resolveAiContent({ preliminary: LOCAL }).text === LOCAL_TEXT);
+check('分析那版优先于草稿', resolveAiContent({ analysisText: ANALYSIS, preliminary: LOCAL }).text === ANALYSIS);
+check('只有草稿时用它垫一版', resolveAiContent({ preliminary: LOCAL }).kind === 'local');
+check('只有草稿时正文就是它', resolveAiContent({ preliminary: LOCAL }).text === LOCAL_TEXT);
 check('什么都没有时是空的', resolveAiContent({}).kind === 'none' && resolveAiContent({}).text === '');
 check('只有 fallback 记录时仍是空的（原文不算 AI 稿）', resolveAiContent({ preliminary: FALLBACK }).kind === 'none');
 check('空白正文不会被当成有内容', resolveAiContent({ document: '   ', preliminary: LOCAL }).kind === 'local');
 
-// 本地模型整理完会直接把结果写进白板正文，所以「正文」和「本地模型那一版」经常是同一份东西。
+// AI 起草完会直接把结果写进白板正文，所以「正文」和「草稿那一版」经常是同一份东西。
 // 这时要如实标成 local——**但出处只给程序判断用，界面一个字都不显示它**（见下面第 4 条）。
-check('正文正好等于本地模型输出时标成 local（如实说出处）',
+check('正文正好等于草稿输出时标成 local（如实说出处）',
   resolveAiContent({ document: LOCAL_TEXT, preliminary: LOCAL }).kind === 'local');
 check('正文被 agent 或用户改过就标成 document',
   resolveAiContent({ document: `${LOCAL_TEXT}（补充）`, preliminary: LOCAL }).kind === 'document');
-check('没有本地记录时正文就是 document',
+check('没有草稿记录时正文就是 document',
   resolveAiContent({ document: DOC }).kind === 'document');
 
 // --- 默认档位：AI 优先，没有就落到逐字稿 ---
@@ -104,7 +104,7 @@ Object.entries(readyKinds).forEach(([kind, ctx]) => {
 // --- AI 还没有内容：切过去也要说清楚在等什么，不能空白 ---
 
 const pendingView = resolveTabView(TAB_AI, makeContext({ transcript: RAW, pending: true }), { pending: true });
-check('还没跑时说清在等什么', pendingView.state === 'pending' && pendingView.note.includes('整理'), pendingView.note);
+check('还没跑时说清在等什么', pendingView.state === 'pending' && pendingView.note.includes('起草'), pendingView.note);
 check('还没跑时不写 status', pendingView.status === undefined);
 check('还没跑时逐字稿那档照常可看', resolveTabView(TAB_RAW, makeContext({ transcript: RAW, pending: true })).text === RAW);
 
@@ -113,9 +113,21 @@ check('还没跑时逐字稿那档照常可看', resolveTabView(TAB_RAW, makeCon
 const failView = resolveTabView(TAB_AI, makeContext({ transcript: RAW, preliminary: FALLBACK }));
 check('AI 档在 fallback 下如实说生成失败', failView.state === 'fallback' && failView.status === undefined);
 check('AI 档不把原文当 AI 内容显示', failView.text !== RAW && failView.text === '');
-check('AI 档的说明带上失败原因', failView.note.includes('原文保真校验'), failView.note);
-check('AI 档的说明指路逐字稿', failView.note.includes('逐字稿'), failView.note);
+check('AI 档的说明带上失败原因', failView.note.includes('不像基于这份逐字稿的纪要'), failView.note);
+check('AI 档的说明指路逐字稿和重试', failView.note.includes('逐字稿') && failView.note.includes('生成纪要草稿'), failView.note);
+check('AI 档的说明不出现模型名或「本地」字样', !failView.note.includes('本地') && !/minicpm/i.test(failView.note), failView.note);
 check('逐字稿那档仍给得出完整原话', resolveTabView(TAB_RAW, makeContext({ transcript: RAW, preliminary: FALLBACK })).text === RAW);
+
+// --- 未配置 AI：指路设置页，同样不给空白 ---
+
+const unconfView = resolveTabView(TAB_AI, makeContext({ transcript: RAW, unconfigured: true }));
+check('未配置时说清去哪配', unconfView.state === 'unconfigured' && unconfView.note.includes('设置'), unconfView.note);
+check('未配置的说明点出按钮入口', unconfView.note.includes('生成纪要草稿'), unconfView.note);
+check('未配置的说明不含模型词', !unconfView.note.includes('本地') && !/minicpm/i.test(unconfView.note), unconfView.note);
+check('有失败记录时先说失败（fallback 优先于未配置）',
+  resolveTabView(TAB_AI, makeContext({ transcript: RAW, preliminary: FALLBACK, unconfigured: true })).state === 'fallback');
+check('未配置时逐字稿那档照常可看',
+  resolveTabView(TAB_RAW, makeContext({ transcript: RAW, unconfigured: true })).text === RAW);
 
 // --- 标签：两档都要在，且带上内容量 ---
 
@@ -192,9 +204,9 @@ check('代码里不再有标签栏状态元素',
   !mainSrc.includes('preliminaryStatus') && !mainSrc.includes('preliminary-status'));
 check('没有把 view.status 写回 DOM 的地方', !mainSrc.includes('view.status'));
 
-// --- 「同稿重跑」必须被认出来（force=1 按钮的命门） ---
-// 指纹只认逐字稿内容。强制重跑时逐字稿没改 → 指纹一样，只有 updatedAt 会变。
-// 这一组就是守着「只比指纹 → 新结果送不上来、按钮卡在处理中」那个 bug。
+// --- 「同稿重跑」必须被认出来（手动按钮的命门） ---
+// 指纹只认逐字稿内容。手动重跑时逐字稿没改 → 指纹一样，只有 updatedAt 会变。
+// 这一组就是守着「只比指纹 → 新结果送不上来、按钮卡在起草中」那个 bug。
 
 const FP = 'sha256-abc';
 const run1 = { text: '第一版', status: 'ready', sourceFingerprint: FP, updatedAt: '2026-01-01T00:00:00.000Z' };
@@ -223,7 +235,10 @@ check('轮询里不再残留只比 sourceFingerprint 的旧判定',
 const mc = makeContext({ transcript: RAW, document: DOC, preliminary: LOCAL, pending: true });
 check('makeContext 保留 transcript', mc.transcript === RAW);
 check('makeContext 挑出正文那一档', mc.aiKind === 'document' && mc.aiText === DOC);
-check('makeContext 带上模型名和 pending', mc.aiModel === 'minicpm5-meeting' && mc.pending === true);
+check('makeContext 带上模型名和 pending', mc.aiModel === 'test-model' && mc.pending === true);
+check('makeContext 默认不是未配置态', mc.unconfigured === false);
+check('makeContext 透传未配置态',
+  makeContext({ transcript: RAW, unconfigured: true }).unconfigured === true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

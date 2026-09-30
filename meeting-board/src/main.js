@@ -4,7 +4,7 @@ import { BoardEditor } from './BoardEditor.jsx';
 import { extractFrontMatter, patchMarkdownBlocks } from './markdownBlockPatch.js';
 import { resolveExternalFileChange, sourceContentFingerprint } from './lib/externalRefresh.js';
 import { localDateStamp, sessionDisplayTitle, sessionMetaLabel } from './lib/sessionSearch.js';
-import { makeContext, resolveTabView, resolveTabs, resolveShownTab, resolveAiContent, preliminaryChanged, TAB_RAW, TAB_AI } from './lib/preliminaryPanel.js';
+import { makeContext, resolveTabView, resolveTabs, resolveShownTab, resolveAiContent, resolveLocalText, preliminaryChanged, TAB_RAW, TAB_AI } from './lib/preliminaryPanel.js';
 import './theme/common/style.css';
 import './theme/frame/style.css';
 import './themes/crepe-paper.css';
@@ -53,7 +53,13 @@ let panelTab = (() => {
   return TAB_AI;
 })();
 let preliminaryPending = false;
-let preliminaryTriggerKey = '';
+// 草稿只由用户点按钮触发（不随轮询自动跑），这两个状态都围绕那次点击：
+// unconfigured —— 服务端说没配 AI（本会话内记住，避免每 2 秒去读一遍配置）；
+// awaitingDraft —— 点了按钮、还在等服务端落盘结果（记场次 ID，切场次即作废）；
+// draftNotApplied —— 草稿出来了，但正文里已有人的内容没被覆盖，等用户显式采纳。
+let draftUnconfigured = false;
+let awaitingDraft = '';
+let draftNotApplied = false;
 // sessions 是「今天」的权威列表：轮询它才能知道今天有没有新场次、选中的场次还在不在。
 // menuSessions 是下拉里真正显示的那一份（可能是跨天检索的结果）。两者必须分开：
 // 拿检索结果去判断「今天的场次变了没有」会永远判成变了。
@@ -119,8 +125,8 @@ function analysisToMarkdown(value) {
 }
 
 // 白板上只有两档：`逐字稿`（原话，只读）和 `AI 会议内容`（白板正文本身，可编辑）。
-// **没有第三个笔记区**——AI 那一档的正文就是编辑器，由模型生成：本地模型先垫一版，
-// 更聪明的模型（或用户自己）整篇替换。
+// **没有第三个笔记区**——AI 那一档的正文就是编辑器，由模型生成：点「生成纪要草稿」
+// 由用户配置的 AI 先起草一版，更聪明的模型（或用户自己）整篇替换。
 // 「这一档此刻该显示什么」全在 lib/preliminaryPanel.js 里（纯函数，有测试），
 // 这里只负责把结果塞进 DOM 和切换面板。
 function renderTabs() {
@@ -136,6 +142,7 @@ function renderTabs() {
     analysisText: analysis ? analysisToMarkdown(analysis) : '',
     preliminary,
     pending: preliminaryPending,
+    unconfigured: draftUnconfigured,
   });
   const options = { pending: preliminaryPending };
   // 自动决定时才允许回落到另一档；用户手动点过就照他选的显示（空的 AI 档也会说话）。
@@ -150,6 +157,10 @@ function renderTabs() {
   if (note) { note.textContent = rawView.note; note.hidden = !rawView.note; }
   const aiNote = $('aiNote');
   if (aiNote) { aiNote.textContent = aiView.note; aiNote.hidden = !aiView.note; }
+  // 草稿没写进正文（正文里已有人的内容）时的显式采纳入口。只有这一种情况会出现它；
+  // 平时连元素一起藏掉，不让顶栏多出一行没用的东西。
+  const draftActions = $('aiDraftActions');
+  if (draftActions) draftActions.hidden = !draftNotApplied;
 
   panel.dataset.state = view.state;
   panel.dataset.tab = shownTab;
@@ -163,13 +174,15 @@ function renderTabs() {
   // 逐字稿是识别结果，改不了；编辑/阅读开关只对 AI 那一档有意义。
   const readToggle = $('readToggle');
   if (readToggle) readToggle.hidden = shownTab !== TAB_AI;
-  const localAiButton = $('localAiButton');
-  if (localAiButton) {
-    localAiButton.hidden = shownTab !== TAB_AI;
-    localAiButton.disabled = preliminaryPending || !transcript.trim();
-    localAiButton.textContent = preliminaryPending ? '本地 AI 处理中…' : '本地 AI 处理';
-    localAiButton.title = transcript.trim() ? '使用本地 MiniCPM5 重新处理当前逐字稿' : '当前会议还没有逐字稿';
-    localAiButton.onclick = () => { void requestPreliminary(true); };
+  const aiDraftButton = $('aiDraftButton');
+  if (aiDraftButton) {
+    aiDraftButton.hidden = shownTab !== TAB_AI;
+    aiDraftButton.disabled = preliminaryPending || !transcript.trim();
+    // 不出现模型名/「本地」字样（UX-10）：这是用户自己配置的 AI，叫什么由配置决定。
+    aiDraftButton.textContent = preliminaryPending ? '正在起草纪要…' : '生成纪要草稿';
+    aiDraftButton.title = transcript.trim()
+      ? '用你在「设置 → AI 接入」配置的 AI，把当前逐字稿起草成纪要草稿'
+      : '当前会议还没有逐字稿';
   }
 
   if (tabs) {
@@ -204,19 +217,28 @@ function applyPreliminary(value) {
   renderTabs();
 }
 
-async function requestPreliminary(force = false) {
+// 「生成纪要草稿」是唯一的触发入口：没有自动触发，AI 消耗完全由这一次点击决定。
+// 服务端返回 202 pending，真正的结果由 2 秒轮询经 preliminaryChanged 送达面板。
+async function requestPreliminary() {
   const session = currentSession();
   if (!session || switchingSession) return;
-  const key = `${session.id}:${session.count}:${session.end}`;
-  if (!force && key === preliminaryTriggerKey) return;
-  preliminaryTriggerKey = key;
   preliminaryPending = true;
+  awaitingDraft = session.id;
+  draftUnconfigured = false; // 上一次的「未配置」提示已经完成使命，这次重新让服务端裁决
   renderTabs();
   try {
-    const response = await fetch(api(`/api/meeting-board/preliminary?sessionId=${encodeURIComponent(session.id)}${force ? '&force=1' : ''}`), {
+    const response = await fetch(api(`/api/meeting-board/preliminary?sessionId=${encodeURIComponent(session.id)}`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });
     const data = await response.json().catch(() => ({}));
+    // 没配 AI：零副作用，面板如实说，指路设置页。
+    if (data.status === 'unconfigured') {
+      draftUnconfigured = true;
+      preliminaryPending = false;
+      awaitingDraft = '';
+      renderTabs();
+      return;
+    }
     if (!response.ok || !data?.ok) throw new Error(data?.error || `HTTP ${response.status}`);
     // pending 返回的可能是旧缓存，只用于保持处理中状态，不能覆盖当前面板。
     if (data.preliminary && data.status !== 'pending' && session.id === selectedSessionId) applyPreliminary(data.preliminary);
@@ -224,7 +246,10 @@ async function requestPreliminary(force = false) {
     renderTabs();
   } catch (error) {
     preliminaryPending = false;
+    awaitingDraft = '';
     renderTabs();
+    // 请求本身没发出去/没拿到响应时同样要可见，不能只写 console。
+    toast(`AI 起草请求失败：${String(error?.message || error).slice(0, 60)}`);
     console.warn('[board] preliminary:', error);
   }
 }
@@ -290,7 +315,7 @@ function applyBoard(data, initial = false) {
   transcript = typeof data.transcript === 'string' ? data.transcript : '';
   preliminaryPending = false;
   savedDocText = typeof data.document === 'string' ? data.document : '';
-  // AI 那一档 = 白板正文。正文还没有时，依次拿「外部分析生成的」「本地模型整理的」垫上，
+  // AI 那一档 = 白板正文。正文还没有时，依次拿「外部分析生成的」「纪要草稿那一版」垫上，
   // 保证切过去就有东西看，而不是一片空白。
   const ai = resolveAiContent({
     document: savedDocText,
@@ -300,7 +325,7 @@ function applyBoard(data, initial = false) {
   doc = ai.text;
   // 生成出来的那版不是磁盘原文，别让「本地干净」的判定把它当成用户改动。
   rawDoc = ai.kind === 'document' ? savedDocText : ai.text;
-  // 只有外部分析生成的整篇落盘；本地模型那版会随转写一直更新，写死反而会停在早期版本。
+  // 只有外部分析生成的整篇落盘；纪要草稿由服务端在起草完成时自己写盘，不需要这里代写。
   seedDocument = ai.kind === 'analysis';
   baselineDoc = null; // 换了一份文档，旧基线作废，等编辑器重挂完重新取
   renderTabs();
@@ -334,10 +359,25 @@ async function refreshDocument() {
   refreshingDocument = true;
   try {
     const board = await fetchBoard();
-    // 用 preliminaryChanged 而不是只比 sourceFingerprint：强制重跑时逐字稿没变、
-    // 指纹也就没变，只比指纹会认不出新结果——按钮会一直卡在「本地 AI 处理中…」。
+    // 用 preliminaryChanged 而不是只比 sourceFingerprint：按钮重跑时逐字稿没变、
+    // 指纹也就没变，只比指纹会认不出新结果——按钮会一直卡在「正在起草纪要…」。
     if (board.preliminary && preliminaryChanged(board.preliminary, preliminary)) {
       applyPreliminary(board.preliminary);
+      // 点过按钮后送来的新结果：草稿写没写进正文由服务端的所有权闸决定，这里只负责
+      // 把结果如实告诉用户。用磁盘上的 document 判断，不能用 savedDocText——它可能还是上一轮的旧值。
+      if (awaitingDraft === selectedSessionId) {
+        awaitingDraft = '';
+        const diskDocument = typeof board.document === 'string' ? board.document : '';
+        if (board.preliminary.status === 'fallback') {
+          // 失败必须让点了按钮的人看见：AI 档已有内容时底部的失败注记是隐藏的
+          // （有内容就只给内容），只靠它就成了「点了没反应」——弹一条自动消失的 toast。
+          draftNotApplied = false;
+          toast(`AI 起草没跑成功：${String(board.preliminary.error || '原因未知').slice(0, 60)}；逐字稿不受影响，可再试一次`);
+        } else {
+          draftNotApplied = diskDocument.trim() !== '' && diskDocument !== board.preliminary.text;
+        }
+      }
+      renderTabs();
     }
     // 逐字稿是「这场会还在开」时唯一会一直变的东西：不跟着刷新，面板会停在打开那一刻的旧内容。
     // 只在真的变了时重画，否则 2 秒一次会把面板里的选中和滚动位置反复打回顶部。
@@ -390,7 +430,7 @@ async function refreshDocument() {
 
 // 写盘前先过一道「分块保真」：用户没碰过的块原样用磁盘上的原文，只有真改过的块才用编辑器的写法。
 // 还没拿到基线时（编辑器刚重挂、或这份内容是刚生成出来的）没有可对比的参照，只能整篇写。
-async function saveDoc(text, { force = false } = {}) {
+async function saveDoc(text, { force = false, source = '' } = {}) {
   const payload = baselineDoc === null
     ? text
     : patchMarkdownBlocks({ original: rawDoc, baseline: baselineDoc, edited: text }).markdown;
@@ -398,7 +438,10 @@ async function saveDoc(text, { force = false } = {}) {
   if (!force && payload === rawDoc) return;
   try {
     const suffix = selectedSessionId ? `?sessionId=${encodeURIComponent(selectedSessionId)}` : '';
-    const response = await fetch(api(`/api/meeting-board/document${suffix}`), {
+    // source=agent 只有 seedDocument 一种用法：外部分析垫进正文的那次落盘是 AI 内容，
+    // 不标的话服务端会把整篇当成人工内容，之后每次 AI 写回都会被锚点门槛拦住。
+    const marked = source ? `${suffix}${suffix ? '&' : '?'}source=${encodeURIComponent(source)}` : suffix;
+    const response = await fetch(api(`/api/meeting-board/document${marked}`), {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ document: payload }),
     });
@@ -503,7 +546,6 @@ async function loadSelectedSession() {
   try {
     await loadBoard(true);
     await remountEditor();
-    void requestPreliminary();
     toast('已切换会议文档');
   } finally { switchingSession = false; }
 }
@@ -519,7 +561,9 @@ function selectSession(id) {
   if (session.id === selectedSessionId) return;
   selectedSessionId = session.id;
   selectedDate = session.date || localDateStamp();
-  preliminaryTriggerKey = '';
+  // 换场次就是换一份材料：上一场的「等草稿 / 待采纳」不再有意义，不给历史场次挂旧提示。
+  awaitingDraft = '';
+  draftNotApplied = false;
   void loadSelectedSession();
 }
 
@@ -645,7 +689,7 @@ async function initEditor() {
         if (seedDocument) {
           seedDocument = false;
           rawDoc = doc;
-          void saveDoc(doc, { force: true });
+          void saveDoc(doc, { force: true, source: 'agent' });
         }
         resolve();
       },
@@ -679,7 +723,7 @@ async function init() {
         </button>
         <span class="board-status" id="status" hidden></span>
         <button class="board-read-toggle" id="readToggle" aria-pressed="false" data-editing="false">编辑</button>
-        <button class="local-ai-button" id="localAiButton" hidden>本地 AI 处理</button>
+        <button class="ai-draft-button" id="aiDraftButton" hidden>生成纪要草稿</button>
         <div class="board-menu" id="sessionMenu" hidden>
           <input class="board-search" id="sessionSearch" type="search" autocomplete="off" spellcheck="false"
                  placeholder="搜索会议标题或内容…" aria-label="搜索会议" aria-controls="sessionList">
@@ -701,6 +745,11 @@ async function init() {
           <div class="board-pane board-pane-ai" id="aiPane" data-active="false" role="tabpanel" aria-label="AI 会议内容">
             <div class="editor-wrap"><div id="editor"></div></div>
             <div class="preliminary-note" id="aiNote"></div>
+            <!-- 草稿没写进正文（正文里已有人的内容）时才出现：如实说明 + 显式采纳，绝不静默覆盖。 -->
+            <div class="ai-draft-actions" id="aiDraftActions" hidden>
+              <span>纪要草稿已生成；正文里有你的内容，没有被覆盖。</span>
+              <button type="button" class="ai-draft-button" id="aiDraftReplaceBtn">用草稿替换正文</button>
+            </div>
           </div>
         </div>
       </section>
@@ -729,7 +778,6 @@ async function init() {
   renderMenu();
   await loadBoard(true);
   await initEditor();
-  void requestPreliminary();
   const toggleSessionMenu = (event) => { event.stopPropagation(); if ($('sessionMenu').hidden) openMenu(); else closeMenu(); };
   $('sessionBtn').onclick = toggleSessionMenu;
   $('sessionSidebarToggle').onclick = toggleSessionMenu;
@@ -763,6 +811,22 @@ async function init() {
   editorEl.addEventListener('pointerdown', hintReadOnly, true);
   editorEl.addEventListener('keydown', hintReadOnly, true);
   $('saveDefBtn').onclick = async () => toast((await saveDef(readForm())) ? '定义已保存' : '保存失败');
+  // 「生成纪要草稿」是草稿的唯一入口：点击才调用 AI，结果靠轮询送回（见 refreshDocument）。
+  $('aiDraftButton').onclick = () => { void requestPreliminary(); };
+  // 「用草稿替换正文」：用户显式采纳，把刚生成的草稿整篇写进正文。
+  // 临时置空 baselineDoc 走整篇写（绕过分块保真），否则没改过的旧块会被原样拼回来，替换不彻底。
+  // 不带 source=agent：这是用户亲手确认的保存，按人工口径记账（锚点契约见 ADR-003）。
+  $('aiDraftReplaceBtn').onclick = async () => {
+    const draft = resolveLocalText(preliminary);
+    if (!draft) return;
+    draftNotApplied = false;
+    renderTabs();
+    baselineDoc = null; // 换了一份文档，旧基线作废；重挂后编辑器就绪时会自取新基线
+    doc = draft;
+    await saveDoc(draft, { force: true });
+    toast('已用纪要草稿替换正文');
+    await remountEditor();
+  };
   // 顶栏复制按钮
   $('boardCopyBtn').onclick = async () => {
     const text = $('boardCopyBtn').dataset.path;
@@ -786,10 +850,10 @@ async function init() {
     if (wideSidebar()) return;
     if (!event.target.closest('.board-bar')) closeMenu();
   });
+  // 轮询只做「看」：拉场次、拉文档。草稿不再自动触发——AI 调用只发生在用户点按钮的那一刻。
   pollTimer = setInterval(async () => {
     await refreshSessions();
     await refreshDocument();
-    void requestPreliminary();
   }, 2000);
   // 窗口重新拿回焦点时也重读一次（做法同 xiaoer-omia）。切窗口回来就该看到最新的，
   // 而不是再等一个轮询周期。

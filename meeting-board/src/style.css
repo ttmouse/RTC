@@ -29,13 +29,17 @@ body{ background:#fff; color:#2c2c2c; font-family:-apple-system,BlinkMacSystemFo
   background:none; font:inherit; font-size:13px; color:#5c554a; cursor:pointer; }
 .board-read-toggle:hover{ background:#f0eee9; color:#2c2c2c; }
 .board-read-toggle:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
-/* 本地 AI 处理：只在 AI 会议内容这一档显示，位置紧挨编辑按钮。 */
-.local-ai-button{ flex:none; padding:4px 12px; border:1px solid #d8c9b4; border-radius:999px;
+/* 生成纪要草稿：只在 AI 会议内容这一档显示，位置紧挨编辑按钮。
+   同一套样式也用在正文区底部的「用草稿替换正文」采纳按钮上。 */
+.ai-draft-button{ flex:none; padding:4px 12px; border:1px solid #d8c9b4; border-radius:999px;
   background:#f4ecdf; font:inherit; font-size:13px; color:#8a4a2a; cursor:pointer; }
-.local-ai-button:hover{ background:#eee1d0; color:#6f381f; }
-.local-ai-button:disabled{ opacity:.55; cursor:default; }
-.local-ai-button:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
-.local-ai-button[hidden]{ display:none; }
+.ai-draft-button:hover{ background:#eee1d0; color:#6f381f; }
+.ai-draft-button:disabled{ opacity:.55; cursor:default; }
+.ai-draft-button:focus-visible{ outline:2px solid #2c2c2c; outline-offset:2px; }
+.ai-draft-button[hidden]{ display:none; }
+/* 草稿没覆盖正文时的采纳提示：一行说明 + 一颗按钮，只在那一种情况出现。 */
+.ai-draft-actions{ display:flex; align-items:center; gap:10px; margin-top:8px; font-size:12px; color:#8a8175; }
+.ai-draft-actions[hidden]{ display:none; }
 /* 编辑中：按钮文字变成「阅读」（告诉你下一步能做什么），并给一个能一眼认出的底 */
 .board-read-toggle[data-editing="true"]{ border-color:#d8c9b4; background:#f4ecdf; color:#8a4a2a; font-weight:600; }
 /* 场次下拉：上面一个搜索框（不动），下面一份滚动列表。列表单独滚动而不是整块滚动，

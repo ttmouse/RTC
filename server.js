@@ -1161,7 +1161,29 @@ const server = http.createServer((req, res) => {
     return true;
   }
 
-  async function runPreliminary整理(session, id, transcript, sourceFingerprint, ai) {
+  async function runPreliminary整理(session, id, transcript, sourceFingerprint, ai, savedEntry) {
+    // 白板里已有的正文要一并交给 AI——用户手写的行是锚点，不是可以丢掉的素材。
+    //
+    // 来源判定读 board-provenance.cjs（唯一正本），和外部通道 rtc board brief 同一份逻辑：
+    // 在这里自己再算一遍的话，两边不一致时面板和外部 AI 会看到不同的「人工行」。
+    // 症状（2026-09-30）：面板按钮只喂逐字稿，用户手写的内容一个字都进不去，
+    // 于是同一个「让 AI 写会议纪要」在两个入口对用户写的话有两种态度。
+    const existingDoc = typeof savedEntry?.document === 'string' ? savedEntry.document.trim() : '';
+    const prov = existingDoc ? boardProvenance.boardProvenance(savedEntry) : null;
+    // 规矩与 brief 对齐（scripts/meeting-board.mjs 的同名段），面板起草是同一个产品行为。
+    const anchorRules = prov && prov.humanLines.length
+      ? '\n7. 白板里已经有用户亲手写的行（下面「人工锚点」逐条列出）。它们是用户的现场判断，'
+        + '优先级高于你自己的推断：围绕它们去逐字稿里找证据、引用回指，不要重新猜重点。'
+        + '这些行要原样出现在你的草稿里，不改写、不润色、不并进你的行文；'
+        + '与逐字稿矛盾时保留原句，在紧邻处指出矛盾并给出处（[HH:MM]），判断留给用户。'
+      : '';
+    const sourceBlock = !existingDoc
+      ? ''
+      : prov.allHuman
+        ? `\n\n白板正文（AI 生成之前用户手写的——每一行都是人工内容，是本次起草的锚点）：\n${existingDoc}`
+        : prov.humanLines.length
+          ? `\n\n白板正文（其余部分是 AI 上次写回的）：\n${existingDoc}\n\n人工锚点（用户手写/改动过的行）：\n${prov.humanLines.map((line) => `> ${line}`).join('\n')}`
+          : `\n\n白板正文（目前没有人工内容，全部是 AI 上次写回的，可按新证据重写）：\n${existingDoc}`;
     let preliminary;
     try {
       // 调用户在设置里配的 AI（OpenAI 兼容），与 analyze / infer-definition 同一套调用方式。
@@ -1186,7 +1208,7 @@ const server = http.createServer((req, res) => {
           messages: [
             {
               role: 'system',
-              content: '你是会议纪要起草员。根据下面的会议逐字稿，起草一份供人直接阅读和修改的会议纪要草稿。\n'
+              content: '你是会议纪要起草员。根据下面的材料（会议逐字稿，可能还有白板里已有的正文），起草一份供人直接阅读和修改的会议纪要草稿。\n'
                 + '\n'
                 + '要求：\n'
                 + '1. 按讨论主题分节：每节用「## 主题」作标题，写清这个主题下讨论了什么、形成了什么结论。\n'
@@ -1194,9 +1216,10 @@ const server = http.createServer((req, res) => {
                 + '3. 只使用逐字稿里出现过的信息。不确定、有分歧、被否决的内容照实标注，不推测、不补全、不添加逐字稿里没有的结论。\n'
                 + '4. 人名、数字、日期、专有名词按逐字稿原样保留；明显的语音识别错别字可以顺手修正。\n'
                 + '5. 把口语压缩成通顺的书面语，但不要夸大、美化或加戏。\n'
-                + '6. 直接输出 Markdown 正文，不要解释，不要用代码块包裹。',
+                + '6. 直接输出 Markdown 正文，不要解释，不要用代码块包裹。'
+                + anchorRules,
             },
-            { role: 'user', content: `以下是这场会议的逐字稿：\n${transcript}` },
+            { role: 'user', content: `以下是这场会议的逐字稿：\n${transcript}${sourceBlock}` },
           ],
           stream: false,
           max_tokens: 16384,
@@ -1501,14 +1524,15 @@ const server = http.createServer((req, res) => {
     const transcript = formatTranscriptLines(session);
     const sourceFingerprint = preliminarySourceFingerprint(transcript);
     const board = readMeetingBoard();
-    const saved = board.sessions?.[id]?.preliminary;
+    const entry = board.sessions?.[id] || {};
+    const saved = entry.preliminary;
     const active = preliminaryRequests.get(id);
     if (active) {
       res.writeHead(202, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, status: 'pending', preliminary: saved || null }));
       return;
     }
-    const task = runPreliminary整理(session, id, transcript, sourceFingerprint, ai);
+    const task = runPreliminary整理(session, id, transcript, sourceFingerprint, ai, entry);
     preliminaryRequests.set(id, task);
     task.then(() => preliminaryRequests.delete(id), () => preliminaryRequests.delete(id));
     res.writeHead(202, { 'Content-Type': 'application/json' });

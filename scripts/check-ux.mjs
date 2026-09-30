@@ -271,8 +271,8 @@ const longDoc = `# 会议记录\n\n${Array.from({ length: 60 }, (_, i) => `## �
 const SCENARIOS = [
   { name: '空白会议（无逐字稿、无 AI 内容）', events: [], document: '', preliminary: null },
   { name: '只有逐字稿（AI 还没写）', events: makeEvents(40), document: '', preliminary: null },
-  { name: 'AI 已写正文（长）', events: makeEvents(40), document: longDoc, preliminary: { text: longDoc, status: 'ready', model: 'minicpm5-meeting' } },
-  { name: 'AI 整理失败（fallback）', events: makeEvents(40), document: '', preliminary: { text: '原始转写', status: 'fallback', model: 'minicpm5-meeting', error: 'Ollama 整理超时' } },
+  { name: 'AI 已写正文（长）', events: makeEvents(40), document: longDoc, preliminary: { text: longDoc, status: 'ready', model: 'test-model' } },
+  { name: 'AI 起草失败（fallback）', events: makeEvents(40), document: '', preliminary: { text: '原始转写', status: 'fallback', model: 'test-model', error: 'AI 起草超时' } },
 ];
 
 const VIEWPORTS = [

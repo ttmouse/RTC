@@ -1,8 +1,8 @@
 // 白板上只有两样东西：`逐字稿` 和 `AI 会议内容`。
 //
 // **没有第三个「笔记区」。** AI 会议内容那一档本身就是白板正文（可编辑），由模型生成：
-// 现在用本地模型垫一版，以后可以换成更聪明的模型整篇替换。所以每场会议只有两样东西——
-// 逐字稿 + AI 会议内容，正好对应两个标签页。
+// 用户点「生成纪要草稿」时由自己配置的 AI 起草一版（仅手动触发），之后更聪明的外部 agent
+// 整篇替换。所以每场会议只有两样东西——逐字稿 + AI 会议内容，正好对应两个标签页。
 //
 // 抽成纯函数是因为这里的 bug 全是「显示错了来源」：把没整理过的原话当成 AI 稿、
 // 或者模型还没跑却让人以为已经跑完了。它跟 DOM 无关，所以能直接断言，不用起浏览器。
@@ -10,20 +10,21 @@
 // 三个来源要分清楚，历史上混过一次：
 //   document —— 白板正文本身（已保存）。外部/更聪明的模型写的，或用户自己改的。**它就是 AI 会议内容。**
 //   analysis —— 外部分析结果（结构化）。白板正文还没有时，拿它生成一版垫上。
-//   local    —— 本地模型整理的逐字稿（preliminary 字段）。最先有的那一版，会随转写更新。
+//   local    —— 最近一次 AI 起草的纪要草稿（preliminary 字段）。「local」是历史遗留的内部
+//               名字（曾由本机模型生成），现在指用户配置 AI 起草的那一版，仅手动触发。
 // 陷阱是 `status: 'fallback'`：那时 preliminary.text 存的是**原文**（服务端把 transcript
 // 抄了进去），所以「有 preliminary」不等于「有 AI 稿」。
 
 export const TAB_RAW = 'raw';
 export const TAB_AI = 'ai';
 
-/** 本地模型整理的那一版正文。fallback 存的是原文，不算 AI 稿。 */
+/** 最近一次 AI 起草的那一版正文。fallback 存的是原文，不算 AI 稿。 */
 export function resolveLocalText(preliminary) {
   if (!preliminary || preliminary.status === 'fallback') return '';
   return String(preliminary.text || '').trim() ? String(preliminary.text) : '';
 }
 
-/** 本地模型跑过但失败了吗？用来区分「还没跑」和「跑了但失败」——两者的提示不一样。 */
+/** AI 起草过但失败了吗？用来区分「还没起草」和「起草了但失败」——两者的提示不一样。 */
 export function localFailed(preliminary) {
   return preliminary?.status === 'fallback';
 }
@@ -32,14 +33,13 @@ export function localFailed(preliminary) {
  * 新取到的 preliminary 值不值得覆盖当前显示的那一版。
  *
  * **必须连 updatedAt 一起比，只比 sourceFingerprint 会漏掉「同稿重跑」。**
- * 指纹是逐字稿内容的哈希（见 server.js 的 preliminarySourceFingerprint）：指纹变了
- * = 转写更新了，这是自动整理的触发条件。但「本地 AI 处理」按钮走的是 force=1，
- * 逐字稿一个字都没改，所以重跑出来的指纹和旧版**完全相同**——
- * 只比指纹的话新结果永远送不上来，按钮还会一直卡在「本地 AI 处理中…」。
+ * 指纹是逐字稿内容的哈希（见 server.js 的 preliminarySourceFingerprint）。
+ * 「生成纪要草稿」按钮每次点击都真实重跑：逐字稿没改时，重跑出来的指纹和旧版
+ * **完全相同**——只比指纹的话新结果永远送不上来，按钮会一直卡在「正在起草纪要…」。
  * updatedAt 是服务端每跑完一次都会刷新的版本号，用它才认得出一份新结果。
  *
  * 注意这只回答「要不要采用这份值」，不回答「正文该显示谁」：
- * 正文的优先级仍归 resolveAiContent（白板正文 > 外部分析 > 本地模型）。
+ * 正文的优先级仍归 resolveAiContent（白板正文 > 外部分析 > 纪要草稿）。
  * 所以用户手改过正文时，这里即使认出新结果，也不会覆盖用户写的东西。
  */
 export function preliminaryChanged(next, prev) {
@@ -57,10 +57,10 @@ export function resolveRawText(transcript) {
 /**
  * AI 会议内容那一档的正文和出处。
  *
- * 优先级：白板正文 > 外部分析生成的那版 > 本地模型那一版。
+ * 优先级：白板正文 > 外部分析生成的那版 > 纪要草稿那一版。
  *
- * 注意「白板正文」和「本地模型那一版」经常是同一份东西：本地模型整理完会直接把结果写进
- * 白板正文（它和外部 agent 写的是同一样东西）。所以正文正好等于本地模型输出时标成 'local'。
+ * 注意「白板正文」和「纪要草稿那一版」经常是同一份东西：起草完会直接把结果写进
+ * 白板正文（它和外部 agent 写的是同一样东西）。所以正文正好等于草稿输出时标成 'local'。
  *
  * **出处只是给程序看的标签，界面一个字都不显示它**：`kind` 用来断言正文取的是哪一份
  * （取错了就会拿 fallback 的原文冒充 AI 稿），不在界面上念。见 resolveTabView 顶上的说明。
@@ -79,7 +79,7 @@ export function resolveAiContent({ document: documentText, analysisText, prelimi
 }
 
 /** 把原始数据整理成后面几个函数认的上下文，省得每个函数都拆一遍。 */
-export function makeContext({ transcript, document: documentText, analysisText, preliminary, pending = false } = {}) {
+export function makeContext({ transcript, document: documentText, analysisText, preliminary, pending = false, unconfigured = false } = {}) {
   const ai = resolveAiContent({ document: documentText, analysisText, preliminary });
   return {
     transcript: resolveRawText(transcript),
@@ -89,6 +89,7 @@ export function makeContext({ transcript, document: documentText, analysisText, 
     aiError: preliminary?.error ? String(preliminary.error) : '',
     aiFailed: localFailed(preliminary),
     pending,
+    unconfigured,
   };
 }
 
@@ -153,7 +154,15 @@ export function resolveTabView(tab, ctx, { pending = false } = {}) {
       return {
         tab: TAB_AI,
         state: 'fallback',
-        note: `本地模型没跑成功（${ctx.aiError.slice(0, 80) || '未通过原文保真校验'}）。逐字稿不受影响，也可以直接在这里写。`,
+        note: `AI 起草没跑成功（${ctx.aiError.slice(0, 80) || '原因未知'}）。逐字稿不受影响，也可以直接在这里写，或再点一次「生成纪要草稿」。`,
+        text: '',
+      };
+    }
+    if (ctx.unconfigured) {
+      return {
+        tab: TAB_AI,
+        state: 'unconfigured',
+        note: '还没有配置 AI。到主界面「设置 → AI 接入」配置后，再回来点「生成纪要草稿」；也可以直接在这里写。',
         text: '',
       };
     }
@@ -161,8 +170,8 @@ export function resolveTabView(tab, ctx, { pending = false } = {}) {
       tab: TAB_AI,
       state: pending ? 'pending' : 'empty',
       note: pending
-        ? '正在整理这场会议的转写，整理好会自动出现在这里；不想等也可以直接在这里写。'
-        : '本地模型整理完成后会出现在这里；也可以直接在这里写，逐字稿那一档随时可看。',
+        ? '正在起草纪要草稿，生成后会自动出现在这里；不想等也可以直接在这里写。'
+        : '还没有纪要草稿。点右上角「生成纪要草稿」让 AI 起草一份；也可以直接在这里写，逐字稿那一档随时可看。',
       text: '',
     };
   }
