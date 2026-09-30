@@ -42,6 +42,6 @@ objc2-quartz-core = { version = "0.3", default-features = false, features = ["CA
 # CGEventTap：按住说话的组合键兜底监听（见 lib.rs mac_modifier_keys::install_key_tap）。
 # 这两个 feature 只是把 tauri 依赖树里已有的模块打开，不引入新的第三方代码。
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["CGEvent", "CGEventTypes"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["NSString", "NSData", "NSDictionary"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSString", "NSData", "NSDictionary", "NSBundle"] }
 # 图标转 data URL 用（已在依赖树里，0.21 是 tauri 自己用的版本，没有新增下载）
 base64 = "0.21"

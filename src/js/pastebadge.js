@@ -162,7 +162,7 @@ function showAppMenu(spec, event, line) {
  * 缓存按整套身份记：同名不同 App 不会互相顶掉。
  */
 function loadIcon(identity) {
-  const key = [identity.name, identity.bundle, identity.id].filter(Boolean).join(' ');
+  const key = [identity.name, identity.bundle, identity.id].filter(Boolean).join('\u0000');
   if (iconCache.has(key)) return Promise.resolve(iconCache.get(key));
   const invoke = tauriInvoke();
   if (!invoke) {

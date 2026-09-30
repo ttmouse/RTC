@@ -23,8 +23,9 @@
 #[cfg(target_os = "macos")]
 mod imp {
     use block2::RcBlock;
-    use objc2_app_kit::NSWorkspace;
-    use objc2_foundation::NSCopying;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSWorkspace};
+    use objc2_foundation::{NSCopying, NSDictionary, NSRect, NSSize, NSString};
 
     /// 辅助功能（AX）取窗口标题所需的最小 FFI。ApplicationServices 已由 lib.rs 链接。
     /// 只声明这三个符号：不引新 crate，拿不到标题就静默返回 None，绝不抛错
@@ -148,6 +149,70 @@ mod imp {
         })
     }
 
+    /// 图标出图的像素数：记录行那一格是 21pt（`.pasteBadge img`，见 src/css/style.css），
+    /// @2x 屏就是 42px。**必须按这个数出图**：以前给的是 36px，浏览器要把它放大到 42
+    /// 才显示，字面意义上的糊（用户 2026-09-30 报的「看着很模糊」）。
+    ///
+    /// 不再往上加：原图本身是 1024（Cindy 的图标 PNG 有 2.9 MB），再大只是白费内存。
+    const ICON_PX: f64 = 42.0;
+
+    /// 应用自己的图标——**没有系统那圈投影**。
+    ///
+    /// 为什么不用 `NSWorkspace.iconForFile`：它给的是「访达 / 程序坞」看的那张图，
+    /// 外面自带一圈黑色投影（2026-09-30 实测：最外 1~2 像素是 alpha 15~33 的黑）。
+    /// 画进记录行 21pt 的小格子里，那圈投影就是一圈灰边，看着又脏又糊。
+    /// `Bundle.image(forResource:)` 取的是应用自己的原始图（Assets.car 或 .icns），没有投影。
+    ///
+    /// 图标名先取 `CFBundleIconName`（新，资产目录），再取 `CFBundleIconFile`（旧，直接指 .icns）。
+    /// 两个键都没有的应用返回 None（2026-09-30 实测 443 个里 86 个，多是第三方小工具），
+    /// 调用方退回系统那张带投影的——有投影也比只剩文字强。
+    fn bundle_icon(app_path: &str) -> Option<Retained<NSImage>> {
+        use objc2_app_kit::NSBundleImageExtension;
+        use objc2_foundation::NSBundle;
+
+        let bundle = NSBundle::bundleWithPath(&NSString::from_str(app_path))?;
+        let name = ["CFBundleIconName", "CFBundleIconFile"]
+            .into_iter()
+            .find_map(|key| {
+                let value = bundle.objectForInfoDictionaryKey(&NSString::from_str(key))?;
+                value.downcast::<NSString>().ok()
+            })?;
+        bundle.imageForResource(&name)
+    }
+
+    /// 缩小到 ICON_PX 见方，返回 1x 的位图（PNG 就从它编码出来）。
+    ///
+    /// 使用 NSImage 的分辨率无关绘制回调，而不是 lockFocus/unlockFocus：后者已被
+    /// AppKit 标记为弃用，在 Retina 与非 Retina 环境下可能产生错误的绘制尺寸。
+    ///
+    /// 返回位图而不是 PNG 字节：投影那条回归测试要按像素验证「最外圈是透明的」，
+    /// 而 PNG 解回来还要多一个解码依赖。
+    fn resized_rep(icon: &NSImage) -> Option<Retained<NSBitmapImageRep>> {
+        let size = NSSize::new(ICON_PX, ICON_PX);
+        // 绘制回调可能由 NSImage 延后调用，因此不能捕获借用的 `icon`。
+        let source = icon.copy();
+        let drawing_handler: RcBlock<dyn Fn(NSRect) -> objc2::runtime::Bool> =
+            RcBlock::new(move |rect: NSRect| {
+                source.drawInRect(rect);
+                objc2::runtime::Bool::YES
+            });
+        let small = NSImage::imageWithSize_flipped_drawingHandler(size, false, &drawing_handler);
+        // NSImage 本身不产 PNG：走 TIFF 位图中转
+        let tiff = small.TIFFRepresentation()?;
+        NSBitmapImageRep::imageRepWithData(&tiff)
+    }
+
+    /// 位图 → PNG 字节
+    fn encode_png(rep: &NSBitmapImageRep) -> Option<Vec<u8>> {
+        // 不传编码选项（空字典）：PNG 的默认参数就够，这是给人看的 42px 小图
+        let props = NSDictionary::new();
+        // SAFETY: 空字典对 properties 的泛型参数没有要求（空集合里没有值）。
+        let png = unsafe {
+            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props)
+        }?;
+        Some(png.to_vec())
+    }
+
     /// 某个应用的图标，编成 PNG data URL（给记录行上那个「这句去哪了」的徽标用）。
     ///
     /// `name` / `bundle` / `id` 是同一个应用的三种身份：macOS 本地化显示名（`微信`，
@@ -170,48 +235,8 @@ mod imp {
         id: Option<&str>,
     ) -> Option<String> {
         use base64::Engine;
-        use objc2::rc::Retained;
-        use objc2_app_kit::{
-            NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSRunningApplication, NSWorkspace,
-        };
-        use objc2_foundation::{NSDictionary, NSRect, NSSize, NSString};
-
-        // 底栏那一格是 18px，@2x 屏幕给到 36px 就够。
-        // 不缩的话原图是 1024（Cindy 的图标 PNG 有 2.9 MB），一个 18px 的小格子拿不动。
-        const ICON_PX: f64 = 36.0;
-
-        /// NSImage → PNG 字节（走 TIFF 位图中转，NSImage 本身不产 PNG）
-        fn encode_png(icon: &NSImage) -> Option<Vec<u8>> {
-            let tiff = icon.TIFFRepresentation()?;
-            let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
-            // 不传编码选项（空字典）：PNG 的默认参数就够，这是给人看的 36px 小图
-            let props = NSDictionary::new();
-            // SAFETY: 空字典对 properties 的泛型参数没有要求（空集合里没有值）。
-            let png = unsafe {
-                rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props)
-            }?;
-            Some(png.to_vec())
-        }
-
-        /// 缩小到 ICON_PX 见方。
-        ///
-        /// 使用 NSImage 的分辨率无关绘制回调，而不是 lockFocus/unlockFocus：后者已被
-        /// AppKit 标记为弃用，在 Retina 与非 Retina 环境下可能产生错误的绘制尺寸。
-        fn resized_png(icon: &NSImage) -> Option<Vec<u8>> {
-            let size = NSSize::new(ICON_PX, ICON_PX);
-            // 绘制回调可能由 NSImage 延后调用，因此不能捕获借用的 `icon`。
-            let source = icon.copy();
-            let drawing_handler: RcBlock<dyn Fn(NSRect) -> objc2::runtime::Bool> = RcBlock::new(move |rect: NSRect| {
-                source.drawInRect(rect);
-                objc2::runtime::Bool::YES
-            });
-            let small = NSImage::imageWithSize_flipped_drawingHandler(
-                size,
-                false,
-                &drawing_handler,
-            );
-            encode_png(&small)
-        }
+        use objc2_app_kit::{NSRunningApplication, NSWorkspace};
+        use objc2_foundation::NSString;
 
         /// 运行中的应用的三种身份（`.app` 包名 / 显示名 / bundle id），比较时统一小写。
         fn app_identities(app: &NSRunningApplication) -> [Option<String>; 3] {
@@ -232,18 +257,20 @@ mod imp {
             ]
         }
 
-        /// 已安装应用（不管现在开没开）的图标：按 bundle id / 包名 / 显示名去定位 .app。
+        /// 已安装应用（不管现在开没开）在硬盘上的 `.app` 路径：按 bundle id / 包名 / 显示名定位。
         ///
         /// 两个来源，按可信度试：
         /// 1. bundle id —— 交给 LaunchServices 自己找（`URLForApplicationWithBundleIdentifier`），
         ///    应用装在哪个目录都行，不用去猜 /Applications；
         /// 2. 包名 / 显示名 —— 在常见安装目录里直接找 `<名字>.app`，覆盖没有 bundle id 的记录。
-        fn installed_icon(
+        ///
+        /// 返回路径而不是图标：图标只能从这个 .app 里取（见 `bundle_icon`）。
+        fn installed_app_path(
             workspace: &NSWorkspace,
             id: Option<&str>,
             bundle: Option<&str>,
             name: &str,
-        ) -> Option<Retained<NSImage>> {
+        ) -> Option<String> {
             let clean = |value: &str| {
                 let trimmed = value.trim().to_string();
                 (!trimmed.is_empty()).then_some(trimmed)
@@ -253,7 +280,7 @@ mod imp {
                 let url = workspace.URLForApplicationWithBundleIdentifier(&NSString::from_str(&id));
                 if let Some(path) = url.and_then(|url| url.path()).map(|p| p.to_string()) {
                     if is_app_bundle(&path) {
-                        return Some(workspace.iconForFile(&NSString::from_str(&path)));
+                        return Some(path);
                     }
                 }
             }
@@ -262,7 +289,7 @@ mod imp {
                 for dir in app_dirs() {
                     let candidate = format!("{dir}/{stem}.app");
                     if is_app_bundle(&candidate) {
-                        return Some(workspace.iconForFile(&NSString::from_str(&candidate)));
+                        return Some(candidate);
                     }
                 }
             }
@@ -306,9 +333,12 @@ mod imp {
         // runningApplications 是 NSWorkspace 上的方法（不是 NSRunningApplication 的）
         let workspace = NSWorkspace::sharedWorkspace();
         let running = workspace.runningApplications();
-        // 1) 正在运行的应用：用 NSRunningApplication 自己的图标（徽标上线以来一直走这条路径）
-        // 2) 没在运行：去已安装的应用里找 .app，再取它的图标
-        let icon = running
+        // 运行中的应用与已安装的应用，最后都落到同一个问题：**硬盘上那个 .app 在哪**。
+        // 路径是两边唯一的共同入口——原始图标只能从 bundle 里取（见 bundle_icon），
+        // 而没在运行的应用没有 app 对象，手里只有路径。
+        // 1) 正在运行的应用：从它自己的 bundleURL 拿路径
+        // 2) 没在运行：去已安装的应用里找 .app
+        let app_path = running
             .iter()
             .find(|app| {
                 app_identities(app)
@@ -316,11 +346,19 @@ mod imp {
                     .flatten()
                     .any(|candidate| wants.contains(&candidate.to_lowercase()))
             })
-            .and_then(|app| app.icon())
-            .or_else(|| installed_icon(&workspace, id, bundle, name))?;
+            .and_then(|app| app.bundleURL())
+            .and_then(|url| url.path())
+            .map(|path| path.to_string())
+            .or_else(|| installed_app_path(&workspace, id, bundle, name))?;
+
+        // 先要应用自己的原始图标（无投影）；实在取不到（Info.plist 里两个图标键都缺的应用）
+        // 才退回系统那张带一圈投影的
+        let icon = bundle_icon(&app_path)
+            .unwrap_or_else(|| workspace.iconForFile(&NSString::from_str(&app_path)));
 
         // 缩不出来就不画图标：宁可退回中性的线条标记，也不塞一张几 MB 的原图过去
-        let png = resized_png(&icon)?;
+        let rep = resized_rep(&icon)?;
+        let png = encode_png(&rep)?;
         Some(format!(
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(png)
@@ -345,7 +383,54 @@ mod imp {
                 "图标应当是 PNG data URL，实际是：{}",
                 &url[..url.len().min(60)]
             );
-            assert!(url.len() > 200, "36px PNG 不该是空图");
+            assert!(url.len() > 200, "42px PNG 不该是空图");
+        }
+
+        /// 图标四周不许有投影——用户 2026-09-30 报的就是这圈灰边。
+        ///
+        /// 判据：把图标按记录行的实际尺寸（ICON_PX）画出来，**最外圈必须完全透明**。
+        /// 系统那张带投影的图（`NSWorkspace.iconForFile`）最外 1~2 像素是 alpha 15~33 的黑，
+        /// 正是「四周有投影、看着模糊」的像素级来源；应用自己的原始图最外圈是 0。
+        ///
+        /// 样本用计算器：它一定装着，而且它的图标不铺到画布边缘（Obsidian 那类满幅图标的
+        /// 最外圈本来就不透明，拿它量会误报）。
+        #[test]
+        fn icon_has_no_drop_shadow_ring() {
+            let path = "/System/Applications/Calculator.app";
+            assert!(
+                std::path::Path::new(path).is_dir(),
+                "样本应用不在这台机器上：{path}"
+            );
+            let icon = super::bundle_icon(path).expect("计算器的原始图标应当取得到");
+            let rep = super::resized_rep(&icon).expect("图标应当画得出来");
+            let (w, h) = (rep.pixelsWide(), rep.pixelsHigh()); // NSInteger（isize）
+            let alpha_at = |x: isize, y: isize| -> f64 {
+                rep.colorAtX_y(x, y)
+                    .map(|c| c.alphaComponent())
+                    .unwrap_or(1.0)
+            };
+            let mut opaque_edge = Vec::new();
+            for x in 0..w {
+                for y in [0, h - 1] {
+                    let a = alpha_at(x, y);
+                    if a > 0.0 {
+                        opaque_edge.push((x, y, a));
+                    }
+                }
+            }
+            for y in 0..h {
+                for x in [0, w - 1] {
+                    let a = alpha_at(x, y);
+                    if a > 0.0 {
+                        opaque_edge.push((x, y, a));
+                    }
+                }
+            }
+            assert!(
+                opaque_edge.is_empty(),
+                "图标最外圈应当完全透明（有投影就是从这圈开始的），实际不透明的像素：{:?}",
+                &opaque_edge[..opaque_edge.len().min(8)]
+            );
         }
 
         /// 没装的应用仍然老老实实返回 None，调用方退回文字。
